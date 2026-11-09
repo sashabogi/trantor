@@ -13,7 +13,7 @@ import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigne
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 import { readArm, clearArm, markHandedOff, subagentsActive } from "./lib/handoff.mjs";
 
-import { completeHandoffRecap } from "./lib/handoff-claims.mjs";
+import { completeHandoffRecap, markHandoffReadReminder } from "./lib/handoff-claims.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -129,7 +129,8 @@ async function main() {
 
   if (process.env.RELAY_STOP_INBOX === "0") return allow();
   const recap = completeHandoffRecap({ sessionId: String(input.session_id || ""), transcriptPath: input.transcript_path || "" });
-  if (recap?.missed.length && !input.stop_hook_active) {
+  if (recap?.missed.length && !input.stop_hook_active
+    && markHandoffReadReminder({ sessionId: String(input.session_id || "") })) {
     process.stdout.write(JSON.stringify({ decision: "block", reason: `Read these handoff files before recapping: ${recap.missed.join(", ")}` }));
     return;
   }

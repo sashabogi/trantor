@@ -85,7 +85,7 @@ export function loadPendingHandoff(project, { claim = true, freshSession = null,
       if (!claim) return record;
       const next = claimHandoffFile(path, freshSession, now);
       if (!next) return null;
-      const readFirst = readFirstPaths(next.summary || "");
+      const readFirst = readFirstPaths(next.summary || "", { projectDir: next.project || process.cwd() });
       writeFileSync(recapStampPath(dir, freshSession.session_id), JSON.stringify({
         handoffId: next.id, file, token: next.claim.token, ts: now,
         mode: next.mode === "unattended" ? "unattended" : "attended", readFirst,
@@ -134,4 +134,12 @@ export function completeHandoffRecap({ sessionId, transcriptPath, dir = handoffD
   else if (refused) traceRecapAttempt(stampPath, { ts: now, sessionId, outcome: refused, missed });
   else traceRecapAttempt(stampPath, { ts: now, sessionId, outcome: "no-record-update" });
   return { recapped: !!next, missed };
+}
+
+// Persist before emitting the reminder so subsequent turns cannot repeat it (#13061).
+export function markHandoffReadReminder({ sessionId, dir = handoffDir() }) {
+  try {
+    return !!updateRecord(recapStampPath(dir, sessionId), stamp =>
+      stamp.readReminderShown ? null : { ...stamp, readReminderShown: true });
+  } catch { return false; }
 }

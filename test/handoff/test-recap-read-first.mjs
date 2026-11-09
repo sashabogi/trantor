@@ -4,10 +4,9 @@
 // data and the evidence is a tool call — ground truth, not testimony. #8232: a lazy summary must
 // not be able to disarm the gate either.
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFirstPaths, pathsReadIn, writeHandoff, memoryIndexPath, capSummary } from "../../hooks/lib/handoff.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
@@ -15,7 +14,12 @@ const ok = (name, cond, detail = "") => {
   else { fail++; console.log(`  FAIL  ${name}${detail ? `\n        ${detail}` : ""}`); }
 };
 
-const dir = mkdtempSync(join(tmpdir(), "recap-"));
+const out = new URL("../../.agent-bus-out/", import.meta.url).pathname;
+mkdirSync(out, { recursive: true });
+const dir = mkdtempSync(join(out, "recap-"));
+process.env.AGENT_BUS_DIR = join(dir, "bus");
+process.env.HOME = dir;
+const { readFirstPaths, pathsReadIn, writeHandoff, memoryIndexPath, capSummary } = await import("../../hooks/lib/handoff.mjs");
 /** A transcript carrying the given tool calls, in the shape Claude Code actually writes. */
 const transcript = (calls) => {
   const p = join(dir, `t-${Math.random().toString(36).slice(2)}.jsonl`);
@@ -39,9 +43,10 @@ Revenue integrity build.
 1. #8152 — exec overview in SQL. See docs/crew/revenue-integrity/TDD.md §4.
 `;
 
+for (const name of ["handoff-2026-09-10.md", "revenue-integrity-build.md", "exec-lane-fence-and-rls-ceiling.md"]) writeFileSync(join(dir, name), "fixture");
 console.log("\nthe list comes out of the handoff as DATA");
 {
-  const got = readFirstPaths(SUMMARY);
+  const got = readFirstPaths(SUMMARY, { projectDir: dir });
   ok("all three named files are extracted", got.length === 3, JSON.stringify(got));
   ok("…in the order the handoff gave them", got[0] === "handoff-2026-09-10.md", JSON.stringify(got));
   ok("a file mentioned OUTSIDE the section is not conscripted", !got.includes("docs/crew/revenue-integrity/TDD.md"), JSON.stringify(got));
@@ -51,7 +56,7 @@ console.log("\nthe list comes out of the handoff as DATA");
 
 console.log("\nthe evidence is a TOOL CALL, never the successor's say-so");
 {
-  const want = readFirstPaths(SUMMARY);
+  const want = readFirstPaths(SUMMARY, { projectDir: dir });
 
   // THE FAILURE THIS CARD EXISTS FOR: a successor that recapped beautifully and opened nothing.
   const none = transcript([{ name: "Bash", input: { command: "git status" } }]);
@@ -88,6 +93,18 @@ console.log("\nthe evidence is a TOOL CALL, never the successor's say-so");
   ok("an empty want-list is satisfied trivially", pathsReadIn(none, []).missed.length === 0);
 }
 
+{
+  const route = "app/[team]/ledger/answer-key/week.test.ts";
+  mkdirSync(join(dir, "app/[team]/ledger/answer-key"), { recursive: true });
+  writeFileSync(join(dir, route), "test");
+  const paths = readFirstPaths(`READ FIRST\n- *.test.ts\n- \`${route}\`\n- absent.md\n- docs\n- ${join(dir, route)}`, { projectDir: dir });
+  ok("glob fragments and missing files are dropped; bracket paths survive", paths.length === 2 && paths[0] === route);
+  for (const command of [`cat "${route}"`, `sed -n '1,20p' '${route}'`, `head -n 20 "${route}"`]) {
+    ok("Bash reader counts: " + command, pathsReadIn(transcript([{ name: "Bash", input: { command } }]), [route]).read.length === 1);
+  }
+  ok("echoing a cat command is not reading", pathsReadIn(transcript([{ name: "Bash", input: { command: `echo cat ${route}` } }]), [route]).read.length === 0);
+}
+
 console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
 {
   // #8232: the summarizer was asked for five sections, none of them READ FIRST, so every machine
@@ -101,13 +118,13 @@ console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
     for (const k of VARS) delete process.env[k];
     process.env.RELAY_URL = "http://127.0.0.1:1";   // storm guard: dead port → fail-open, offline
 
-    projDir = mkdtempSync(join(tmpdir(), "recap-proj-"));
+    projDir = mkdtempSync(join(out, "recap-proj-"));
     memRoot = join(homedir(), ".claude", "projects", projDir.replaceAll("/", "-"));
     const memIndex = join(memRoot, "memory", "MEMORY.md");
     mkdirSync(join(memRoot, "memory"), { recursive: true });
     writeFileSync(memIndex, "# index — the durable record lives here\n");
     ok("memoryIndexPath resolves the project's index at the encoded-cwd location", memoryIndexPath(projDir) === memIndex, memoryIndexPath(projDir));
-    ok("memoryIndexPath is empty for a project that has none", memoryIndexPath(join(tmpdir(), "recap-no-such-proj")) === "");
+    ok("memoryIndexPath is empty for a project that has none", memoryIndexPath(join(out, "recap-no-such-proj")) === "");
 
     const argsFile = join(dir, "scrooge-args.txt");
     const canned = "# HANDOFF — Lazy Machine\n\n## TASK\nShip the thing.\n\n## STATE\nHalf shipped.\n\n## KEY DECISIONS\nUse the simple shape.\n\n## OPEN THREADS & NEXT STEPS\n1. Finish shipping.\n\n## KEY FILES & locations\n- src/thing.mjs\n";
@@ -137,8 +154,9 @@ console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
     rmSync(file, { force: true });   // never leak into the live handoffs dir
 
     // A compliant summary is left alone: the floor must not double-append or conscript extras.
+    for (const name of readFirstPaths(SUMMARY, { projectDir: dir })) writeFileSync(join(projDir, name), "fixture");
     const rec2 = writeHandoff({ projectDir: projDir, sessionId: "rf-ok", transcript: t, trigger: "context-warn", summary: SUMMARY });
-    const want2 = readFirstPaths(rec2.record.summary);
+    const want2 = readFirstPaths(rec2.record.summary, { projectDir: projDir });
     ok("a summary that already names read-first paths gets no floor appended",
       want2.length === 3 && !want2.includes(memIndex), JSON.stringify(want2));
     rmSync(rec2.file, { force: true });
@@ -154,12 +172,16 @@ console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
 // was never shown, which is worse than no gate at all (#8232 follow-up on #8222's section-aware cut).
 {
   const big = (n) => "x".repeat(n);
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "docs/PRD.md"), "fixture");
+  const memory = join(dir, "MEMORY.md");
+  writeFileSync(memory, "fixture");
   const heavy = ["# HANDOFF", `## TASK\n${big(2200)}`, `## STATE\n${big(2200)}`,
-    "## READ FIRST\n- ~/.claude/projects/p/memory/MEMORY.md\n- docs/PRD.md",
+    `## READ FIRST\n- ${memory}\n- docs/PRD.md`,
     "## OPEN THREADS & NEXT STEPS\n1. first thread\n2. second thread",
     `## KEY FILES\n${big(500)}`].join("\n\n");
-  const demanded = readFirstPaths(heavy);
-  const shown = readFirstPaths(capSummary(heavy, 4096));
+  const demanded = readFirstPaths(heavy, { projectDir: dir });
+  const shown = readFirstPaths(capSummary(heavy, 4096), { projectDir: dir });
   ok("#8232: the render cannot drop the READ FIRST list the gate checks", shown.length === demanded.length && demanded.length === 2, JSON.stringify({ demanded, shown }));
   ok("#8232: …and the work order still survives beside it", capSummary(heavy, 4096).includes("1. first thread"));
 }

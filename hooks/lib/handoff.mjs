@@ -3,10 +3,11 @@
 // spawns a fresh same-agent session. PreCompact cannot stop compaction, so continuing with a full
 // window means a NEW session; both paths share a per-session guard so nothing is written or spawned twice.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, openSync, readSync, fstatSync, closeSync, rmSync } from "node:fs";
-import { join, basename, dirname, sep } from "node:path";
+import { join, basename, dirname, sep, resolve } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { asString, asRecord } from "../../lib/decode.mjs";
 import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
 import { signedPost, loadIdentity } from "./api.mjs";
 // #7037: signedHeaders is SYNCHRONOUS, which is why this path can sign at all — see hubCallSync.
@@ -692,7 +693,7 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // paths disarms the #8162 gate — every check downstream passes vacuously, and the summarizer
   // produced exactly that before #8232 asked it for the section. The memory index is knowable
   // without the model; PRD and TDD stay the summarizer's to find (only it knows they exist).
-  if (!readFirstPaths(narrative).length) {
+  if (!readFirstPaths(narrative, { projectDir }).length) {
     const mem = memoryIndexPath(projectDir);
     if (mem) narrative += `\n\n## READ FIRST\n${mem}`;
   }
@@ -869,7 +870,7 @@ export function memoryIndexPath(projectDir) {
  *  can check it. Recognised: a `READ FIRST`/`READ-FIRST`/`Read first:` heading or line, and every
  *  path-looking token until the next blank line or heading — narrow on purpose: a path in passing
  *  is not a reading order. @returns {string[]} paths, deduped, capped */
-export function readFirstPaths(summary, { max = 12 } = {}) {
+export function readFirstPaths(summary, { max = 12, projectDir = process.cwd() } = {}) {
   const text = String(summary || "");
   const out = [];
   const lines = text.split(/\r?\n/);
@@ -880,10 +881,13 @@ export function readFirstPaths(summary, { max = 12 } = {}) {
     if (!collecting && !opens) continue;
     if (collecting && (line === "" || /^#{1,6}\s/.test(line))) break;
     collecting = true;
-    // Paths: a token with a slash or a known doc/memory extension, stripped of markdown furniture.
-    for (const m of line.matchAll(/[`"'(\[]?([~./\w-]*[\w-]+\.(?:md|mjs|js|ts|tsx|json|sql|rs|py|sh|txt))[`"')\]]?/g)) {
-      const p = m[1].replace(/^[`"'(\[]+|[`"')\]]+$/g, "");
-      if (p && !out.includes(p)) out.push(p);
+    // Preserve bracketed routes and globs as whole tokens; never turn a suffix into a path.
+    for (const m of line.matchAll(/`([^`]+)`|"([^"]+)"|'([^']+)'|[^\s`"'<>]+/g)) {
+      const p = (m[1] || m[2] || m[3] || m[0]).replace(/^\(|[),;:]$/g, "");
+      if (!/\.(?:md|mjs|js|ts|tsx|json|sql|rs|py|sh|txt)$/.test(p) || /[*?]/.test(p)) continue;
+      const full = p.startsWith("~/") ? join(homedir(), p.slice(2)) : resolve(projectDir, p);
+      try { if (!statSync(full).isFile()) continue; } catch { continue; }
+      if (!out.includes(p)) out.push(p);
       if (out.length >= max) return out;
     }
   }
@@ -901,8 +905,29 @@ export function pathsReadIn(transcriptPath, paths) {
   // Only the tool CALLS count. A path quoted in the injected handoff summary, or in the model's own
   // prose, must never read as "opened" — that is precisely the proxy this card exists to kill.
   const opened = new Set();
-  for (const m of body.matchAll(/"name"\s*:\s*"(Read|Grep|Glob|NotebookRead)"\s*,\s*"input"\s*:\s*\{([^}]*)\}/g)) {
-    for (const f of m[2].matchAll(/"(?:file_path|path|pattern)"\s*:\s*"([^"]+)"/g)) opened.add(f[1]);
+  for (const line of body.split("\n")) {
+    let row;
+    try { row = asRecord(JSON.parse(line)); } catch { continue; }
+    if (row?.type !== "assistant" || row.isSidechain) continue;
+    for (const call of Array.isArray(row.message?.content) ? row.message.content : []) {
+      if (call.type !== "tool_use") continue;
+      if (["Read", "Grep", "Glob", "NotebookRead"].includes(call.name)) {
+        for (const key of ["file_path", "path", "pattern"]) {
+          const path = asString(asRecord(call.input)?.[key]);
+          if (path !== null) opened.add(path);
+        }
+      }
+      const command = asString(asRecord(call.input)?.command);
+      if (call.name !== "Bash" || command === null) continue;
+      const tokens = command.match(/"[^"]*"|'[^']*'|[^\s;&|]+|[;\n&|]+/g) || [];
+      let reader = false, commandStart = true;
+      for (const token of tokens) {
+        if (/^[;\n&|]+$/.test(token)) { reader = false; commandStart = true; continue; }
+        const word = token.replace(/^["']|["']$/g, "");
+        if (commandStart) { commandStart = false; reader = /^(?:\/[^ ]*\/)?(?:cat|sed|head)$/.test(word); continue; }
+        if (reader && !word.startsWith("-")) opened.add(word);
+      }
+    }
   }
   const hit = (p) => {
     const base = p.split("/").pop();

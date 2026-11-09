@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, rmSync, existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { claimHandoff, recapHandoff, hasAssistantReply, loadPendingHandoff, completeHandoffRecap, recapStampPath } from "../../hooks/lib/handoff-claims.mjs";
 import { drillEnv } from "../drill-env.mjs";
 
-const out = resolve(".agent-bus-out");
+const root = new URL("../../", import.meta.url);
+const out = new URL(".agent-bus-out/", root).pathname;
 mkdirSync(out, { recursive: true });
 const dir = mkdtempSync(join(out, "claims-"));
 const transcript = join(dir, "session.jsonl");
 const session = { session_id: "successor", transcript_path: transcript };
-const seed = { id: "project-100", consumed: false, summary: "## READ FIRST\n- context.md", states: [{ state: "written" }] };
+writeFileSync(join(dir, "context.md"), "context");
+const seed = { project: dir, id: "project-100", consumed: false, summary: "## READ FIRST\n- context.md", states: [{ state: "written" }] };
 const file = join(dir, "project-100.json");
 const row = text => JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }) + "\n";
 const reset = () => { writeFileSync(file, JSON.stringify(seed)); writeFileSync(transcript, ""); };
@@ -88,14 +90,23 @@ try {
     const records = join(bus, "handoffs");
     writeFileSync(join(records, "project-100.json"), JSON.stringify(seed)); writeFileSync(transcript, "");
     loadPendingHandoff("project", { dir: records, freshSession: session, now: 100 });
-    const stop = (active = false) => spawnSync(process.execPath, ["hooks/stop-inbox.mjs"], { encoding: "utf8", timeout: 10000,
+    const stop = (active = false) => spawnSync(process.execPath, [new URL("hooks/stop-inbox.mjs", root).pathname], { encoding: "utf8", timeout: 10000,
       env: { ...drillEnv(), AGENT_BUS_DIR: bus, RELAY_URL: "http://127.0.0.1:1", RELAY_STOP_TIMEOUT_MS: "50" },
       input: JSON.stringify({ session_id: session.session_id, transcript_path: transcript, cwd: dir, stop_hook_active: active }) });
     appendFileSync(transcript, row("Taking over"));
+    assert.equal(JSON.parse(stop(true).stdout).decision, undefined);
     assert.equal(JSON.parse(stop().stdout).decision, "block");
+    assert.equal(JSON.parse(stop().stdout).decision, undefined);
+    assert.equal(JSON.parse(stop().stdout).decision, undefined);
+    assert.equal(JSON.parse(readFileSync(recapStampPath(records, session.session_id))).readReminderShown, true);
     appendFileSync(transcript, JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "context.md" } }] } }) + "\n");
     assert.equal(stop(true).status, 0);
     assert.equal(JSON.parse(readFileSync(join(records, "project-100.json"), "utf8")).consumed, true);
+    writeFileSync(join(records, "project-100.json"), JSON.stringify(seed));
+    writeFileSync(transcript, "");
+    loadPendingHandoff("project", { dir: records, freshSession: session, now: 200 });
+    assert.equal(JSON.parse(stop().stdout).decision, "block");
+    assert.equal(JSON.parse(stop().stdout).decision, undefined);
   });
   console.log(`${count} handoff claim tests passed`);
 } finally { rmSync(dir, { recursive: true, force: true }); }
