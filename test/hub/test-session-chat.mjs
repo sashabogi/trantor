@@ -95,6 +95,12 @@ try {
 
   // ---- restart: chat mirror is memory-only, the queue is not -----------------
   await hub.stop();
+  // #12920: a row persisted before answers[] shipped has top-level picks/other and no answers —
+  // the queue view must derive the one entry from them.
+  const predeploy = JSON.parse(readFileSync(join(dir, "bus.json"), "utf8"));
+  predeploy.sessionPrompts.push({ id: 900, project: "projA", kind: "answer", session: "s9", toolId: "toolu_predeploy",
+    picks: [0, 2], other: "", text: "picks 0, 2", by: "phone", ts: Date.now(), status: "queued" });
+  writeFileSync(join(dir, "bus.json"), JSON.stringify(predeploy));
   hub = await startTestHub({ dir, env });
   base = hub.base;
   r = await sFetch(base, owner, "POST", "/session/chat", { project: "projA", session: "s2", total: 0, turns: [] });
@@ -103,6 +109,20 @@ try {
   ok("after restart the mirror is empty", r.status === 200 && r.json.turns.length === 0, JSON.stringify(r.json));
   r = await sFetch(base, phone, "GET", `/session/prompt?id=${probeId}`);
   ok("queued prompt survives the restart", r.status === 200 && r.json.status === "queued", JSON.stringify(r.json));
+
+  // ---- #12920: a pre-deploy row (picks/other, no answers) reads as a one-entry answer --------
+  r = await sFetch(base, owner, "GET", "/session/prompts?project=projA&status=queued");
+  const predeployRow = (r.json.prompts || []).find(p => p.id === 900);
+  ok("a pre-deploy row derives answers from its picks/other",
+    JSON.stringify(predeployRow?.answers) === JSON.stringify([{ picks: [0, 2] }]), JSON.stringify(predeployRow));
+  ok("a pre-deploy row keeps legacy picks, other absent when blank",
+    JSON.stringify(predeployRow?.picks) === "[0,2]" && !("other" in (predeployRow || {})), JSON.stringify(predeployRow));
+  r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: 900, host: "mac" });
+  ok("claim of a pre-deploy row carries the derived answers",
+    r.status === 200 && JSON.stringify(r.json.prompt?.answers) === JSON.stringify([{ picks: [0, 2] }])
+    && JSON.stringify(r.json.prompt?.picks) === "[0,2]" && !("other" in (r.json.prompt || {})), JSON.stringify(r.json.prompt));
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: 900, outcome: "delivered" });
+  ok("pre-deploy row acks delivered", r.status === 200 && r.json.status === "delivered", JSON.stringify(r.json));
 
   // ---- scope: projA keys never touch projB ----------------------------------
   r = await sFetch(base, reader, "GET", "/session/chat?project=projB");
@@ -192,6 +212,46 @@ try {
   r = await sFetch(base, owner, "GET", "/events?project=projA&type=chat.prompt.queued&limit=2000");
   const answerEv = (r.json.events || []).find(e => e.promptId === answerId);
   ok("answer queueing is audited with kind and toolId", answerEv?.kind === "answer" && answerEv.toolId === "toolu_ask1", JSON.stringify(answerEv));
+
+  // ---- /session/answer: answers[] for a multi-question ask (#12912) -------------------------
+  const multiAnswers = [{ picks: [1] }, { picks: [0, 2], other: "Kiwi" }, { picks: [], other: "Oslo" }];
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_multi", answers: multiAnswers });
+  ok("a 3-entry answers[] queues", r.status === 200 && r.json.status === "queued", JSON.stringify(r.json));
+  const multiId = r.json.id;
+  r = await sFetch(base, owner, "GET", "/session/prompts?project=projA&status=queued");
+  const multiRow = (r.json.prompts || []).find(p => p.id === multiId);
+  ok("the queue view carries the normalized answers",
+    JSON.stringify(multiRow?.answers) === JSON.stringify(multiAnswers), JSON.stringify(multiRow));
+  ok("a multi-entry answer has no legacy picks/other on the view",
+    multiRow && !("picks" in multiRow) && !("other" in multiRow), JSON.stringify(multiRow));
+  // the first answer was acked stale above, so it no longer lists under status=queued
+  r = await sFetch(base, owner, "GET", "/session/prompts?project=projA");
+  const legacyRow = (r.json.prompts || []).find(p => p.id === answerId);
+  ok("a legacy {picks} row is normalized to answers too",
+    JSON.stringify(legacyRow?.answers) === JSON.stringify([{ picks: [1, 2] }]), JSON.stringify(legacyRow));
+  ok("a one-entry answer keeps the legacy picks field, other absent when blank",
+    JSON.stringify(legacyRow?.picks) === "[1,2]" && !("other" in legacyRow), JSON.stringify(legacyRow));
+  ok("the summary text covers every entry", multiRow?.text === "picks 1; Kiwi; Oslo", JSON.stringify(multiRow?.text));
+  r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: multiId, host: "mac" });
+  ok("claim carries the full answers payload",
+    r.status === 200 && JSON.stringify(r.json.prompt?.answers) === JSON.stringify(multiAnswers), JSON.stringify(r.json.prompt));
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: multiId, outcome: "delivered" });
+  ok("multi-answer acks delivered", r.status === 200 && r.json.status === "delivered", JSON.stringify(r.json));
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_five",
+    answers: [{ picks: [0] }, { picks: [0] }, { picks: [0] }, { picks: [0] }, { picks: [0] }] });
+  ok("a 5-entry answers[] is 400", r.status === 400, `status ${r.status}`);
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_blank",
+    answers: [{ picks: [0] }, { picks: [], other: "   " }] });
+  ok("an entry with neither picks nor a non-blank other is 400", r.status === 400, `status ${r.status}`);
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_zero", answers: [] });
+  ok("an empty answers[] is 400", r.status === 400, `status ${r.status}`);
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_ints",
+    answers: [{ picks: [1, "x", 2.5, 3] }] });
+  ok("non-integer picks are filtered out", r.status === 200, `status ${r.status}`);
+  const intsId = r.json.id;
+  r = await sFetch(base, owner, "GET", "/session/prompts?project=projA&status=queued");
+  const intsRow = (r.json.prompts || []).find(p => p.id === intsId);
+  ok("the stored entry keeps only the ints", JSON.stringify(intsRow?.answers) === JSON.stringify([{ picks: [1, 3] }]), JSON.stringify(intsRow));
 
   // ---- streams: frames reach only scoped readers -----------------------------
   const ownerStream = await openStream(base, owner, "owner");
