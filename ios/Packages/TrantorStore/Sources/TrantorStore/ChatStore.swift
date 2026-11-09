@@ -203,24 +203,31 @@ public final class ChatStore {
         return false
     }
 
-    public func answer(toolId: String, picks: [Int], other: String? = nil) async {
+    public func answer(toolId: String, answers entries: [QuestionAnswer]) async {
         guard answers[toolId]?.preventsSending != true else { return }
         if let reason = disabledReason { answers[toolId] = .failed(reason); return }
         guard let api, !snapshot.session.isEmpty,
               let block = question(toolId), block.answer == nil else {
             answers[toolId] = .stale(Self.staleAnswer); return
         }
-        guard block.ask.count == 1, let question = block.ask.first else {
-            answers[toolId] = .failed("Answer it on the Mac"); return
+        // One entry per question in the ask's order (CONTRACT-ask.md #12912); each entry needs a
+        // pick or non-blank other, a single-select entry exactly one of them.
+        guard !block.ask.isEmpty, entries.count == block.ask.count else {
+            answers[toolId] = .failed("Answer every question in this ask."); return
         }
-        let text = other?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasOther = !(text ?? "").isEmpty
-        guard (text?.utf16.count ?? 0) <= 2000,
-              Set(picks).count == picks.count,
-              picks.allSatisfy({ question.options.indices.contains($0) }),
-              hasOther || !picks.isEmpty,
-              question.multiSelect || picks.count + (hasOther ? 1 : 0) == 1 else {
-            answers[toolId] = .failed("Choose an option or enter an answer of up to 2,000 characters."); return
+        var normalized: [QuestionAnswer] = []
+        normalized.reserveCapacity(entries.count)
+        for (question, entry) in zip(block.ask, entries) {
+            let text = entry.other?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let hasOther = !(text ?? "").isEmpty
+            guard (text?.utf16.count ?? 0) <= 2000,
+                  Set(entry.picks).count == entry.picks.count,
+                  entry.picks.allSatisfy({ question.options.indices.contains($0) }),
+                  hasOther || !entry.picks.isEmpty,
+                  question.multiSelect || entry.picks.count + (hasOther ? 1 : 0) == 1 else {
+                answers[toolId] = .failed("Choose an option or enter an answer of up to 2,000 characters."); return
+            }
+            normalized.append(QuestionAnswer(picks: entry.picks.sorted(), other: hasOther ? text : nil))
         }
         let currentGeneration = generation, session = snapshot.session
         answers[toolId] = .sending
@@ -235,8 +242,7 @@ public final class ChatStore {
         }
         if let reason = disabledReason { answers[toolId] = .failed(reason); return }
         do {
-            let receipt = try await api.answer(project: project, session: session, toolId: toolId,
-                                               picks: picks.sorted(), other: hasOther ? text : nil)
+            let receipt = try await api.answer(project: project, session: session, toolId: toolId, answers: normalized)
             guard generation == currentGeneration, answers[toolId] == .sending else { return }
             try acceptAnswer(receipt, toolId: toolId)
         } catch let error as HubError where error.isConnectivity {

@@ -2,13 +2,23 @@ import Foundation
 import TrantorCore
 
 /// Everything the app asks of the hub. Stores depend on this, so tests can stub it.
+/// One question's answer in an ask, per CONTRACT-ask.md (#12912): the picked option indexes and
+/// optional free text. A single-select answer carries exactly one of the two.
+public struct QuestionAnswer: Equatable, Sendable {
+    public var picks: [Int]
+    public var other: String?
+    public init(picks: [Int] = [], other: String? = nil) {
+        self.picks = picks; self.other = other
+    }
+}
+
 public protocol HubServing: Sendable {
     func crewRoster() async throws -> [CrewRosterMachine]
     func crewCommand(project: String, action: CrewAction, seats: [String], from: String?, to: String?) async throws -> CrewCommandStatus
     func crewCommandStatus(id: String) async throws -> CrewCommandStatus
     func chat(project: String, after: Int) async throws -> ChatSnapshot
     func sendPrompt(project: String, text: String, attachments: [PromptAttachment]) async throws -> PromptStatus
-    func answer(project: String, session: String, toolId: String, picks: [Int], other: String?) async throws -> PromptStatus
+    func answer(project: String, session: String, toolId: String, answers: [QuestionAnswer]) async throws -> PromptStatus
     func promptStatus(id: String) async throws -> PromptStatus
     func health() async throws -> HealthInfo
     func enroll(token: String, name: String) async throws -> EnrollResult
@@ -91,12 +101,15 @@ public final class HubAPI: HubServing, @unchecked Sendable {
         return try decode(PromptStatus.self, data)
     }
 
-    public func answer(project: String, session: String, toolId: String, picks: [Int], other: String? = nil) async throws -> PromptStatus {
-        var fields: [String: JSONValue] = [
+    public func answer(project: String, session: String, toolId: String, answers: [QuestionAnswer]) async throws -> PromptStatus {
+        let fields: [String: JSONValue] = [
             "project": .string(project), "session": .string(session), "toolId": .string(toolId),
-            "picks": .array(picks.map { .number(Double($0)) }),
+            "answers": .array(answers.map { answer in
+                var entry: [String: JSONValue] = ["picks": .array(answer.picks.map { .number(Double($0)) })]
+                if let other = answer.other { entry["other"] = .string(other) }
+                return .object(entry)
+            }),
         ]
-        if let other { fields["other"] = .string(other) }
         return try decode(PromptStatus.self, await post("/session/answer", fields))
     }
 
