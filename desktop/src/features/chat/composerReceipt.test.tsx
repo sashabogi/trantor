@@ -131,6 +131,11 @@ describe("a restart-split receipt is judged against the pane's own transcript (#
     expect(paneSends()).toHaveLength(1);
     expect(host.textContent).not.toContain("not delivered");
     expect(host.textContent).not.toContain("delivering");
+    // Every pane check carries the send-time fence (#12913 bounce): with the fake clock at 0
+    // when the send went out, sinceMs is exactly p.at - 5000 = -5000.
+    const receiptCalls = sent.filter(s => s.cmd === "pane_receipt_texts");
+    expect(receiptCalls.length).toBeGreaterThan(0);
+    for (const c of receiptCalls) expect(c.args).toMatchObject({ target: "pane-alpha", sinceMs: -5000 });
   });
 
   it("the manual retry checks the pane's own transcript first — delivered there, nothing resends", async () => {

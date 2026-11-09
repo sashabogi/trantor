@@ -132,10 +132,19 @@ pub(crate) fn prompt_delivery(result: Result<herdr::PromptOutcome, String>) -> P
 
 /// The receipt channel of the session the pane's agent reported to herdr (#12913): after a
 /// restart the panel can follow the SUCCESSOR transcript while a delivered send's echo sits in
-/// the pane's own. The composer judges a pending against this before calling it lost or retrying.
+/// the pane's own. Only rows at/after `since_ms` count — an old identical message is not proof.
+/// The transcript read is blocking IO, so it rides spawn_blocking, never the main thread.
 #[tauri::command]
-pub(crate) fn pane_receipt_texts(project: String, target: String) -> Result<Vec<String>, String> {
-    reported_session_receipts(&project, herdr::reported_session(&target))
+pub(crate) async fn pane_receipt_texts(
+    project: String,
+    target: String,
+    since_ms: i64,
+) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        reported_session_receipts(&project, herdr::reported_session(&target), since_ms)
+    })
+    .await
+    .map_err(|e| format!("receipt read task: {e}"))?
 }
 
 /// Split from the command for tests. None — no agent, no report, herdr down — is an empty
@@ -143,21 +152,110 @@ pub(crate) fn pane_receipt_texts(project: String, target: String) -> Result<Vec<
 pub(crate) fn reported_session_receipts(
     project: &str,
     reported: Option<String>,
+    since_ms: i64,
 ) -> Result<Vec<String>, String> {
     let Some(sid) = reported else {
         return Ok(Vec::new());
     };
     let path = sessions::claude_transcript_path(project, &sid)?;
-    let raw = std::fs::read_to_string(path).unwrap_or_default();
-    Ok(receipt_texts_from_raw(&raw))
+    Ok(receipt_texts_from_raw_since(&read_tail(&path), since_ms))
 }
 
-/// The receipt channel of one raw transcript, through the same decode the panel's watcher runs,
-/// so the two judgments can never disagree about what counts as an echo.
-pub(crate) fn receipt_texts_from_raw(raw: &str) -> Vec<String> {
-    let lines = complete_lines(raw);
-    let total = lines.len();
-    decode_chat_lines(lines, total).receipt_texts
+/// At most this much of the transcript's TAIL is read: a pending's echo is seconds old, and a
+/// full decode of a giant transcript on every check would stall the app.
+const RECEIPT_TAIL_BYTES: u64 = 2 * 1024 * 1024;
+
+pub(crate) fn read_tail(path: &Path) -> String {
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(RECEIPT_TAIL_BYTES);
+    let mut buf = Vec::new();
+    if f.seek(SeekFrom::Start(start)).is_err() || f.read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // A mid-file read starts mid-row: the first partial line is dropped, never half-parsed.
+    let cut = if start > 0 { tail_cut(&text) } else { text.as_ref() };
+    cut.to_string()
+}
+
+/// Everything after the first newline — the tail read's mid-row stub is dropped here.
+pub(crate) fn tail_cut(s: &str) -> &str {
+    match s.find('\n') {
+        Some(i) => &s[i + 1..],
+        None => "",
+    }
+}
+
+/// Milliseconds since the epoch of an ISO-8601 UTC row timestamp ("<date>T<time>.<frac>Z").
+/// None when the shape is off — a row with no readable timestamp is kept, never fenced out.
+pub(crate) fn iso_utc_ms(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' {
+        return None;
+    }
+    let num = |from: usize, to: usize| s.get(from..to)?.parse::<i64>().ok();
+    let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (h, mi, sec) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    // days-from-civil (Hinnant's algorithm): days since 1970-01-01.
+    let y2 = if mo <= 2 { y - 1 } else { y };
+    let era = y2.div_euclid(400);
+    let yoe = y2 - era * 400;
+    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let mut ms = ((days * 24 + h) * 60 + mi) * 60_000 + sec * 1000;
+    if let Some(frac) = s.get(19..).and_then(|r| r.strip_prefix('.')) {
+        let digits: String = frac.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !digits.is_empty() {
+            ms += format!("{digits:0<3}").get(..3)?.parse::<i64>().ok()?;
+        }
+    }
+    Some(ms)
+}
+
+fn row_timestamp_ms(v: &serde_json::Value) -> Option<i64> {
+    v.get("timestamp")
+        .and_then(|t| t.as_str())
+        .and_then(iso_utc_ms)
+}
+
+/// The receipt channel of one raw transcript, fenced to rows at/after `since_ms` (#12913
+/// bounce): containment over ALL history let an old "yes" prove a fresh "yes" delivered. The
+/// arrival shapes match the watcher's decode exactly — plain user rows and queue enqueues.
+pub(crate) fn receipt_texts_from_raw_since(raw: &str, since_ms: i64) -> Vec<String> {
+    complete_lines(raw)
+        .into_iter()
+        .filter_map(|line| {
+            if skippable_big_row(line) {
+                return None;
+            }
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            if let Some(ms) = row_timestamp_ms(&v) {
+                if ms < since_ms {
+                    return None;
+                }
+            }
+            let text = match v.get("type").and_then(|t| t.as_str()) {
+                Some("user") => v.get("message").and_then(|m| m.get("content")).map(text_content),
+                Some("queue-operation") => v
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .map(str::to_string),
+                _ => None,
+            }?;
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        })
+        .collect()
 }
 
 /// Is this seat writing to its worktree right now? One owner for this answer: herdr, which
@@ -203,7 +301,8 @@ mod pane_receipt_tests {
     /// against the panel's transcript alone.
     #[test]
     fn no_reported_session_is_an_empty_channel_not_an_error() {
-        let texts = reported_session_receipts("any-project", None).expect("None is not an error");
+        let texts =
+            reported_session_receipts("any-project", None, 0).expect("None is not an error");
         assert!(texts.is_empty());
     }
 
@@ -217,9 +316,41 @@ mod pane_receipt_tests {
             serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"on it"}]}}).to_string(),
         ]
         .join("\n");
-        let texts = receipt_texts_from_raw(&raw);
+        let texts = receipt_texts_from_raw_since(&raw, 0);
         assert!(texts.iter().any(|t| t.contains("screenshots are on the canvas")));
         assert!(texts.iter().any(|t| t.contains("queued while mid-turn")));
         assert!(!texts.iter().any(|t| t.contains("on it")));
+    }
+
+    /// The bounce fence: an identical message from BEFORE the send is not this send's echo —
+    /// only the fresh row survives the since_ms cut.
+    #[test]
+    fn an_old_identical_message_is_not_the_sends_echo() {
+        let raw = [
+            serde_json::json!({"type":"user","timestamp":"2025-10-28T02:14:45.123Z","message":{"content":"yes"}}).to_string(),
+            serde_json::json!({"type":"user","timestamp":"2025-10-29T15:26:25.000Z","message":{"content":"yes"}}).to_string(),
+        ]
+        .join("\n")
+            + "\n";
+        let since = iso_utc_ms("2025-10-29T00:00:00.000Z").expect("threshold parses");
+        let texts = receipt_texts_from_raw_since(&raw, since);
+        assert_eq!(texts.len(), 1, "only the at/after-send row survives: {texts:?}");
+        // A row with NO readable timestamp is kept — fenced out only on positive evidence of age.
+        let timeless =
+            serde_json::json!({"type":"user","message":{"content":"yes"}}).to_string() + "\n";
+        assert_eq!(receipt_texts_from_raw_since(&timeless, since).len(), 1);
+    }
+
+    /// The tail read drops the mid-row stub it starts on, and iso_utc_ms agrees with the epoch.
+    #[test]
+    fn tail_cut_drops_the_partial_first_line_and_iso_parses() {
+        assert_eq!(tail_cut("partial row{\"type\":\"us\nfull row\n"), "full row\n");
+        assert_eq!(tail_cut("one partial line, no newline"), "");
+        assert_eq!(
+            iso_utc_ms("2025-10-28T02:14:45.123Z"),
+            Some(1_761_617_685_123)
+        );
+        assert_eq!(iso_utc_ms("2025-10-28 02:14:45"), None, "a space is not a T");
+        assert_eq!(iso_utc_ms("not a date at all"), None);
     }
 }

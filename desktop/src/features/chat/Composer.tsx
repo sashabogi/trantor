@@ -675,17 +675,27 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   }, [project, receiptsFor]);
   // Until the pane's transcript has answered, a panel-lost pending still reads as delivering,
   // never as lost — the banner is the check's verdict, not its suspicion.
-  const lostTargets = [...new Set(ownPendings.filter(p => receiptFor(p, userTexts, Date.now()) === "lost").map(p => p.target))].sort().join("\n");
+  // #12913 bounce: every pane check is fenced to rows at/after the send (at - 5s of slack) —
+  // whole-history containment let an old identical "yes" prove a fresh "yes" delivered.
+  const lostChecks = new Map<string, number>();
+  for (const p of ownPendings) {
+    if (receiptFor(p, userTexts, Date.now()) !== "lost") continue;
+    lostChecks.set(p.target, Math.min(lostChecks.get(p.target) ?? p.at, p.at));
+  }
+  const lostKey = [...lostChecks.entries()].map(([t, at]) => `${t}@${at}`).sort().join("\n");
   useEffect(() => {
-    if (!lostTargets) return;
+    if (!lostKey) return;
     let alive = true;
-    for (const t of lostTargets.split("\n")) {
-      invoke<string[]>("pane_receipt_texts", { project, target: t })
+    for (const entry of lostKey.split("\n")) {
+      const sep = entry.lastIndexOf("@");
+      const t = entry.slice(0, sep);
+      const sinceMs = Number(entry.slice(sep + 1)) - 5000;
+      invoke<string[]>("pane_receipt_texts", { project, target: t, sinceMs })
         .then(texts => { if (alive) setPaneReceipts(prev => ({ ...prev, [t]: texts })); })
         .catch(() => { if (alive) setPaneReceipts(prev => ({ ...prev, [t]: [] })); });
     }
     return () => { alive = false; };
-  }, [lostTargets, tick, project]);
+  }, [lostKey, tick, project]);
   const lost = ownPendings.filter(p =>
     paneReceipts[p.target] !== undefined && receiptFor(p, receiptsFor(p), Date.now()) === "lost");
   const inFlight = ownPendings.length - lost.length;
@@ -723,7 +733,7 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   const retry = (p: PendingSend) => {
     // #12913: the manual retry makes the same fresh check first — the echo may sit in the pane's
     // own transcript while the panel follows a successor. Delivered there: clear, send nothing.
-    void invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target })
+    void invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target, sinceMs: p.at - 5000 })
       // A failed invoke yields an empty channel: "no echo evidence", never a delivery claim.
       .catch(() => [])
       .then(own => {
@@ -752,7 +762,7 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
         // #12913: a FRESH read of the pane's own transcript decides — an echo there means the
         // send WAS delivered and nothing is re-typed. And line() fires HERE, never inside a
         // setState updater: React may invoke an updater twice, and each copy typed the text again.
-        const own = await invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target })
+        const own = await invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target, sinceMs: p.at - 5000 })
           // A failed invoke yields an empty channel: "no echo evidence", never a delivery claim.
           .catch(() => []);
         if (!alive) return;
