@@ -316,12 +316,16 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
     await sendDraft("where are the drills");
     vi.setSystemTime(LOST_AFTER_MS + 1_000);
     // No working transition ever fires, so the auto-retry stays out of this drill: the lost
-    // banner is judged at render, in the pending's own project.
+    // banner is judged at render, in the pending's own project — and since #12913 only after
+    // the pane's own transcript answered (one flush for that invoke to land).
     view("alpha", "pane-alpha", ["some unrelated turn"]);
+    await act(async () => {});
+    await act(async () => {});
     expect(host.textContent).toContain("not delivered");
     const retry = [...host.querySelectorAll("button")].find(b => b.textContent === "retry");
     if (!retry) throw new Error("no retry button");
     await act(async () => { retry.click(); });
+    await act(async () => {});
     await act(async () => {});
     const sends = paneSends();
     expect(sends).toHaveLength(2);

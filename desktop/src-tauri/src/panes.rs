@@ -130,6 +130,36 @@ pub(crate) fn prompt_delivery(result: Result<herdr::PromptOutcome, String>) -> P
     PromptDelivery { outcome, error }
 }
 
+/// The receipt channel of the session the pane's agent reported to herdr (#12913): after a
+/// restart the panel can follow the SUCCESSOR transcript while a delivered send's echo sits in
+/// the pane's own. The composer judges a pending against this before calling it lost or retrying.
+#[tauri::command]
+pub(crate) fn pane_receipt_texts(project: String, target: String) -> Result<Vec<String>, String> {
+    reported_session_receipts(&project, herdr::reported_session(&target))
+}
+
+/// Split from the command for tests. None — no agent, no report, herdr down — is an empty
+/// channel, never an error: the caller falls back to the panel's transcript, not a red row.
+pub(crate) fn reported_session_receipts(
+    project: &str,
+    reported: Option<String>,
+) -> Result<Vec<String>, String> {
+    let Some(sid) = reported else {
+        return Ok(Vec::new());
+    };
+    let path = sessions::claude_transcript_path(project, &sid)?;
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    Ok(receipt_texts_from_raw(&raw))
+}
+
+/// The receipt channel of one raw transcript, through the same decode the panel's watcher runs,
+/// so the two judgments can never disagree about what counts as an echo.
+pub(crate) fn receipt_texts_from_raw(raw: &str) -> Vec<String> {
+    let lines = complete_lines(raw);
+    let total = lines.len();
+    decode_chat_lines(lines, total).receipt_texts
+}
+
 /// Is this seat writing to its worktree right now? One owner for this answer: herdr, which
 /// crew-runner tells at every turn boundary. It decides whether a human edit is allowed, so no guess.
 #[tauri::command]
@@ -163,4 +193,33 @@ pub(crate) fn seat_state(agent: String) -> Result<String, String> {
         }
     }
     Ok("unknown".into())
+}
+
+#[cfg(test)]
+mod pane_receipt_tests {
+    use super::*;
+
+    /// No reported session is an empty channel, not an error — the composer keeps judging
+    /// against the panel's transcript alone.
+    #[test]
+    fn no_reported_session_is_an_empty_channel_not_an_error() {
+        let texts = reported_session_receipts("any-project", None).expect("None is not an error");
+        assert!(texts.is_empty());
+    }
+
+    /// The judgment #12913 relies on: the channel carries the RAW arrival rows — a plain user
+    /// message and a queue enqueue — and none of the assistant's own words.
+    #[test]
+    fn the_channel_carries_raw_user_rows_and_enqueues_only() {
+        let raw = [
+            serde_json::json!({"type":"user","message":{"content":"show me when the screenshots are on the canvas"}}).to_string(),
+            serde_json::json!({"type":"queue-operation","operation":"enqueue","content":"queued while mid-turn"}).to_string(),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"on it"}]}}).to_string(),
+        ]
+        .join("\n");
+        let texts = receipt_texts_from_raw(&raw);
+        assert!(texts.iter().any(|t| t.contains("screenshots are on the canvas")));
+        assert!(texts.iter().any(|t| t.contains("queued while mid-turn")));
+        assert!(!texts.iter().any(|t| t.contains("on it")));
+    }
 }

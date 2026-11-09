@@ -201,6 +201,7 @@ pub fn run() {
             ghost::ghost_complete_stream,
             ghost::ghost_cancel,
             pane_send,
+            pane_receipt_texts,
             pane_keys,
             ask_answer,
             asks::ask_watch,
