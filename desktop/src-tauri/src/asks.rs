@@ -104,9 +104,10 @@ fn question_keystrokes(question: &AskQuestion, answer: AskAnswer) -> String {
         if valid.len() + usize::from(other.is_some()) != 1 {
             return String::new();
         }
-        return match other {
-            Some(text) => format!("{}{text}\r", DOWN.repeat(question.options.len())),
-            None => format!("{}\r", DOWN.repeat(*valid.first().unwrap())),
+        return match (other, valid.first()) {
+            (Some(text), _) => format!("{}{text}\r", DOWN.repeat(question.options.len())),
+            (None, Some(first)) => format!("{}\r", DOWN.repeat(*first)),
+            (None, None) => String::new(),
         };
     }
     let mut keys = String::new();
