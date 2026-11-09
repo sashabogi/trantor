@@ -124,3 +124,40 @@ SETTLE_TIMEOUT + 30 seconds`, which logs the current step directly on expiry.
 
 The seat writes tests and drill code but never builds or installs the app. The orchestrator builds
 and runs this gate, then performs the operator-visible real-path check.
+
+## Phone answers, any number of questions (#12912)
+
+Measured live on Claude Code 2.1.304, each answer sent as ONE `send_text` write. These keys are
+the contract; a CC upgrade that changes them is a card with a re-measure, never a guess.
+
+Screen per question: options are rows `0..n-1`, row `n` is "Type something" (an inline text
+field: typing goes straight in), and a multi-select question adds row `n+1`, "Next" (or
+"Submit" on the last). The cursor starts on row 0. `D` is `ESC [ B`.
+
+| answer | keys |
+|---|---|
+| single-select, pick `i` | `D*i`, Enter (CC advances by itself) |
+| single-select, Other text | `D*n`, text, Enter |
+| multi-select | per pick ascending: `D*(i - at)`, Space; if Other: `D*(n - at)`, text; then `D` to row `n+1`, Enter |
+| after the LAST question, when the ask has 2+ questions OR its lone question is multi-select | Enter (Review tab, "Submit answers" is preselected) |
+
+Traps, each seen live: Enter on the empty "Type something" row DECLINES the whole ask, so text
+never follows an Enter. Typing into a multi-select Other row ticks it, and Enter there unticks
+it. Enter on a multi-select option toggles it; it does not submit. A lone single-select
+question submits on its own Enter, with no Review. Spaces inside Other text type as text.
+Other text is sent with control characters and newlines stripped; blank text is no Other.
+
+Payload, phone to hub to desktop (`POST /session/answer`):
+
+```json
+{ "project": "p", "session": "<cc session>", "toolId": "<tool_use_id>",
+  "answers": [ { "picks": [1] }, { "picks": [0, 2], "other": "Kiwi" }, { "picks": [], "other": "Oslo" } ] }
+```
+
+`answers` has one entry per question in the ask's order, at most 4 (CC's limit). Each entry
+needs a pick or non-blank `other`; a single-select entry has exactly one of them. The hub still
+accepts the old `{ picks, other }` body as `answers: [{ picks, other }]`. The queue view always
+carries the normalized `answers`, and for one-entry answers also the old top-level `picks` and
+`other`, so a desktop that predates this keeps working. The desktop types only when
+`answers.len()` equals the live sidecar's `questions.len()` and `toolId` still matches;
+anything else acks "stale" and types nothing. A partial answer is never typed.
