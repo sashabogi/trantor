@@ -652,20 +652,52 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   // (visibly, retry-ready) if it never does. A pending is judged only against its OWN project's
   // transcript (#6250): judging it against another project's transcript falsely declares it lost.
   const [pendings, setPendings] = useState<PendingSend[]>([]);
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!pendings.some(p => p.project === project)) return;
     const t = setInterval(() => { onSent(); setTick(n => n + 1); }, 2000);
     return () => clearInterval(t);
   }, [pendings, project, onSent]);
+  const ownPendings = pendings.filter(p => p.project === project);
+  // #12913: after a restart the panel can follow the SUCCESSOR transcript while a delivered
+  // send's echo sits in the pane's OWN session transcript. A pending the panel would call lost
+  // is judged against that transcript too (pane_receipt_texts, refreshed on the tick) first.
+  const [paneReceipts, setPaneReceipts] = useState<Record<string, string[]>>({});
+  const receiptsFor = useCallback((p: PendingSend) => {
+    const own = paneReceipts[p.target];
+    return own ? [...userTexts, ...own] : userTexts;
+  }, [userTexts, paneReceipts]);
   useEffect(() => {
     setPendings(ps => {
-      const kept = ps.filter(p => p.project !== project || receiptFor(p, userTexts, Date.now()) !== "delivered");
+      const kept = ps.filter(p => p.project !== project || receiptFor(p, receiptsFor(p), Date.now()) !== "delivered");
       return kept.length === ps.length ? ps : kept;
     });
-  }, [userTexts, project]);
-  const ownPendings = pendings.filter(p => p.project === project);
-  const lost = ownPendings.filter(p => receiptFor(p, userTexts, Date.now()) === "lost");
+  }, [project, receiptsFor]);
+  // Until the pane's transcript has answered, a panel-lost pending still reads as delivering,
+  // never as lost — the banner is the check's verdict, not its suspicion.
+  // #12913 bounce: every pane check is fenced to rows at/after the send (at - 5s of slack) —
+  // whole-history containment let an old identical "yes" prove a fresh "yes" delivered.
+  const lostChecks = new Map<string, number>();
+  for (const p of ownPendings) {
+    if (receiptFor(p, userTexts, Date.now()) !== "lost") continue;
+    lostChecks.set(p.target, Math.min(lostChecks.get(p.target) ?? p.at, p.at));
+  }
+  const lostKey = [...lostChecks.entries()].map(([t, at]) => `${t}@${at}`).sort().join("\n");
+  useEffect(() => {
+    if (!lostKey) return;
+    let alive = true;
+    for (const entry of lostKey.split("\n")) {
+      const sep = entry.lastIndexOf("@");
+      const t = entry.slice(0, sep);
+      const sinceMs = Number(entry.slice(sep + 1)) - 5000;
+      invoke<string[]>("pane_receipt_texts", { project, target: t, sinceMs })
+        .then(texts => { if (alive) setPaneReceipts(prev => ({ ...prev, [t]: texts })); })
+        .catch(() => { if (alive) setPaneReceipts(prev => ({ ...prev, [t]: [] })); });
+    }
+    return () => { alive = false; };
+  }, [lostKey, tick, project]);
+  const lost = ownPendings.filter(p =>
+    paneReceipts[p.target] !== undefined && receiptFor(p, receiptsFor(p), Date.now()) === "lost");
   const inFlight = ownPendings.length - lost.length;
 
   const sendText = (raw: string): boolean => {
@@ -699,26 +731,50 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   }, [suggestion]);
 
   const retry = (p: PendingSend) => {
-    setPendings(ps => ps.filter(x => x !== p));
-    line(p.text, p.target).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now(), project: p.project, target: p.target }]));
+    // #12913: the manual retry makes the same fresh check first — the echo may sit in the pane's
+    // own transcript while the panel follows a successor. Delivered there: clear, send nothing.
+    void invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target, sinceMs: p.at - 5000 })
+      // A failed invoke yields an empty channel: "no echo evidence", never a delivery claim.
+      .catch(() => [])
+      .then(own => {
+        setPendings(ps => ps.filter(x => x !== p));
+        if (receiptFor(p, [...userTexts, ...own], Date.now()) === "delivered") return;
+        void line(p.text, p.target).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now(), project: p.project, target: p.target }]));
+      });
   };
 
   // ONE mechanical retry at the turn boundary: a send lost mid-turn gets retried automatically
-  // once. A send lost AGAIN after that retry stays red for the human; retrying forever would
-  // spam a genuinely broken pane. Only THIS project's pendings are judged and retried here
-  // (#6250): a foreign-project pending is never judged lost or re-sent into the selected pane.
+  // once; lost AGAIN, it stays red for the human. Only THIS project's pendings are judged here
+  // (#6250). The effect fires on `working` alone, so what it judges rides a ref, never a closure.
+  const judgeRef = useRef({ pendings, userTexts });
+  useEffect(() => { judgeRef.current = { pendings, userTexts }; });
   useEffect(() => {
     if (working) return;
-    setPendings(ps => {
-      const now = Date.now();
-      // Never auto-retry a send carrying image paths: a duplicated screenshot message is worse
-      // than a lost one, and attachment sends are exactly the receipt's false-alarm class
-      // (gap six). Those keep the manual retry button only.
-      const toRetry = ps.filter(p => p.project === project && !p.retried && !hasImagePath(p.text) && receiptFor(p, userTexts, now) === "lost");
-      if (!toRetry.length) return ps;
-      for (const p of toRetry) void line(p.text, p.target);
-      return ps.map(p => (toRetry.includes(p) ? { text: p.text, at: now, project: p.project, target: p.target, retried: true } : p));
-    });
+    const { pendings: ps, userTexts: ut } = judgeRef.current;
+    // Never auto-retry a send carrying image paths: a duplicated screenshot message is worse
+    // than a lost one, and attachment sends are exactly the receipt's false-alarm class
+    // (gap six). Those keep the manual retry button only.
+    const candidates = ps.filter(p => p.project === project && !p.retried && !hasImagePath(p.text) && receiptFor(p, ut, Date.now()) === "lost");
+    if (!candidates.length) return;
+    let alive = true;
+    void (async () => {
+      for (const p of candidates) {
+        // #12913: a FRESH read of the pane's own transcript decides — an echo there means the
+        // send WAS delivered and nothing is re-typed. And line() fires HERE, never inside a
+        // setState updater: React may invoke an updater twice, and each copy typed the text again.
+        const own = await invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target, sinceMs: p.at - 5000 })
+          // A failed invoke yields an empty channel: "no echo evidence", never a delivery claim.
+          .catch(() => []);
+        if (!alive) return;
+        if (receiptFor(p, [...ut, ...own], Date.now()) === "delivered") {
+          setPendings(cur => cur.filter(x => x !== p));
+          continue;
+        }
+        void line(p.text, p.target);
+        setPendings(cur => cur.map(x => (x === p ? { text: p.text, at: Date.now(), project: p.project, target: p.target, retried: true } : x)));
+      }
+    })();
+    return () => { alive = false; };
   }, [working]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Interrupting is a KEY, not a message. Escape is what stops a turn in the harness.
