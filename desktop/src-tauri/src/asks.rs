@@ -93,22 +93,25 @@ fn question_keystrokes(question: &AskQuestion, answer: AskAnswer) -> String {
         .filter(|text| !text.trim().is_empty());
     let valid: BTreeSet<usize> = answer
         .picks
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(|i| usize::try_from(i).ok())
         .filter(|i| *i < question.options.len())
         .collect();
-    if valid.is_empty() && other.is_none() {
+    if valid.len() != answer.picks.len() || (valid.is_empty() && other.is_none()) {
         return String::new();
     }
     if !question.multi_select {
         if valid.len() + usize::from(other.is_some()) != 1 {
             return String::new();
         }
-        return match (other, valid.first()) {
-            (Some(text), _) => format!("{}{text}\r", DOWN.repeat(question.options.len())),
-            (None, Some(first)) => format!("{}\r", DOWN.repeat(*first)),
-            (None, None) => String::new(),
+        if let Some(text) = other {
+            return format!("{}{text}\r", DOWN.repeat(question.options.len()));
+        }
+        let Some(first) = valid.first() else {
+            return String::new();
         };
+        return format!("{}\r", DOWN.repeat(*first));
     }
     let mut keys = String::new();
     let mut at = 0;

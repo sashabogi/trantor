@@ -16,8 +16,8 @@ fn single_choice_bytes_match_terminal_navigation() {
 }
 
 #[test]
-fn multi_choice_sorts_and_deduplicates_one_downward_sweep() {
-    for picks in [vec![0, 2], vec![2, 0], vec![2, 0, 2]] {
+fn multi_choice_sorts_one_downward_sweep() {
+    for picks in [vec![0, 2], vec![2, 0]] {
         assert_eq!(
             answer_keystrokes(question(true), picks, None),
             " \x1b[B\x1b[B \x1b[B\x1b[B\r\r"
@@ -26,13 +26,32 @@ fn multi_choice_sorts_and_deduplicates_one_downward_sweep() {
 }
 
 #[test]
-fn invalid_indices_are_dropped_and_empty_selection_types_nothing() {
-    assert_eq!(
-        answer_keystrokes(question(false), vec![0, 99, -1], None),
-        "\r"
-    );
-    assert_eq!(answer_keystrokes(question(false), vec![99, -1], None), "");
-    assert_eq!(answer_keystrokes(question(true), vec![], None), "");
+fn out_of_range_picks_reject_the_entire_answer() {
+    for multi in [false, true] {
+        for picks in [vec![0, 3], vec![0, -1], vec![99, -1]] {
+            for other in [None, Some("Oslo".into())] {
+                assert_eq!(answer_keystrokes(question(multi), picks.clone(), other), "");
+            }
+        }
+    }
+}
+
+#[test]
+fn duplicate_picks_reject_the_entire_answer() {
+    for multi in [false, true] {
+        for picks in [vec![0, 0], vec![2, 0, 2]] {
+            for other in [None, Some("Kiwi".into())] {
+                assert_eq!(answer_keystrokes(question(multi), picks.clone(), other), "");
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_selection_types_nothing() {
+    for multi in [false, true] {
+        assert_eq!(answer_keystrokes(question(multi), vec![], None), "");
+    }
 }
 
 #[test]
@@ -122,6 +141,9 @@ fn invalid_later_answer_discards_all_keys() {
     for last in [
         answer(&[], None),
         answer(&[99], None),
+        answer(&[0, 3], None),
+        answer(&[0, -1], None),
+        answer(&[0, 0], None),
         answer(&[0, 1], None),
         answer(&[], Some("\n")),
     ] {
