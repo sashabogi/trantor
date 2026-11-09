@@ -441,7 +441,8 @@ async fn answer_claim_does_not_require_text() {
 }
 
 #[tokio::test]
-async fn answer_requires_matching_single_live_question_and_stale_types_nothing() {    let dir = scratch("answer");
+async fn answer_requires_matching_live_question_count_and_stale_types_nothing() {
+    let dir = scratch("answer");
     let prompt = json!({"session":"sid", "toolId":"ask-1", "picks":[1]});
     let question = json!({"question":"Ship?", "options":[{"label":"Yes"},{"label":"No"}]});
     let path = dir.join("sid.json");
@@ -869,4 +870,134 @@ async fn lost_claim_stops_a_blocking_worker_that_has_not_started_typing() {
     release.send(()).unwrap();
     assert!(!completion.await.unwrap(), "spawn_blocking survives future cancellation, so it must check the claim");
     assert_eq!(result["outcome"], "not_ready");
+}
+
+fn answer_sidecar(dir: &Path, questions: Value) {
+    std::fs::write(
+        dir.join("sid.json"),
+        json!({
+            "session_id":"sid", "project":"trantor", "cwd":"/tmp",
+            "tool_use_id":"ask-1", "questions":questions, "ts":0
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn three_phone_answers_are_typed_in_one_write() {
+    let dir = scratch("three-answers");
+    let multi = json!({"question":"Pick", "multiSelect":true,
+        "options":[{"label":"A"},{"label":"B"},{"label":"C"}]});
+    let mut single = multi.clone();
+    single["multiSelect"] = json!(false);
+    single["options"].as_array_mut().unwrap().truncate(2);
+    answer_sidecar(&dir, json!([multi, multi, single]));
+    let prompt = json!({"session":"sid", "toolId":"ask-1", "answers":[
+        {"picks":[0,2], "other":"Kiwi"}, {"picks":[1]}, {"other":"Oslo"}
+    ]});
+    let result = deliver_answer(&prompt, &dir, |session, keys| async move {
+        assert_eq!(session, "sid");
+        assert_eq!(
+            keys,
+            " \x1b[B\x1b[B \x1b[BKiwi\x1b[B\r\x1b[B \x1b[B\x1b[B\x1b[B\r\x1b[B\x1b[BOslo\r\r"
+        );
+        Ok(())
+    })
+    .await;
+    assert_eq!(result.outcome, "delivered");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn normalized_answers_win_over_legacy_fields_and_support_lone_multi_and_other() {
+    let dir = scratch("normalized-answer");
+    let question = json!({"question":"Pick", "multiSelect":true,
+        "options":[{"label":"A"},{"label":"B"}]});
+    answer_sidecar(&dir, json!([question]));
+    for answer in [json!({"picks":[0,1]}), json!({"other":"Kiwi fruit"})] {
+        let expected = if answer.get("other").is_some() {
+            "\x1b[B\x1b[BKiwi fruit\x1b[B\r\r"
+        } else {
+            " \x1b[B \x1b[B\x1b[B\r\r"
+        };
+        for normalized in [false, true] {
+            let mut prompt = json!({"session":"sid", "toolId":"ask-1"});
+            if normalized {
+                prompt["answers"] = json!([answer]);
+                prompt["picks"] = json!([99]);
+                prompt["other"] = json!("wrong legacy text");
+            } else {
+                prompt["picks"] = answer.get("picks").cloned().unwrap_or(json!([]));
+                prompt["other"] = answer["other"].clone();
+            }
+            let result = deliver_answer(&prompt, &dir, |_, keys| async move {
+                assert_eq!(keys, expected);
+                Ok(())
+            })
+            .await;
+            assert_eq!(result.outcome, "delivered");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn malformed_or_incomplete_answers_never_type_a_partial_sequence() {
+    let dir = scratch("invalid-answers");
+    let question = json!({"question":"Pick", "options":[{"label":"A"},{"label":"B"}]});
+    answer_sidecar(&dir, json!([question, question]));
+    for (answers, outcome) in [
+        (json!(null), "stale"),
+        (json!({"picks":[0]}), "stale"),
+        (json!([]), "stale"),
+        (json!([{"picks":[0]}]), "stale"),
+        (
+            json!([{"picks":[0]}, {"picks":[1]}, {"picks":[0]}]),
+            "stale",
+        ),
+        (json!([{"picks":[0]}, {"picks":"bad"}]), "stale"),
+        (json!([{"picks":[0]}, {"other":7}]), "stale"),
+        (json!([{"picks":[0]}, {}]), "not_ready"),
+        (json!([{"picks":[0]}, {"picks":[99]}]), "not_ready"),
+        (json!([{"picks":[0]}, {"other":"\r\n"}]), "not_ready"),
+        (json!([{"picks":[0]}, {"picks":[0,1]}]), "not_ready"),
+        (
+            json!([{"picks":[0]}, {"picks":[0], "other":"No"}]),
+            "not_ready",
+        ),
+    ] {
+        let prompt = json!({"session":"sid", "toolId":"ask-1", "answers":answers, "picks":[0]});
+        let result = deliver_answer(&prompt, &dir, |_, _| async {
+            panic!("invalid answer typed keys")
+        })
+        .await;
+        assert_eq!(result.outcome, outcome, "{prompt}");
+    }
+    for (session, tool_id) in [
+        ("sid", "old"),
+        ("sid", ""),
+        ("../sid", "ask-1"),
+        ("", "ask-1"),
+    ] {
+        let prompt =
+            json!({"session":session, "toolId":tool_id, "answers":[{"picks":[0]}, {"picks":[1]}]});
+        let result = deliver_answer(&prompt, &dir, |_, _| async {
+            panic!("stale answer typed keys")
+        })
+        .await;
+        assert_eq!(result.outcome, "stale");
+    }
+    answer_sidecar(&dir, json!(vec![question; 5]));
+    let prompt =
+        json!({"session":"sid", "toolId":"ask-1", "answers":vec![json!({"picks":[0]}); 5]});
+    assert_eq!(
+        deliver_answer(&prompt, &dir, |_, _| async {
+            panic!("over-limit answer typed keys")
+        })
+        .await
+        .outcome,
+        "stale"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -64,32 +64,50 @@ pub(crate) struct AskQuestion {
     options: Vec<AskOption>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct AskAnswer {
+    #[serde(default)]
+    picks: Vec<i64>,
+    #[serde(default)]
+    other: Option<String>,
+}
+
 #[tauri::command]
 pub(crate) fn answer_keystrokes(
     question: AskQuestion,
     picks: Vec<i64>,
     other: Option<String>,
 ) -> String {
+    answers_keystrokes(vec![question], vec![AskAnswer { picks, other }])
+}
+
+fn question_keystrokes(question: &AskQuestion, answer: AskAnswer) -> String {
     const DOWN: &str = "\x1b[B";
-    // a blank "other" is no free text: the hub sends "" with plain picks (#12136 drill)
-    let other = other.filter(|text| !text.trim().is_empty());
-    if let Some(text) = other {
-        return if text.trim().is_empty() {
-            String::new()
-        } else {
-            format!("{}\r{text}\r", DOWN.repeat(question.options.len()))
-        };
-    }
-    let valid: BTreeSet<usize> = picks
+    let other = answer
+        .other
+        .map(|text| {
+            text.chars()
+                .filter(|ch| !ch.is_control())
+                .collect::<String>()
+        })
+        .filter(|text| !text.trim().is_empty());
+    let valid: BTreeSet<usize> = answer
+        .picks
         .into_iter()
         .filter_map(|i| usize::try_from(i).ok())
         .filter(|i| *i < question.options.len())
         .collect();
-    let Some(first) = valid.first() else {
+    if valid.is_empty() && other.is_none() {
         return String::new();
-    };
+    }
     if !question.multi_select {
-        return format!("{}\r", DOWN.repeat(*first));
+        if valid.len() + usize::from(other.is_some()) != 1 {
+            return String::new();
+        }
+        return match other {
+            Some(text) => format!("{}{text}\r", DOWN.repeat(question.options.len())),
+            None => format!("{}\r", DOWN.repeat(*valid.first().unwrap())),
+        };
     }
     let mut keys = String::new();
     let mut at = 0;
@@ -98,7 +116,32 @@ pub(crate) fn answer_keystrokes(
         keys.push(' ');
         at = i;
     }
+    if let Some(text) = other {
+        keys.push_str(&DOWN.repeat(question.options.len() - at));
+        keys.push_str(&text);
+        at = question.options.len();
+    }
+    keys.push_str(&DOWN.repeat(question.options.len() + 1 - at));
     keys.push('\r');
+    keys
+}
+
+fn answers_keystrokes(questions: Vec<AskQuestion>, answers: Vec<AskAnswer>) -> String {
+    if questions.is_empty() || questions.len() != answers.len() {
+        return String::new();
+    }
+    let review = questions.len() > 1 || questions[0].multi_select;
+    let mut keys = String::new();
+    for (question, answer) in questions.iter().zip(answers) {
+        let next = question_keystrokes(question, answer);
+        if next.is_empty() {
+            return String::new();
+        }
+        keys.push_str(&next);
+    }
+    if review {
+        keys.push('\r');
+    }
     keys
 }
 
@@ -106,8 +149,7 @@ pub(crate) fn live_answer_keys(
     dir: &Path,
     session: &str,
     tool_id: &str,
-    picks: Vec<i64>,
-    other: Option<String>,
+    answers: Vec<AskAnswer>,
 ) -> Option<String> {
     if session.is_empty()
         || tool_id.is_empty()
@@ -123,14 +165,13 @@ pub(crate) fn live_answer_keys(
         Some(ask.project.clone())
     })
     .ok()?;
-    if ask.tool_use_id.as_deref() != Some(tool_id) || ask.questions.len() != 1 {
+    if ask.tool_use_id.as_deref() != Some(tool_id)
+        || ask.questions.len() != answers.len()
+        || answers.len() > 4
+    {
         return None;
     }
-    Some(answer_keystrokes(
-        ask.questions.into_iter().next()?,
-        picks,
-        other,
-    ))
+    Some(answers_keystrokes(ask.questions, answers))
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

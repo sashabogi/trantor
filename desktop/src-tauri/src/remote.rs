@@ -614,12 +614,15 @@ where
 {
     let session = prompt["session"].as_str().unwrap_or_default();
     let tool_id = prompt["toolId"].as_str().unwrap_or_default();
-    let picks = serde_json::from_value::<Vec<i64>>(prompt["picks"].clone());
-    let other = serde_json::from_value::<Option<String>>(prompt["other"].clone());
-    let keys = match (picks, other) {
-        (Ok(picks), Ok(other)) => asks::live_answer_keys(dir, session, tool_id, picks, other),
-        _ => None,
+    let answers = match prompt.get("answers") {
+        Some(answers) => serde_json::from_value::<Vec<asks::AskAnswer>>(answers.clone()),
+        None => {
+            serde_json::from_value::<asks::AskAnswer>(prompt.clone()).map(|answer| vec![answer])
+        }
     };
+    let keys = answers
+        .ok()
+        .and_then(|answers| asks::live_answer_keys(dir, session, tool_id, answers));
     let Some(keys) = keys else {
         return panes::PromptDelivery {
             outcome: "stale",
