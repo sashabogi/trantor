@@ -409,7 +409,14 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
         view.session = p.session; view.toolId = p.toolId;
         // #12912: the view always carries the normalized answers; the legacy top-level picks and
         // other ride along only for a one-entry answer so a desktop that predates it keeps working.
-        const answers = p.answers || [];
+        // A row persisted before answers[] shipped has picks/other but no answers — derive the one
+        // entry from them so new clients read old rows too.
+        let answers = Array.isArray(p.answers) && p.answers.length ? p.answers : null;
+        if (!answers) {
+          const entry = { picks: Array.isArray(p.picks) ? p.picks : [] };
+          if (String(p.other || "").trim()) entry.other = p.other;
+          answers = [entry];
+        }
         view.answers = answers;
         if (answers.length === 1) {
           view.picks = answers[0].picks;
