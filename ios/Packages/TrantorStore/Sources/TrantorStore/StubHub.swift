@@ -139,8 +139,13 @@ public final class StubHub: HubServing, @unchecked Sendable {
             return status
         }
     }
-    public func answer(project: String, session: String, toolId: String, picks: [Int], other: String?) async throws -> PromptStatus {
-        try await write("answer:\(project):\(session):\(toolId):\(picks):\(other ?? "")")
+    public func answer(project: String, session: String, toolId: String, answers: [QuestionAnswer]) async throws -> PromptStatus {
+        // One entry renders like the old single-question call ("[0, 1]:custom"), extra entries
+        // follow after "|", so single-question assertions stay exact.
+        let rendered = answers.map { answer in
+            "[\(answer.picks.map(String.init).joined(separator: ", "))]:\(answer.other ?? "")"
+        }.joined(separator: "|")
+        try await write("answer:\(project):\(session):\(toolId):\(rendered)")
         return locked {
             let id = String(nextPrompt); nextPrompt += 1
             let status = PromptStatus(id: id, status: "queued")
