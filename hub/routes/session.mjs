@@ -20,6 +20,7 @@ const CLAIMED_EXPIRED_REASON = "The Mac claimed this prompt but never delivered 
 const ACK_OUTCOMES = new Set(["delivered", "blocked", "not_ready", "stalled", "no_agent", "stale"]);
 const ANSWER_PICKS_MAX = 10;
 const ANSWER_OTHER_MAX = 2000;
+const ANSWER_ENTRIES_MAX = 4;    // CC's question limit per ask (#12912)
 // #12161: photo attachments ride POST /session/prompt as base64 JPEGs. The phone downscales to
 // the byte cap; the hub stores the bytes on disk next to its state (never in bus.json) and hands
 // metadata to the claiming desktop, which downloads them through GET /session/attachment.
@@ -243,14 +244,33 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       if (!project) return json(res, 400, { error: "project required" });
       if (!session) return json(res, 400, { error: "session required" });
       if (!toolId) return json(res, 400, { error: "toolId required" });
-      const picks = (Array.isArray(b.picks) ? b.picks : []).map(Number).filter(Number.isInteger).slice(0, ANSWER_PICKS_MAX);
-      const other = String(b.other || "").slice(0, ANSWER_OTHER_MAX);
-      if (!picks.length && !other.trim()) return json(res, 400, { error: "picks or other required" });
+      // #12912: a multi-question ask carries answers[] (1..4 entries, one per question in
+      // order); the old single-question { picks, other } body normalizes to one entry.
+      const normEntry = (e) => {
+        const picks = (Array.isArray(e?.picks) ? e.picks : []).map(Number).filter(Number.isInteger).slice(0, ANSWER_PICKS_MAX);
+        const other = String(e?.other || "").slice(0, ANSWER_OTHER_MAX);
+        if (!picks.length && !other.trim()) return null;
+        const entry = { picks };
+        if (other.trim()) entry.other = other;
+        return entry;
+      };
+      let answers;
+      if (Array.isArray(b.answers)) {
+        if (!b.answers.length || b.answers.length > ANSWER_ENTRIES_MAX) {
+          return json(res, 400, { error: `answers needs 1..${ANSWER_ENTRIES_MAX} entries` });
+        }
+        answers = b.answers.map(normEntry);
+        if (answers.some(a => !a)) return json(res, 400, { error: "each answer needs picks or a non-blank other" });
+      } else {
+        const entry = normEntry(b);
+        if (!entry) return json(res, 400, { error: "picks or other required" });
+        answers = [entry];
+      }
       expireQueued();
       if (queueFull()) return json(res, 429, { error: "prompt queue full; try again after pending work finishes" });
       state.sessionPromptSeq += 1;
-      const text = other.trim() ? other : `picks ${picks.join(", ")}`;
-      const p = { id: state.sessionPromptSeq, project, kind: "answer", session, toolId, picks, other,
+      const text = answers.map(a => a.other ? a.other : `picks ${a.picks.join(", ")}`).join("; ");
+      const p = { id: state.sessionPromptSeq, project, kind: "answer", session, toolId, answers,
         text, by: String(auth?.identity?.name || "").slice(0, 120), ts: now(), status: "queued" };
       state.sessionPrompts.push(p);
       trimPrompts();
@@ -379,15 +399,22 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     }
 
     // The public view of a queue row: plain prompts are kind "prompt"; answers carry their
-    // session, toolId, picks and other; crew commands carry action, seats, from and to —
+    // session, toolId and normalized answers (plus legacy picks/other for a one-entry answer); crew commands carry action, seats, from and to —
     // so the claiming desktop has everything it needs. Attachments ride as metadata only;
     // the bytes go to the claimer through GET /session/attachment.
     const promptView = (p) => {
       const view = { id: p.id, project: p.project, text: p.text, by: p.by, ts: p.ts, status: p.status, kind: p.kind || "prompt" };
       if (p.attachments?.length) view.attachments = p.attachments.map(({ name, size }) => ({ name, size }));
       if (p.kind === "answer") {
-        view.session = p.session; view.toolId = p.toolId; view.picks = p.picks;
-        if (p.other && p.other.trim()) view.other = p.other;   // absent, never "", when nothing was typed
+        view.session = p.session; view.toolId = p.toolId;
+        // #12912: the view always carries the normalized answers; the legacy top-level picks and
+        // other ride along only for a one-entry answer so a desktop that predates it keeps working.
+        const answers = p.answers || [];
+        view.answers = answers;
+        if (answers.length === 1) {
+          view.picks = answers[0].picks;
+          if (answers[0].other?.trim()) view.other = answers[0].other;   // absent, never "", when nothing was typed
+        }
       }
       if (p.kind === "crew") {
         view.action = p.action; view.seats = p.seats;
