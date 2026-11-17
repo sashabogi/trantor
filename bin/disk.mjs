@@ -7,15 +7,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir, platform, userInfo } from "node:os";
-import { runDisk, formatHuman, fmtBytes, launchdPlist, freedOnDiskBytes } from "../lib/disk.mjs";
+import { runDisk, formatHuman, launchdPlist, diskSummary } from "../lib/disk.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-
-function summaryLine(r, results) {
-  const okN = results.filter((x) => x.ok).length;
-  const failN = results.length - okN;
-  return `disk janitor: safe tier ${okN ? `cleaned ${okN} item(s)` : "nothing to clean"}${failN ? `, ${failN} FAILED` : ""} (~${fmtBytes(freedOnDiskBytes(r.plan))} freed), now ${fmtBytes(r.freeBytes)} free of ${fmtBytes(r.totalBytes)} — report: trantor disk`;
-}
 
 async function sendWeeklyMessage(text) {
   // One message, signed, into the operator's project lane — never a wall of warnings.
@@ -91,4 +85,4 @@ if (json) {
     for (const r of results.filter((r) => !r.ok)) console.log(`  FAILED ${r.type} ${r.path || r.id || ""}: ${r.error}`);
   }
 }
-if (periodic) await sendWeeklyMessage(summaryLine(report, results));
+if (periodic) await sendWeeklyMessage(diskSummary(report, results));

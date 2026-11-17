@@ -9,7 +9,7 @@ import { join } from "node:path";
 import {
   assertUnderHome, buildDiskReport, runClean, runDisk, formatHuman,
   launchdPlist, fmtBytes, dirSize, gitTracked, DAY, freedOnDiskBytes,
-  SCRATCH_DIRS, SCRATCH_IDLE_MAX,
+  SCRATCH_DIRS, SCRATCH_IDLE_MAX, diskSummary,
 } from "../../lib/disk.mjs";
 
 let pass = 0, fail = 0;
@@ -85,7 +85,7 @@ try {
   const stamp = join(HOME, ".agent-bus", "turnstamp-stamp-seat-proj.json");
   writeFileSync(stamp, "{}");
   utimesSync(stamp, new Date(NOW), new Date(NOW));
-  const DEAD_BYTES = 1024 + 2048 + 1024 + 1024 + 512 + 256 + 128; // every planned on-disk item
+  const DEAD_BYTES = 4 * 1024 + 2048 + 513 + 256 + 128 + 1; // #12268: 5 build dirs, 3 drill dirs, 1 scratch file
 
   // ---- HF cache fixture: shared-blob layout, the real weights at the end of
   // snapshot symlinks; a per-model blob, a second rev re-linking the same blob, a
@@ -120,6 +120,7 @@ try {
   const exec = (file, args) => {
     calls.push([file, ...args]);
     const a = args.join(" ");
+    if (file === "lsof") return { stdout: "n/\n", status: 0 };
     if (file === "ps") return { stdout: `100 1 node /fixture/crew-runner.mjs live-seat ${live}\n101 100 /portless serve ${live}\n`, status: 0 };
     if (file === "opencode" && a.includes("list")) return { stdout: opencodeJson, status: 0 };
     if (file === "xcrun") return { stdout: "-- iOS 17.2 --\n    iPhone (AAA) (Shutdown)\n-- Unavailable: iOS 15.4 --\n    iPhone (BBB) (Shutdown)\n    iPad (CCC) (Shutdown)\n", status: 0 };
@@ -132,7 +133,7 @@ try {
 
   // ---- report mode: the plan is built, nothing is deleted ----
   const report = buildDiskReport(d);
-  const planPaths = report.plan.filter((p) => p.type === "build-dir").map((p) => p.path);
+  const planPaths = report.plan.filter((p) => p.type === "build-dir" || p.type === "build-junk").map((p) => p.path);
   const scratchPaths = report.plan.filter((p) => p.type === "scratch-entry").map((p) => p.path);
   const planSessions = report.plan.filter((p) => p.type === "opencode-session").map((p) => p.id);
   ok("dead seat's .next is planned for deletion", planPaths.includes(join(dead, ".next")), JSON.stringify(planPaths));
@@ -142,25 +143,24 @@ try {
     planPaths.includes(join(stamped, ".next")), JSON.stringify(planPaths));
   ok("git-tracked target is never planned", !planPaths.some((p) => p === join(tracked, "target")));
   ok("only the idle >14d session is planned", JSON.stringify(planSessions) === JSON.stringify(["ses_old"]), JSON.stringify(planSessions));
-  ok("the dead seat's OLD scratch entry is planned", scratchPaths.includes(join(dead, ".agent-bus-out", "old-entry")), JSON.stringify(scratchPaths));
+  ok("#12268: the dead seat's whole drill dir is planned, fresh entries included",
+    report.plan.some((p) => p.type === "drill-output" && p.path === join(dead, ".agent-bus-out")) && !scratchPaths.some((p) => p.includes(".agent-bus-out")),
+    JSON.stringify(report.plan.map((p) => p.type)));
   ok("the dead seat's OLD scratch FILE is planned", scratchPaths.includes(join(dead, ".scratch", "old-note.txt")), JSON.stringify(scratchPaths));
-  ok("the FRESH scratch entry is never planned", !scratchPaths.includes(join(dead, ".agent-bus-out", "fresh-entry")));
   ok("the recent scratch file is never planned", !scratchPaths.includes(join(dead, ".scratch", "recent.txt")));
   ok("the LIVE seat's old scratch entry is never planned — liveness outranks age",
     !scratchPaths.some((p) => p.startsWith(live)), JSON.stringify(scratchPaths));
-  ok("the scratch dirs themselves are never planned, only entries inside",
-    !scratchPaths.some((p) => p.endsWith(".agent-bus-out") || p === join(dead, ".scratch")));
+  ok("the .scratch dir itself is never planned, only entries inside", !scratchPaths.includes(join(dead, ".scratch")));
   ok("session inside a live seat worktree is KEPT with a reason", report.kept.some((k) => k.path === live && /ses_livewt/.test(k.reason)));
   ok("live seat .next listed as KEPT", report.kept.some((k) => k.path === join(live, ".next")));
-  ok("a crew state row alone keeps a seat's scratch without a process",
-    !report.plan.some((p) => String(p.path || "").startsWith(stampLive))
-    && report.kept.some((k) => k.path === join(stampLive, ".agent-bus-out", "old-but-fresh-stamp") && /crew state row/.test(k.reason)),
-    JSON.stringify(report.kept.filter((k) => k.path.startsWith(stampLive))));
+  ok("#12268: a crew state row alone no longer protects a seat's build or drill output",
+    report.plan.some((p) => p.path === join(stampLive, ".next")) && report.plan.some((p) => p.path === join(stampLive, ".agent-bus-out")),
+    JSON.stringify(report.plan.filter((p) => String(p.path || "").startsWith(stampLive))));
   ok("live seat's old scratch is KEPT (ps liveness)",
     report.kept.some((k) => k.path === join(live, ".agent-bus-out", "old-but-live") && /live crew processes/.test(k.reason)));
   ok("tracked target listed as KEPT", report.kept.some((k) => k.path === join(tracked, "target") && /git-tracked/.test(k.reason)));
   ok("fresh scratch listed as KEPT with its age reason",
-    report.kept.some((k) => k.path === join(dead, ".agent-bus-out", "fresh-entry") && /touched within/.test(k.reason)));
+    report.kept.some((k) => k.path === join(dead, ".scratch", "recent.txt") && /touched within/.test(k.reason)));
   ok("unavailable simulators counted from simctl output", report.simulators.unavailable === 2 && report.simulators.available);
   ok("simulators are one plan entry", report.plan.filter((p) => p.type === "simulators").length === 1);
   ok("HF model sizes resolve snapshot symlinks to the blobs, deduped",
@@ -179,7 +179,7 @@ try {
   const human = formatHuman(report);
   ok("drill: free space, category sizes and the exact deletion list print", human.includes("free of") && human.includes("safe tier would delete") && human.includes("dead-seat"));
   ok("drill: scratch DELETE lines carry their bytes",
-    human.includes(`DELETE 512 B ${join(dead, ".agent-bus-out", "old-entry")}`)
+    human.includes(`DELETE 513 B ${join(dead, ".agent-bus-out")}`)
     && human.includes(`DELETE 256 B ${join(dead, ".scratch", "old-note.txt")}`),
     human.split("\n").filter((l) => l.includes("DELETE")).join(" | "));
   ok("drill: KEPT lines carry their reasons", /KEPT: .*live crew processes/.test(human) && /KEPT: .*git-tracked/.test(human));
@@ -196,16 +196,16 @@ try {
     && !existsSync(join(tracked, ".next"))
     && existsSync(join(live, ".next")) && existsSync(join(tracked, "target")));
   ok("clean removed only the OLD scratch entries",
-    !existsSync(join(dead, ".agent-bus-out", "old-entry")) && !existsSync(join(dead, ".scratch", "old-note.txt"))
-    && !existsSync(join(stamped, ".agent-bus-out", "stale-stamp-scratch"))
-    && existsSync(join(dead, ".agent-bus-out", "fresh-entry")) && existsSync(join(dead, ".scratch", "recent.txt"))
+    !existsSync(join(dead, ".agent-bus-out")) && !existsSync(join(dead, ".scratch", "old-note.txt"))
+    && !existsSync(join(stamped, ".agent-bus-out"))
+    && existsSync(join(dead, ".scratch", "recent.txt"))
     && existsSync(join(live, ".agent-bus-out", "old-but-live"))
-    && existsSync(join(stampLive, ".agent-bus-out", "old-but-fresh-stamp")) && existsSync(join(stampLive, ".next")));
-  ok("every removal path was asserted under the temp HOME", removed.length === before + 7 && removed.every((p) => p.startsWith(HOME)));
+    && !existsSync(join(stampLive, ".agent-bus-out")) && !existsSync(join(stampLive, ".next")));
+  ok("every removal path was asserted under the temp HOME", removed.length === before + 9 && removed.every((p) => p.startsWith(HOME)));
   ok("simulators deleted via the official CLI", calls.some((c) => c.join(" ") === "xcrun simctl delete unavailable"));
   ok("session deleted via the official CLI", calls.some((c) => c.join(" ") === "opencode session delete ses_old"));
   ok("fresh session untouched", !calls.some((c) => c.join(" ").includes("ses_fresh")));
-  ok("results report per-item success", results.length === 9 && results.every((r) => r.ok), JSON.stringify(results));
+  ok("results report per-item success", results.length === 11 && results.every((r) => r.ok), JSON.stringify(results));
 
   // ---- the under-$HOME gate refuses escapes ----
   let refused = false;
@@ -215,11 +215,22 @@ try {
 
   // ---- runDisk end-to-end in report mode (args gate the clean) ----
   const run = await runDisk({ ...d, args: [] });
-  ok("runDisk without --clean never cleans", run.results.length === 0 && removed.length === before + 7);
+  ok("runDisk without --clean never cleans", run.results.length === 0 && removed.length === before + 9);
 
   // ---- launchd plist is daily at 09:00 ----
   const plist = launchdPlist({ nodePath: "/usr/local/bin/node", scriptPath: "/x/bin/disk.mjs", logPath: "/x/log" });
   ok("plist fires daily at 09:00 with --daily", !plist.includes("<key>Weekday</key>") && plist.includes("<key>Hour</key><integer>9</integer>") && plist.includes("--daily"));
+
+  // ---- #12268 low-space guard message ----
+  const GBn = 1024 ** 3;
+  const res = [{ type: "build-junk", ok: true, bytes: 3 * GBn }, { type: "drill-output", ok: true, bytes: 2 * GBn }, { type: "build-junk", ok: false, bytes: 9 * GBn }];
+  const roomy = diskSummary({ freeBytes: 200 * GBn, totalBytes: 500 * GBn }, res).split("\n");
+  ok("plenty of space: one line, freed bytes come from removals only", roomy.length === 1 && roomy[0].includes("freed 5.0 GB") && roomy[0].includes("1 FAILED"), roomy.join("|"));
+  const low = diskSummary({ freeBytes: 30 * GBn, totalBytes: 500 * GBn }, res).split("\n");
+  ok("under 50 GB: a guard line says the full prune ran, no alarm", low.length === 2 && /^low-space guard: under 50\.0 GB/.test(low[0]) && !low.join("").includes("ALARM"), low.join("|"));
+  const alarm = diskSummary({ freeBytes: 3.1 * GBn, totalBytes: 500 * GBn }, res).split("\n");
+  ok("under 15 GB: the message STARTS with the alarm line, guard line next", alarm.length === 3 && alarm[0].startsWith("ALARM: disk almost full, only 3.1 GB free") && alarm[1].startsWith("low-space guard"), alarm.join("|"));
+  ok("an unmeasurable disk raises no false alarm", !diskSummary({ freeBytes: 0, totalBytes: 0 }, []).includes("ALARM"));
 
   // ---- guards: dirSize ignores symlinked dirs, gitTracked reads git ----
   const symW = mkdtempSync(join(tmpdir(), "trantor-disk-sym-"));

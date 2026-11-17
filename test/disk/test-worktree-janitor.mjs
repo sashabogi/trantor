@@ -3,7 +3,7 @@
 // simctl, opencode, docker, git deletion, and nothing outside the temp dir is touched.
 import * as nodeFs from "node:fs";
 import {
-  mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, readdirSync,
+  mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, readdirSync, existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,11 +43,12 @@ function ageTree(root, t) {
 
 // Canned exec: answers by command shape. `dirty` maps worktree path -> porcelain output;
 // `tracked` maps rel path -> ls-files output; `psLines` is the ps snapshot.
-function makeExec({ dirty = {}, tracked = {}, psLines = [] } = {}) {
+function makeExec({ dirty = {}, tracked = {}, psLines = [], cwdDirs = [] } = {}) {
   const calls = [];
   const exec = (file, args) => {
     calls.push([file, args]);
     const a = args.join(" ");
+    if (file === "lsof") return { stdout: ["n/", ...cwdDirs.map((c) => `n${c}`)].join("\n"), status: 0 };
     if (file === "ps") return { stdout: psLines.join("\n"), status: 0 };
     if (file === "git" && a.includes("status --porcelain")) {
       const cwd = args[args.indexOf("-C") + 1];
@@ -123,8 +124,8 @@ try {
   ok("an old clean seat without a crew row or process is planned", stale2.plan.some(p => p.path === stamped));
   writeFileSync(statePath, "proj\therdr\tstamped\tp1\nother\therdr\tidle-clean\tp2\n");
   const stale3 = scan();
-  ok("a crew row alone keeps an old seat", !stale3.plan.some(p => p.path === stamped)
-    && stale3.kept.some(k => k.path === stamped && k.reason.includes("crew state row")));
+  ok("#12268: a crew row alone no longer keeps an old clean seat", stale3.plan.some(p => p.path === stamped)
+    && !stale3.kept.some(k => k.path === stamped));
   ok("the same persona in another project does not hold this seat", stale3.plan.some(p => p.path === idle));
   const stampPath = join(HOME, ".agent-bus", "turnstamp-idle-clean-proj.json");
   writeFileSync(stampPath, "{}");
@@ -159,11 +160,12 @@ try {
   console.log("\nbuildDiskReport carries the new plan types and keeps:");
   const report = buildDiskReport({ exec, home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000 });
   ok("report plan includes the seat-worktree item", report.plan.some((p) => p.type === "seat-worktree" && p.path === idle));
-  ok("report plan includes the build-output items", report.plan.filter((p) => p.type === "build-output").length === 2);
+  ok("the pruned worktree's nested output is not planned a second time",
+    !report.plan.some((p) => p.path !== idle && p.path.startsWith(idle)), JSON.stringify(report.plan.map((p) => p.path)));
   ok("report kept names the dirty worktree", report.kept.some((k) => k.path === dirty && k.reason.includes("uncommitted changes")));
   const human = formatHuman(report);
   ok("the human report prints the dirty worktree by name", human.includes(dirty) && human.includes("uncommitted changes"));
-  const onDisk = report.plan.filter((p) => ["build-dir", "scratch-entry", "seat-worktree", "build-output"].includes(p.type));
+  const onDisk = report.plan.filter((p) => ["build-dir", "scratch-entry", "seat-worktree", "build-output", "build-junk", "drill-output"].includes(p.type));
   ok("freedOnDiskBytes counts every on-disk plan item",
     freedOnDiskBytes(report.plan) === onDisk.reduce((n, p) => n + (p.bytes || 0), 0),
     String(freedOnDiskBytes(report.plan)));
@@ -208,13 +210,12 @@ try {
     { type: "scratch-entry", path: join(idle, ".agent-bus-out", "build") },
     { type: "build-output", path: dd },
   ];
-  writeFileSync(statePath, "proj\therdr\tidle-clean\tnew-pane\n");
-  const rowRace = await runClean({ plan: racePlan }, {
-    exec: cleanExec, home: HOME, now: NOW, log: () => {},
-    remove: () => { throw new Error("must not remove a registered seat"); },
+  const cwdRace = await runClean({ plan: racePlan }, {
+    exec: cleanExec, home: HOME, now: NOW, log: () => {}, cwds: () => [join(idle, "src")],
+    remove: () => { throw new Error("must not remove a worktree a process stands in"); },
   });
-  ok("a newly registered seat keeps its worktree and all output", rowRace.length === 4
-    && rowRace.every(r => !r.ok && r.error.includes("crew state row")));
+  ok("a process that moved into the seat keeps its worktree and all output", cwdRace.length === 4
+    && cwdRace.every(r => !r.ok && r.error.includes("live process")));
   writeFileSync(statePath, "");
   const processRace = await runClean({ plan: racePlan }, {
     exec: promoted, home: HOME, now: NOW, log: () => {},
@@ -231,6 +232,57 @@ try {
   ok("dry run cleans nothing", dry.results.length === 0 && dry.clean === false);
   const wet = await runDisk({ args: ["--clean"], exec, home: HOME, now: NOW, worktreesRoot: ROOT, remove: noRemove, log: () => {} });
   ok("without --dry-run the clean runs (results recorded)", wet.clean === true && wet.results.length > 0);
+
+  // ---- #12268: dead-seat output pruning, live protection, dry-run ----
+  console.log("\n#12268 dead worktrees lose build and drill output; live ones are untouched:");
+  const P = "p12268";
+  const rowSeat = wt(P, "row-clean");   // dead, crew row, clean, old → whole worktree goes
+  const dirtySeat = wt(P, "dirty-dead"); // dead, uncommitted → kept, output pruned
+  const liveSeat = wt(P, "live-cwd");    // a process cwd inside → untouched
+  for (const w of [rowSeat, dirtySeat, liveSeat]) {
+    mkdirSync(join(w, "src", "build"), { recursive: true });
+    writeFileSync(join(w, "src", "build", "hand.js"), "source");
+    writeFileSync(join(w, "src", "a.js"), "source");
+    for (const junk of ["node_modules/pkg", "target/debug", ".next/cache", ".agent-bus-out/run-derived/Build", "app/dist"]) {
+      mkdirSync(join(w, ...junk.split("/")), { recursive: true });
+      writeFileSync(join(w, ...junk.split("/"), "blob.bin"), "j".repeat(1000));
+    }
+    mkdirSync(join(w, "flutter", "bin", "build"), { recursive: true });
+    ageTree(w, OLD7);
+  }
+  writeFileSync(statePath, `${P}\therdr\trow-clean\tp1\n${P}\therdr\tdirty-dead\tp2\n`);
+  const fx = makeExec({ dirty: { [dirtySeat]: " M src/a.js" }, cwdDirs: [join(liveSeat, "src")] });
+  const dep = { exec: fx.exec, home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000, log: () => {} };
+  const rep1 = buildDiskReport(dep);
+  const rowItems = rep1.plan.filter((p) => String(p.path).startsWith(rowSeat));
+  ok("a dead seat WITH a crew row is planned for whole-worktree removal",
+    rowItems.length === 1 && rowItems[0].type === "seat-worktree", JSON.stringify(rowItems.map((p) => p.type)));
+  const dirtyTypes = rep1.plan.filter((p) => String(p.path).startsWith(dirtySeat)).map((p) => `${p.type}:${p.path.slice(dirtySeat.length + 1)}`).sort();
+  ok("a dirty dead seat keeps its worktree but plans node_modules, target, .next, dist and .agent-bus-out",
+    JSON.stringify(dirtyTypes) === JSON.stringify([
+      "build-junk:.next", "build-junk:app/dist", "build-junk:node_modules", "build-junk:target", "drill-output:.agent-bus-out",
+    ]), JSON.stringify(dirtyTypes));
+  ok("src/build and flutter/**/build are never planned",
+    !rep1.plan.some((p) => p.path.includes(join("src", "build")) || p.path.includes(join("flutter", "bin"))));
+  ok("a worktree with a process cwd inside is never planned", !rep1.plan.some((p) => String(p.path).startsWith(liveSeat)));
+  const dryRun = await runDisk({ args: ["--daily", "--dry-run"], ...dep, remove: () => { throw new Error("dry-run must not remove"); } });
+  const dryText = formatHuman(dryRun.report);
+  ok("--dry-run removes nothing and prints each path it would remove",
+    dryRun.results.length === 0 && existsSync(join(dirtySeat, "node_modules")) && existsSync(join(dirtySeat, ".agent-bus-out"))
+    && dryText.includes(`DELETE 1000 B ${join(dirtySeat, "node_modules")}`) && dryText.includes(join(dirtySeat, ".agent-bus-out")));
+  console.log(dryText.split("\n").filter((l) => l.includes(P)).map((l) => l.replace(HOME, "~")).join("\n"));
+  const real = await runDisk({ args: ["--clean"], ...dep });
+  const gone = ["node_modules", "target", ".next", ".agent-bus-out", join("app", "dist")].every((n) => !existsSync(join(dirtySeat, n)));
+  ok("clean prunes the dirty seat's output but keeps its worktree and source",
+    gone && existsSync(join(dirtySeat, "src", "a.js")) && existsSync(join(dirtySeat, "src", "build", "hand.js")));
+  ok("clean never touches the live worktree",
+    existsSync(join(liveSeat, "node_modules")) && existsSync(join(liveSeat, ".agent-bus-out")) && existsSync(join(liveSeat, "target")));
+  ok("clean asks git to remove the crew-row seat's clean worktree",
+    fx.calls.some(([f, a]) => f === "git" && a.join(" ").includes(`worktree remove ${rowSeat}`)) && real.results.every((r) => r.ok));
+  const outside = join(HOME, "project-checkout");
+  mkdirSync(join(outside, ".agent-bus-out"), { recursive: true });
+  const outsideRes = await runClean({ plan: [{ type: "drill-output", path: join(outside, ".agent-bus-out") }] }, { ...dep, remove: () => { throw new Error("no"); } });
+  ok("a drill dir outside the worktrees root is refused", !outsideRes[0].ok && existsSync(join(outside, ".agent-bus-out")));
 
   // ---- launchd plist is daily ----
   console.log("\nlaunchdPlist schedules daily and passes --daily:");
