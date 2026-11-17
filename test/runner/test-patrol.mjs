@@ -45,6 +45,13 @@ ok("dead tracking row is an orphan", report.orphans.some(o => o.type === "dead-t
 ok("legacy rows and unparseable runners are ambiguous", report.ambiguous.some(a => a.type === "legacy-tracking-row") && report.ambiguous.some(a => a.type === "runner-without-project"));
 ok("a live provider seat on another provider's model raises a warning", report.warnings.some(w => w.type === "seat-model-provider-mismatch" && w.agent === "qwen" && w.expectedProvider === "qwen"));
 ok("a provider seat on its own provider does not warn", !report.warnings.some(w => w.agent === "deepseek"));
+// #13474: a subscription-labelled seat (also with a -N suffix) running metered deepseek warns.
+const meter = buildPatrolReport({ runners: [
+  { pid: 601, agent: "kimi-13", dir: "/work/alpha", model: "deepseek/deepseek-v4-flash" },
+  { pid: 602, agent: "codex", dir: "/work/alpha", model: "deepseek/deepseek-v4-pro" },
+  { pid: 603, agent: "codex", dir: "/work/alpha", model: "cli-default" },
+] });
+ok("a codex or kimi label on metered deepseek warns (#13474)", meter.warnings.filter(w => w.type === "seat-model-provider-mismatch").map(w => w.pid).join() === "601,602");
 ok("json shape is stable", report.projects.alpha.counts.rows === 2 && Array.isArray(report.orphans) && Array.isArray(report.ambiguous) && Array.isArray(report.reaped));
 
 const internalBus = join(tmpdir(), "trantor-patrol-bus", ".agent-bus");

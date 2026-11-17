@@ -19,6 +19,7 @@ import { readTurnStateFile, refreshTurnLiveness, writeTurnState, writeTurnStateF
 import { withEnvFiles } from "../../lib/project.mjs";
 import { seatSignalPrefix } from "../../lib/seat-signal-guard.mjs";
 import { shadowEnv, withSecretExports } from "../../lib/secrets.mjs";
+import { afterTurn } from "../../lib/burn-guard.mjs";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const source = fs.readFileSync(join(ROOT, "bin/crew-runner.mjs"), "utf8");
@@ -68,6 +69,8 @@ async function drill(t, { maxMs, cliBody }) {
     TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
     cutChain: [],
+    // #13474: runTurn feeds the burn counters and saves WIP at a cut; neither is under test here.
+    cardTokens: 0, cardCommits: 0, afterTurn, saveWipLogged: record,
     // #11855: the card context cap is off here; this drill measures turn state, not the cap.
     CAPCFG: { cap: 0 }, capFreshTurn: 0,
     DRIVER: "kimi", effortForTurn: () => ({ flag: "", text: "", changed: false }),
