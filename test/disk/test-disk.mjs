@@ -129,7 +129,8 @@ try {
   };
   const removed = [];
   const remove = (p, opts) => { removed.push(p); rmSync(p, opts); };
-  const d = { exec, remove, home: HOME, now: NOW };
+  // cwds injected: no test reads the machine's process cwds (the runner's TMPDIR itself lives under .agent-bus-out)
+  const d = { exec, remove, home: HOME, now: NOW, cwds: () => ["/"] };
 
   // ---- report mode: the plan is built, nothing is deleted ----
   const report = buildDiskReport(d);
@@ -144,7 +145,7 @@ try {
   ok("git-tracked target is never planned", !planPaths.some((p) => p === join(tracked, "target")));
   ok("only the idle >14d session is planned", JSON.stringify(planSessions) === JSON.stringify(["ses_old"]), JSON.stringify(planSessions));
   ok("#12268: the dead seat's whole drill dir is planned, fresh entries included",
-    report.plan.some((p) => p.type === "drill-output" && p.path === join(dead, ".agent-bus-out")) && !scratchPaths.some((p) => p.includes(".agent-bus-out")),
+    report.plan.some((p) => p.type === "drill-output" && p.path === join(dead, ".agent-bus-out")) && !scratchPaths.some((p) => p.startsWith(join(dead, ".agent-bus-out"))),
     JSON.stringify(report.plan.map((p) => p.type)));
   ok("the dead seat's OLD scratch FILE is planned", scratchPaths.includes(join(dead, ".scratch", "old-note.txt")), JSON.stringify(scratchPaths));
   ok("the recent scratch file is never planned", !scratchPaths.includes(join(dead, ".scratch", "recent.txt")));

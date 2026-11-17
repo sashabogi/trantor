@@ -252,7 +252,7 @@ try {
   }
   writeFileSync(statePath, `${P}\therdr\trow-clean\tp1\n${P}\therdr\tdirty-dead\tp2\n`);
   const fx = makeExec({ dirty: { [dirtySeat]: " M src/a.js" }, cwdDirs: [join(liveSeat, "src")] });
-  const dep = { exec: fx.exec, home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000, log: () => {} };
+  const dep = { exec: fx.exec, cwds: () => [join(liveSeat, "src")], home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000, log: () => {} };
   const rep1 = buildDiskReport(dep);
   const rowItems = rep1.plan.filter((p) => String(p.path).startsWith(rowSeat));
   ok("a dead seat WITH a crew row is planned for whole-worktree removal",
