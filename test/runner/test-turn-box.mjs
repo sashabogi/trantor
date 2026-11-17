@@ -14,6 +14,7 @@ import { writeTurnState } from "../../lib/turnstate.mjs";
 import { withEnvFiles } from "../../lib/project.mjs";
 import { seatSignalPrefix } from "../../lib/seat-signal-guard.mjs";
 import { shadowEnv, withSecretExports } from "../../lib/secrets.mjs";
+import { afterTurn } from "../../lib/burn-guard.mjs";
 import { snapshotBeforeCut } from "../../bin/cut-snapshot.mjs";
 import { newContainers, recordContainers } from "../../lib/docker-janitor.mjs";
 
@@ -93,6 +94,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     sessionCard: 0,
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
     cutChain: [],
+    // #13474: runTurn feeds the burn counters and saves WIP at a cut; neither is under test here.
+    cardTokens: 0, cardCommits: 0, afterTurn, saveWipLogged: record,
     // #11855: the card context cap is off here; these drills measure the box, not the cap.
     CAPCFG: { cap: 0 }, capFreshTurn: 0,
     DRIVER: "kimi", effortForTurn: () => ({ flag: "", text: "", changed: false }),

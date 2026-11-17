@@ -4,6 +4,7 @@ import { readdirSync, rmSync, statSync } from "node:fs";
 import { join, basename, dirname, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { providerMismatch } from "../lib/seat-provider.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const DAY = 24 * 60 * 60 * 1000;
@@ -41,11 +42,6 @@ function rowMatchesRunner(row, runner) {
   if (String(row?.agent || "") !== String(runner?.agent || "")) return false;
   const rp = rowProject(row);
   return !rp || rp === runnerProject(runner);
-}
-
-function seatProvider(agent) {
-  if (["codex", "kimi", "claude", "gemini", "dsh", "opencode"].includes(agent)) return null;
-  return agent === "glm" ? "zai-coding-plan" : agent;
 }
 
 function sortedProjects(projects) {
@@ -91,15 +87,15 @@ export function buildPatrolReport(rawInventory = {}, reaped = [], { bus = busDir
     } else if (!rows.some(row => rowMatchesRunner(row, runner))) {
       orphans.push({ type: "live-runner-without-row", project: p, agent: runner.agent, pid: runner.pid, dir: runner.dir });
     }
-    const expectedProvider = seatProvider(String(runner?.agent || ""));
-    const actualProvider = String(runner?.model || "").split("/")[0];
-    if (expectedProvider && actualProvider && actualProvider !== expectedProvider) {
+    // #13474: the same rule the runner refuses a turn on.
+    const mm = providerMismatch(String(runner?.agent || ""), runner?.model);
+    if (mm) {
       warnings.push({
         type: "seat-model-provider-mismatch",
         project: p,
         agent: runner.agent,
         model: runner.model,
-        expectedProvider,
+        expectedProvider: mm.expected,
         pid: runner.pid,
       });
     }

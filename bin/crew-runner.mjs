@@ -32,6 +32,10 @@ import { ocTurnUsage, dshTurnUsage, usageTotal, processedInput, codexStepInput, 
 import { capConfig, capDecision, capHandoffPrompt, capPointerLine, capExhaustedNote } from "../lib/context-cap.mjs";
 import { ocCompactionContent, ocCompactionLogLine, readOpencodeUserConfig, seatMcpOverlay, seatConfigContent } from "../lib/seat-compaction.mjs";
 import { seatSignalPrefix } from "../lib/seat-signal-guard.mjs";
+import { providerMismatch } from "../lib/seat-provider.mjs";
+import { burnCeiling, afterTurn, burnVerdict } from "../lib/burn-guard.mjs";
+import { saveWip } from "../lib/wip-save.mjs";
+import { stallCause } from "../lib/stall-cause.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
@@ -492,7 +496,16 @@ let parkAnnounced = false;
 // #7914: the park this seat is currently sitting in, or null. Read by the poll loop, which ends a
 // bounded one the moment somebody sends a direct message, and cleared by any turn that lands.
 let parkState = null;
+// #13474: uncommitted work in the seat worktree is saved on the seat branch when a turn is cut or
+// the seat parks, so the next seat starts from it. One log line, only when something was saved.
+function saveWipLogged(why) {
+  const sha = sessionCard > 0 ? saveWip(TURN_DIR, sessionCard) : "";
+  if (sha) log(`\x1b[33msaved uncommitted work as ${sha.slice(0, 8)} on the seat branch (${why})\x1b[0m`);
+  return sha;
+}
+
 async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = {}) {
+  saveWipLogged(`parked: ${reason}`);
   // A seat that went QUIET printed no wall message to parse (#6131), so its own balance row is the
   // only place the reset time exists. Output first when there is any: it is this turn's evidence.
   const resetAt = parseResetAt(lastErrText) || resetHint;
@@ -764,9 +777,10 @@ let sessionCard = releaseState?.sessionCard || 0;
 // provider's session DB when the CLI prints none). A card that crosses its budget pauses — no
 // further turn is bought for THAT card — until the card changes or the seat restarts, both of
 // which reset the counter. The budget itself is an env knob, not a constant in the wall.
-const CARD_TOKEN_BUDGET = Math.max(0, Number(process.env.TRANTOR_CARD_TOKEN_BUDGET || 1_000_000));
+const CARD_TOKEN_BUDGET = burnCeiling();   // #13474: the ceiling counts tokens since the last commit
 const BUDGET_RETRY_MS = 10 * 60 * 1000;   // a paused card's OWN redelivery pace, never other cards'
 let cardTokens = releaseState?.cardTokens || 0;
+let cardCommits = releaseState?.cardCommits || 0;   // #13474: commits made on the current contract
 let cardStartedAt = releaseState?.cardStartedAt || 0;
 let budgetStop = releaseState?.budgetStop || null;   // { card, tokens } once the card crossed
 let budgetRetryAt = releaseState?.budgetRetryAt || 0;   // paces the paused card's OWN redeliveries
@@ -1045,6 +1059,7 @@ exit $turn_exit`;
   }
   lastTurnCut = cut;
   lastTurnStalled = cut && stallCut;
+  if (cut) saveWipLogged("turn cut");
   // #7749: the cut boundary lands on disk and on the peer row BEFORE the follow-up turn overwrites
   // it — a reader sampling mid-chain sees what actually just happened, not a stale "working".
   if (cut) {
@@ -1143,7 +1158,8 @@ exit $turn_exit`;
   if (usage) tokens = usageTotal(usage);
   // #11559: every token this turn spent rides the card it served. A card-0 turn (kickoff, pulse,
   // duty) belongs to no card and adds nothing; the counter resets when the served card changes.
-  if (sessionCard > 0 && Number.isFinite(tokens) && tokens > 0) cardTokens += tokens;
+  // #13474: a commit is progress and zeroes the count (burn guard).
+  if (sessionCard > 0) ({ tokens: cardTokens, commits: cardCommits } = afterTurn({ tokens: cardTokens, commits: cardCommits }, { spent: Number.isFinite(tokens) ? tokens : 0, committed: newCommit }));
   // #9724: usage RESOLVED to all zeros means no model work happened — never success; null stays
   // unknown, never failure, and a shipped commit is real work (stale record, not the turn).
   const zeroUsage = realExit === 0 && effExit === 0 && !newCommit && usageSaysNoWork(usage);
@@ -1556,7 +1572,7 @@ async function resolveWakeCard(messages, { session }) {
         wake: pendingWake, bcast: pendingBcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
       const state = { cursor, turn: TURN, sid, sessionCard, retryAt, deliveryFails,
         noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions],
-        cardTokens, cardStartedAt, budgetStop, budgetRetryAt,
+        cardTokens, cardCommits, cardStartedAt, budgetStop, budgetRetryAt,
         capHandoffs, capLogged, capArmed, capFreshTurn };
       process.execve(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
         { ...process.env, CREW_RELEASE_STATE: JSON.stringify(state) });
@@ -1799,7 +1815,7 @@ async function resolveWakeCard(messages, { session }) {
       const bp = budgetPause({ paused: budgetStop, status, messages: wakeForTurn, session: SESSION });
       if (bp.action === "lift") {
         log(`#${budgetStop.card} is ${status} — token-budget pause lifted`);
-        budgetStop = null; budgetRetryAt = 0; cardTokens = 0;
+        budgetStop = null; budgetRetryAt = 0; cardTokens = 0; cardCommits = 0;
       } else if (bp.action === "bind") {
         log(`#${budgetStop.card} is paused over its token budget — serving the newer contract for #${bp.card}, dropping ${bp.drop.length} stale message(s)`);
         wakeForTurn = wakeForTurn.filter(m => !bp.drop.includes(m));
@@ -1872,6 +1888,17 @@ async function resolveWakeCard(messages, { session }) {
     // (and resets the counter with the fresh session below); the paused card itself never buys
     // another CLI session. The wake stays owed and retries on a long clock, so the orchestrator
     // sees the pause, not a silent seat.
+    // #13474: never run a metered provider under a subscription label (or any model off its label).
+    // A `trantor swap` (CREW_SWAP_DRIVER) is the operator choosing another provider on purpose.
+    const mismatch = process.env.CREW_SWAP_DRIVER ? null : providerMismatch(AGENT, MODEL);
+    if (mismatch) {
+      const why = `label ${mismatch.label} but the live model is ${mismatch.model} (expected ${mismatch.expected}, got ${mismatch.actual})`;
+      log(`\x1b[31mturn refused: ${why}\x1b[0m`);
+      const first = !parkAnnounced;   // one message per episode, not one per redelivery
+      retryAt = await parkSeat("label-mismatch", pendingWake.length, 0, { evidence: why });
+      if (first) await notifyAssigners(assigners,`⛔ your contract is PARKED on ${SESSION} (label-mismatch: ${why}) · asked: "${asked}"`);
+      return;
+    }
     if (budgetStop && sessionCardForTurn > 0 && sessionCardForTurn === budgetStop.card) {
       log(`\x1b[33mqueued — #${budgetStop.card} is over its token budget (${budgetStop.tokens} ≥ ${CARD_TOKEN_BUDGET}); paused until the card moves or \`trantor up ${AGENT}\` resets the budget\x1b[0m`);
       // Pace only the SELF-redelivery path (a non-empty queue with retryAt=0 would otherwise
@@ -1881,7 +1908,7 @@ async function resolveWakeCard(messages, { session }) {
       return;
     }
     if (budgetStop && newCard) { budgetStop = null; budgetRetryAt = 0; }
-    if (newCard) { cardTokens = 0; cardStartedAt = Date.now(); }
+    if (newCard) { cardTokens = 0; cardCommits = 0; cardStartedAt = Date.now(); }
     sessionCard = card;
     const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
     const capPointer = capFresh ? capPointerLine(sessionCardForTurn) : "";
@@ -1917,6 +1944,24 @@ async function resolveWakeCard(messages, { session }) {
     }
     finally { stopDutyNudgeWatcher(); }
     const secs = Math.round((Date.now() - tStart) / 1000);
+    // #13474: enforced on EVERY turn ending, failed ones included (the burn came from failing turns
+    // the old exit-0-only check never saw). One note and one message per episode: budgetStop latches.
+    const burn = burnVerdict({ card: sessionCard, tokens: cardTokens, commits: cardCommits, ceiling: CARD_TOKEN_BUDGET, agent: AGENT, stopped: !!budgetStop });
+    if (burn) {
+      budgetStop = { card: sessionCard, tokens: cardTokens };
+      log(`\x1b[33m${burn.text}\x1b[0m`);
+      saveWipLogged("burn ceiling");
+      await api("/task/update", { id: sessionCard, note: burn.note, by: SESSION }).catch(() => {});
+      await notifyAssigners(assigners, burn.text);
+      const orch = `${hostId()}:${PROJ}`;
+      if (!assigners.some(a => a.from === orch)) await api("/send", { from: SESSION, to: orch, text: burn.text, project: PROJ, kind: "alert" }).catch(() => {});
+      if (ec) {   // the failure ladder would park and message a second time
+        budgetRetryAt = Date.now() + BUDGET_RETRY_MS;
+        savePending(pendingWake, pendingBcast);
+        lastTurnAt = Date.now();
+        return;
+      }
+    }
     let skippedNudges = [];
     if (!ec && dutyPlan.items.length) {
       const observedIds = observedDutyNudgeIds(TRANSCRIPT_DIR, tStart);
@@ -1984,6 +2029,8 @@ async function resolveWakeCard(messages, { session }) {
       // #7914: the park owes its evidence — which turns the box killed, their exits, the box that
       // ended them — whatever rung fired it. The THRESHOLD is #6289's and stays #6289's: a chain
       // retries once and the second failed chain parks, never the first (its drill B pins that).
+      // #13474: a silent stall also says why, in the park notice and the retry notice alike.
+      const stallWhy = reason === "stalled" ? ` · probable cause: ${stallCause({ text: lastErrText })}` : "";
       const evidence = cutChain.length >= CUT_CHAIN_PARK_MIN ? cutChainEvidence(cutChain) : "";
       if (PARKING_REASONS.has(reason) || deliveryFails >= 2) {
         retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset, { evidence });
@@ -2007,7 +2054,7 @@ async function resolveWakeCard(messages, { session }) {
         // has to act on must never be the part that gets eaten.
         await notifyAssigners(assigners,
           reason === "stalled"
-            ? `⛔ your contract is PARKED on ${SESSION} (stalled: two turns silent for the whole watchdog window)${lifts} · asked: "${asked}"`
+            ? `⛔ your contract is PARKED on ${SESSION} (stalled: two turns silent for the whole watchdog window)${lifts}${stallWhy} · asked: "${asked}"`
             : `⛔ your contract is PARKED on ${SESSION} (${parkReason})${lifts}${evidence ? ` · ${evidence}` : ""} · asked: "${asked}"`);
         lastTurnAt = Date.now();
         return;
@@ -2017,7 +2064,7 @@ async function resolveWakeCard(messages, { session }) {
       // The room hears the broadcast above; the one who is actually blocked hears it directly.
       await notifyAssigners(assigners,
         reason === "stalled"
-          ? `🫥 your contract STALLED on ${SESSION} (no output for the whole watchdog window; ended at the window, not the box) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`
+          ? `🫥 your contract STALLED on ${SESSION} (no output for the whole watchdog window; ended at the window, not the box)${stallWhy} · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`
           : `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${reason}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
       log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
     } else if (turnAsk) {
@@ -2098,15 +2145,6 @@ async function resolveWakeCard(messages, { session }) {
     // (ec !== 0) stays in its own ladder, and only a clean-exit turn hands its card to the stop.
     // The stop blocks FUTURE turns for THIS card only: a different card starts clean, and the
     // alert names the two ways out (move the card, or restart the seat, resetting the counter).
-    if (!budgetStop && CARD_TOKEN_BUDGET > 0 && sessionCard > 0 && cardTokens >= CARD_TOKEN_BUDGET && ec === 0) {
-      budgetStop = { card: sessionCard, tokens: cardTokens };
-      const text = `⛔ #${sessionCard} hit its token budget on ${SESSION}: ${cardTokens} ≥ ${CARD_TOKEN_BUDGET} tokens this card.`
-        + ` Further turns for THIS card are paused until it moves (new contract, or testing/done) or \`trantor up ${AGENT}\` resets the budget.`;
-      log(`\x1b[33m${text}\x1b[0m`);
-      await notifyAssigners(assigners, text);
-      const orch = `${hostId()}:${PROJ}`;
-      if (!assigners.some(a => a.from === orch)) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
-    }
     lastTurnAt = Date.now();
   }
 })();
