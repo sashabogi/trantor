@@ -170,6 +170,16 @@
         ]
       },
       {
+        "matcher": "Bash|mcp__plugin_trantor_relay__relay_task_move",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/progress-log.mjs",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {

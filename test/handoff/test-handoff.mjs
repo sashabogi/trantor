@@ -572,7 +572,8 @@ rmSync(projDir, { recursive: true, force: true });
   process.env.TRANTOR_NO_SCROOGE = "1";
   const { record: crec, file: cfile } = writeHandoff({ projectDir: cpDir, sessionId: "cap-e2e", transcript: capT, trigger: "context-warn", summary: summaryBig });
   delete process.env.TRANTOR_NO_SCROOGE;
-  ok("#8222: writeHandoff persists the summary UNCAPPED — byte-identical, no cut, no marker", crec.summary === summaryBig);
+  // #13871: the only addition is the READ FIRST tail naming the current-state file; the narrative itself is untouched.
+  ok("#8222: writeHandoff persists the summary UNCAPPED — byte-identical, no cut, no marker", crec.summary.startsWith(summaryBig) && /^\n\n## READ FIRST\n\S+project_current_state\.md$/.test(crec.summary.slice(summaryBig.length)));
   ok("#8222: the injection-side cut of the stored record keeps the numbered work order", capSummary(crec.summary, 4096).includes(threadLines[threadLines.length - 1]) && !capSummary(crec.summary, 4096).includes(elidableTail));
   ok("mode: defaults to attended", crec.mode === "attended");
   rmSync(cfile, { force: true });

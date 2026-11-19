@@ -148,9 +148,10 @@ console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
     ok("the lazy five-section summary is persisted, not discarded", record.summary.startsWith("# HANDOFF — Lazy Machine"));
     ok("…and the floor appended the memory index under READ FIRST", record.summary.includes("## READ FIRST") && record.summary.includes(memIndex));
     const want = readFirstPaths(record.summary);
-    ok("the machine-written record yields a NON-EMPTY want-list", want.length === 1 && want[0] === memIndex, JSON.stringify(want));
+    // #13871: the current-state file is always named, ahead of the floor.
+    ok("the machine-written record yields a NON-EMPTY want-list", want.length === 2 && want[0].endsWith("project_current_state.md") && want[1] === memIndex, JSON.stringify(want));
     const rf = pathsReadIn(t, want);
-    ok("a successor who opened none of it is reported as having missed it", rf.missed.length === 1 && rf.missed[0] === memIndex && rf.read.length === 0, JSON.stringify(rf));
+    ok("a successor who opened none of it is reported as having missed it", rf.missed.length === 2 && rf.missed[1] === memIndex && rf.read.length === 0, JSON.stringify(rf));
     rmSync(file, { force: true });   // never leak into the live handoffs dir
 
     // A compliant summary is left alone: the floor must not double-append or conscript extras.
@@ -158,7 +159,7 @@ console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
     const rec2 = writeHandoff({ projectDir: projDir, sessionId: "rf-ok", transcript: t, trigger: "context-warn", summary: SUMMARY });
     const want2 = readFirstPaths(rec2.record.summary, { projectDir: projDir });
     ok("a summary that already names read-first paths gets no floor appended",
-      want2.length === 3 && !want2.includes(memIndex), JSON.stringify(want2));
+      want2.length === 4 && want2[0].endsWith("project_current_state.md") && !want2.includes(memIndex), JSON.stringify(want2));
     rmSync(rec2.file, { force: true });
   } finally {
     for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }

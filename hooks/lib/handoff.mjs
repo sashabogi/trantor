@@ -21,6 +21,8 @@ import { statePath, readState } from "../../lib/state/store.mjs";
 import { stateError } from "../../lib/state/schema.mjs";
 import { resolveStateFlags, stateFeatureOn } from "../../lib/state/flags.mjs";
 import { deriveState } from "../../lib/state/derive.mjs";
+import { computeFacts } from "./handoff-facts.mjs";
+import { applyCurrentState } from "./current-state.mjs";
 
 // Writer and reader MUST resolve the same directory — see lib/project.mjs busDir(). This used to
 // honour only RELAY_DATA_DIR while the reader honoured neither override.
@@ -730,6 +732,9 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // sources — and BEFORE the write, so the field lands in the same file the successor loads.
   const seat = resolveSeat(projectName);
   attachState(record, { project: projectName, seat, card: resolveHandoffCard({ projectName, seat }), worktree: projectDir });
+  // #13871: facts from git and the board (not the model), then the current-state memory file.
+  record.facts = computeFacts({ projectDir, projectName, hubGet: (path) => hubCallSync(path, { project: projectName, session: sessionId || "" }) });
+  applyCurrentState({ record, projectDir, facts: record.facts });
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));
   supersedeOlderHandoffs(projectName, record.id);

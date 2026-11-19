@@ -11,6 +11,7 @@ import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, n
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { renderStateBlock, capSummary } from "./lib/handoff.mjs";
+import { stateTurnLabel, handoffFactsBlock } from "./lib/handoff-facts.mjs";
 import { loadPendingHandoff } from "./lib/handoff-claims.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
@@ -504,9 +505,10 @@ try {
     // and the successor sees exactly today's prose handoff.
     const stateBlock = renderStateBlock(handoff.state);
     if (stateBlock) {
-      additionalContext += `## Working state (structured, card #${sanitize(String(handoff.state.card || 0))}, turn ${sanitize(String(handoff.state.cursor?.turn ?? 0))})\n`;
+      additionalContext += `## Working state (structured, card #${sanitize(String(handoff.state.card || 0))}${stateTurnLabel(handoff.state)})\n`;
       additionalContext += `${sanitize(stateBlock)}\n\n`;
     }
+    additionalContext += handoffFactsBlock(handoff, claimed, sanitize);
     additionalContext += `## Handoff summary\n${sanitize(capHandoffSummary(handoff))}\n`;
     if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;
     // Sub-agent manifest: LIVE-primary, snapshot-as-fallback. The prior session may have had
