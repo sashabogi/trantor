@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { seatProcesses, signalProcesses } from "./processes.mjs";
 import { call, listPids, run } from "./core.mjs";
 import { hostId } from "../../lib/project.mjs";
+import { resolveOwnerIdentity } from "../../lib/identity.mjs";
 import { removeSeatWorktree } from "../../lib/seat-worktree.mjs";
 import { signedPost } from "../../hooks/lib/api.mjs";
 import { statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../../lib/docker-janitor.mjs";
@@ -126,7 +127,8 @@ function closeTmux(ctx, row, perSeat, seen) {
 
 async function unregisterSeat(ctx, project, persona) {
   const path = project === ctx.project ? `${ctx.hub}/unregister` : "/unregister";
-  const response = await signedPost(path, { session: `${persona}:${project}`, project }, { project });
+  const owner = await resolveOwnerIdentity(project === ctx.project ? ctx.hub : undefined);
+  const response = await signedPost(path, { session: `${persona}:${project}`, project }, { project, session: owner.name });
   if (!response.ok || !response.json?.ok) throw new Error(response.json?.error || response.reason || `hub HTTP ${response.status}`);
   return response.json;
 }
