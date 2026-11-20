@@ -11,6 +11,7 @@ import { hostId } from "../lib/project.mjs";
 import { detectedCliBalanceRows } from "../lib/providers.mjs";
 import { loadProfile } from "./profile.mjs";
 import { resolveKeys } from "../lib/provider-keys.mjs";
+import { publishUsageEnabled } from "../hooks/lib/balance-check.mjs";
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
@@ -36,8 +37,9 @@ const balances = [...detected, ...profileScoped];
 const low = thresholds();
 
 // Push the snapshot to the project hub and the LOCAL hub (best-effort); the machine key and
-// profile let a shared hub keep one snapshot per machine.
-if (!noPush) {
+// profile let a shared hub keep one snapshot per machine. #13919: "publishUsage": false in
+// config.json means a seats-only machine — skip both pushes; the report above still prints.
+if (!noPush && publishUsageEnabled()) {
   const snap = snapshotPayload(balances, { machine: hostId(), profile: profileProviders });
   try { await signedPost("/balances", snap, { timeoutMs: 2500 }); } catch {}
   try { await signedPost("http://127.0.0.1:4477/balances", snap, { timeoutMs: 2500 }); } catch {}

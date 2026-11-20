@@ -23,6 +23,17 @@ function thresholds() {
   return { t, q };
 }
 
+// #13919: a seats-only machine opts out of publishing usage — "publishUsage": false in
+// ~/.agent-bus/config.json skips every /balances push (this hook + the `trantor balances` CLI).
+// Only the literal boolean false opts out; a missing/corrupt config or any other value publishes.
+export function publishUsageEnabled(configPath = join(homedir(), ".agent-bus", "config.json")) {
+  try {
+    const c = JSON.parse(readFileSync(configPath, "utf8"));
+    if (c.publishUsage === false) return false;
+  } catch {}
+  return true;
+}
+
 // Returns { low: [{label, line}], cached } — `low` is the list of providers below their refill threshold.
 export async function maybeCheckBalances() {
   if (process.env.TRANTOR_NO_BALANCE_CHECK === "1") return { low: [] };
@@ -38,12 +49,16 @@ export async function maybeCheckBalances() {
   catch { return { low: stamp.low || [] }; }   // timed out / errored — keep the last known low list, don't rewrite the stamp
   if (!Array.isArray(balances) || !balances.length) { try { writeFileSync(STAMP, JSON.stringify({ ts: Date.now(), low: [] })); } catch {} return { low: [] }; }
 
-  // push the fresh snapshot to the hub for the dashboard + other sessions (best-effort, signed)
+  // push the fresh snapshot to the hub for the dashboard + other sessions (best-effort, signed).
+  // #13919: "publishUsage": false in config.json — a seats-only machine publishes nothing, so BOTH
+  // pushes skip; the stamp below still refreshes (it is local-only).
   const snap = snapshotPayload(balances, { machine: hostId(), profile: loadProfile().providers, by: process.env.TRANTOR_SESSION || "" });
-  await signedPost("/balances", snap, { timeoutMs: 2000 });
-  // The desktop reads balances from the LOCAL hub (machine-local data); a pinned project's
-  // default push lands on the REMOTE one — the 11-day-stale-header bug. Push both.
-  await signedPost("http://127.0.0.1:4477/balances", snap, { timeoutMs: 2000 }).catch(() => {});
+  if (publishUsageEnabled()) {
+    await signedPost("/balances", snap, { timeoutMs: 2000 });
+    // The desktop reads balances from the LOCAL hub (machine-local data); a pinned project's
+    // default push lands on the REMOTE one — the 11-day-stale-header bug. Push both.
+    await signedPost("http://127.0.0.1:4477/balances", snap, { timeoutMs: 2000 }).catch(() => {});
+  }
 
   const { t, q } = thresholds();
   const low = balances.filter(b => isLow(b, t, q)).map(b => ({ label: b.label, line: fmtBalance(b) }));
