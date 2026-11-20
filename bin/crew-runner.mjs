@@ -609,9 +609,10 @@ async function balanceRows() {
 }
 
 // ---- activity truth (#5965): the RUNNER is the source for this seat ----------------
-// herdr cannot see a runner-driven CLI mid-turn, so the runner reports turn boundaries to the hub:
-// `working · <trigger>` at start, `idle` on a clean landing. Bounded 5s, one call per transition.
+// The runner reports `working · <trigger>` at start and `idle` on a clean landing, bounded to 5s.
 // #7749: the live phase + its start ride the same call, so /peers answers what the seat does NOW.
+// The detached watchdog repeats the working payload once a minute: runTurn blocks this event loop.
+const PRESENCE_MS = Math.max(100, Number(process.env.RUNNER_PRESENCE_MS) || 60_000);
 async function registerStatus(status, extra = {}) {
   const url = HUB + "/register";
   const payload = { session: SESSION, project: PROJ, status, persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, ...extra };
@@ -957,7 +958,11 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
       kind: cli.pinned ? "opencode" : AGENT, sid, db: OC_DB, workDir: TURN_DIR,
       home: homedir(), startedAt: t0, transcriptDir: TRANSCRIPT_DIR,
     } : undefined;
-    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID, box: boxPlan, activity }));
+    const presencePayload = { session: SESSION, project: PROJ, status: `working · ${trigger}`, persona: PERSONA,
+      agent: AGENT, llm: AGENT, model: MODEL, kind: "agent", phase: "working", phaseSince: t0, card: sessionCard || 0 };
+    if (MACHINE_LABEL) presencePayload.machine = MACHINE_LABEL;
+    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID, box: boxPlan, activity,
+      presence: { intervalMs: PRESENCE_MS, payload: presencePayload } }));
     const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR,
       // #7752: the stall marker only exists when a box does — with no box there is no sweep to
       // end the turn, so the watchdog stays report-only (reporting is the whole job, boxless).

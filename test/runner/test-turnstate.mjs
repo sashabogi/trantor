@@ -64,7 +64,7 @@ async function drill(t, { maxMs, cliBody }) {
     EFFORT: null, EFFORT_FLAG: { flag: "", text: "" },
     TURN_DIR: work, ERRF: join(work, "err.txt"), TRANSCRIPT_DIR: work, RUNNER_ID: "drill",
     MODEL: "", STATE_SCHEMA_FILE: "", TURN_MAX_MS: maxMs, TURN: 0, sid: "", inFollowUp: true,
-    sessionCard: 7749,
+    PRESENCE_MS: 60000, MACHINE_LABEL: "", sessionCard: 7749,
     // #7761: no ceiling here, so the box is the plain wall-clock box these drills measure.
     TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.

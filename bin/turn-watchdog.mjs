@@ -52,6 +52,22 @@ const runnerAlive = () => {
   try { process.kill(runnerPid, 0); return true; } catch { return false; }
 };
 
+// The runner is blocked in spawnSync for the whole turn, so presence beats from this helper.
+// The stamp check pins every beat to this runner and turn; killing the watchdog clears the timer.
+const presence = armed.presence;
+let presenceBusy = false;
+async function beatPresence() {
+  if (!presence || presenceBusy) return;
+  const current = readStamp();
+  if (!current || current.turn !== armed.turn || (armed.runner && current.runner !== armed.runner) || !runnerAlive()) return;
+  presenceBusy = true;
+  try {
+    await signedPost(`${hub}/register`, presence.payload, { session, timeoutMs: 5000 });
+  } catch {} finally { presenceBusy = false; }
+}
+const presenceTimer = presence ? setInterval(beatPresence, Math.max(100, Number(presence.intervalMs) || 60000)) : null;
+process.on("exit", () => { if (presenceTimer) clearInterval(presenceTimer); });
+
 // One observation of every liveness channel: stderr growth, transcript mtime, worktree mtime.
 const ago = (t) => (t > 0 ? `${Math.max(1, Math.round((Date.now() - t) / 60000))}m ago` : "never");
 const describeLast = (b) => {
