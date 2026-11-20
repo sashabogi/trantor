@@ -1,7 +1,7 @@
 // Fleet balance chips: pure formatting turning a /balances row into one header chip. All decision
 // logic lives here, not in the strip component, and mirrors lib/balances.mjs (symbols, reset
-// short-forms, kind shapes) so the header and the CLI agree on what a row means. Icons, not words:
-// stale snapshots dim, and a dead-provider zombie row hides entirely.
+// short-forms, kind shapes) so the header and the CLI agree on what a row means. Named brand marks
+// identify providers; stale snapshots dim, and a dead-provider zombie row hides entirely.
 import type { BalanceEntry } from "../../shared/api/client";
 import { dictGet } from "../../shared/dict";
 
@@ -42,6 +42,7 @@ export type ChipTone = "ok" | "warn" | "fail";
 
 export type BalanceChip = {
   key: string;
+  label: string;  // canonical provider name shown after the mark
   mono: string;   // monogram fallback for providers without a vendored brand mark
   icon: string | null; // BRAND_PATHS key — the real brand glyph (#5570, the Orca standard)
   hue: string;    // brand hue — tints the mark
@@ -64,21 +65,21 @@ const LOW_QUOTA_PCT = 15;                     // mirrors lib/balances.mjs DEFAUL
 // terracotta, OpenAI teal-ish for Codex, DeepSeek blue, GLM indigo, Kimi dark, OpenRouter violet.
 // Real brand marks (brands.ts, vendored) tinted in the brand hue; the monogram survives only
 // as the fallback for providers without a vendored glyph.
-type BrandStyle = { mono: string; icon: string | null; hue: string; fg: string };
+type BrandStyle = { label: string; mono: string; icon: string | null; hue: string; fg: string };
 const BRAND = {
-  claude:     { mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
-  anthropic:  { mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
-  codex:      { mono: "Cx", icon: "codex",      hue: "#E4E4E7", fg: "#0a1a18" },
-  openai:     { mono: "Cx", icon: "codex",      hue: "#E4E4E7", fg: "#0a1a18" },
-  deepseek:   { mono: "DS", icon: "deepseek",   hue: "#4D6BFE", fg: "#eef1ff" },
-  zai:        { mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
-  glm:        { mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
-  zhipu:      { mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
-  kimi:       { mono: "Ki", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
-  moonshot:   { mono: "MS", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
-  gemini:     { mono: "Ge", icon: null,         hue: "#8A8A92", fg: "#1a1a1e" },
-  openrouter: { mono: "OR", icon: "openrouter", hue: "#8B5CF6", fg: "#f1ecff" },
-  qwen:       { mono: "Qw", icon: "qwen",       hue: "#6336E7", fg: "#eef0ff" },
+  claude:     { label: "Claude",     mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
+  anthropic:  { label: "Claude",     mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
+  codex:      { label: "Codex",      mono: "Cx", icon: "codex",      hue: "#E4E4E7", fg: "#0a1a18" },
+  openai:     { label: "Codex",      mono: "Cx", icon: "codex",      hue: "#E4E4E7", fg: "#0a1a18" },
+  deepseek:   { label: "DeepSeek",   mono: "DS", icon: "deepseek",   hue: "#4D6BFE", fg: "#eef1ff" },
+  zai:        { label: "GLM",        mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
+  glm:        { label: "GLM",        mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
+  zhipu:      { label: "GLM",        mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
+  kimi:       { label: "Kimi",       mono: "Ki", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
+  moonshot:   { label: "Kimi",       mono: "MS", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
+  gemini:     { label: "Gemini",     mono: "Ge", icon: null,         hue: "#8A8A92", fg: "#1a1a1e" },
+  openrouter: { label: "OpenRouter", mono: "OR", icon: "openrouter", hue: "#8B5CF6", fg: "#f1ecff" },
+  qwen:       { label: "Qwen",       mono: "Qw", icon: "qwen",       hue: "#6336E7", fg: "#eef0ff" },
 } satisfies Record<string, BrandStyle>;
 
 // Shared with the Usage popover (usageRoster.ts) so the chip and the drill-in can never
@@ -211,7 +212,7 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
   // name one level up, #6391); a chip never throws over a missing name.
   const name = e.label ?? e.provider ?? "?";
   const brand = dictGet(BRAND, e.provider ?? "")
-    ?? { mono: name.slice(0, 2).toUpperCase(), icon: null, hue: "#8A8A92", fg: "#1a1a1e" };
+    ?? { label: name, mono: name.slice(0, 2).toUpperCase(), icon: null, hue: "#8A8A92", fg: "#1a1a1e" };
   const full = name;
   let value = "?";
   let barPct: number | null = null;
@@ -236,6 +237,10 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
       barPct = usedPct;
       detail = `${Math.round(e.remainingPct)}% left${rs ? ` · resets in ${rs}` : ""}`;
       if (e.low) tone = "warn";
+    } else if (e.provider === "kimi") {
+      value = "usage unread";
+      tone = "warn";
+      detail = e.detail || "usage unread";
     } else if (e.detail) {
       // #7413 — the adapter said why the number is missing (qwen can only read the wall): an
       // active plan is not an unknown gauge. The tooltip is the adapter's line, minus its brackets.
@@ -268,7 +273,7 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
   const stale = isStale(snap, now);
   const staleLine = stale ? ` · as of ${agoLabel(now - snap)} ago` : "";
   return {
-    key: e.provider, mono: brand.mono, icon: brand.icon, hue: brand.hue, fg: brand.fg,
+    key: e.provider, label: brand.label, mono: brand.mono, icon: brand.icon, hue: brand.hue, fg: brand.fg,
     value, barPct, tone, stale, tooltip: `${full} · ${detail}${via}${staleLine}`,
   };
 }

@@ -112,6 +112,7 @@ export function BalanceStrip({ client }: { client: HubClient }) {
             title={`${c.tooltip} — click for the full usage roster`}
             className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[10.5px]">
             <BrandMark icon={c.icon} mono={c.mono} hue={c.hue} fg={c.fg} />
+            <span className="shrink-0 whitespace-nowrap text-[10.5px] text-[var(--color-tr-muted)]">{c.label}</span>
             {c.barPct != null && (
               <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-[var(--color-tr-edge)]">
                 <span className="block h-full rounded-full"

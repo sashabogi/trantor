@@ -45,6 +45,16 @@ describe("BalanceStrip hub failures", () => {
     expect(host.textContent).toContain("$12.3");
   });
 
+  it("shows the provider name after its mark in muted 10.5px text", async () => {
+    transport.mockResolvedValueOnce(snapshot());
+    await mount();
+    const mark = host.querySelector("footer button svg");
+    const label = mark?.nextElementSibling;
+    expect(label?.textContent).toBe("DeepSeek");
+    expect(label?.className).toContain("text-[10.5px]");
+    expect(label?.className).toContain("text-[var(--color-tr-muted)]");
+  });
+
   it("retains prior provider values alongside the failure reason", async () => {
     transport.mockResolvedValueOnce(snapshot());
     await mount();
