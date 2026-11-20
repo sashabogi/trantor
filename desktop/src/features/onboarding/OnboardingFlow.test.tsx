@@ -72,7 +72,7 @@ describe("OnboardingFlow", () => {
 
   const mount = async (deps: OnboardingFlowDeps, onClose = vi.fn(), forced = false) => {
     await act(async () => {
-      root.render(<OnboardingFlow me="sasha@mac" project="trantor" onClose={onClose} forced={forced} deps={deps} />);
+      root.render(<OnboardingFlow me="owner@laptop" project="trantor" onClose={onClose} forced={forced} deps={deps} />);
       await Promise.resolve();
       await Promise.resolve();
     });

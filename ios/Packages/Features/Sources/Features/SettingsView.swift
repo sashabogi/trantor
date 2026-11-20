@@ -26,7 +26,7 @@ public struct SettingsView: View {
                         Text(settings.hubURL?.absoluteString ?? "Not paired").font(.tData).foregroundStyle(Palette.text2)
                             .textSelection(.enabled).well()
                         if editingHub {
-                            WellField("https://your-hub.ts.net", text: $hubDraft, mono: true)
+                            WellField("https://hub.example", text: $hubDraft, mono: true)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                                 .accessibilityIdentifier("settings.hubField")
                             HStack(spacing: Space.sm) {

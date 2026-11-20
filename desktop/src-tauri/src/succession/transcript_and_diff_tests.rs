@@ -195,7 +195,7 @@ fn a_message_starting_with_an_absolute_path_stays_user_speech() {
     // rendered as bookkeeping, and the delivery receipt declared a delivered message lost.
     let row = serde_json::json!({
         "type": "user",
-        "message": { "content": "/Users/sasha/Desktop/CleanShot 2026-08-28 at 12.14.58.jpg  here is the screen shot" }
+        "message": { "content": "/Users/test/Desktop/CleanShot 2026-08-28 at 12.14.58.jpg  here is the screen shot" }
     })
     .to_string();
     let snap = decode_chat_lines_with_context_window([row], 1, 0);
@@ -275,7 +275,7 @@ fn slash_command_gate_takes_commands_and_refuses_paths() {
     assert!(is_slash_command("/compact with trailing words"));
     assert!(is_slash_command("/model opus"));
     assert!(is_slash_command("/trantor:handoff"));
-    assert!(!is_slash_command("/Users/sasha/x.jpg here"));
+    assert!(!is_slash_command("/Users/test/x.jpg here"));
     assert!(!is_slash_command("/tmp/scratch.txt"));
     assert!(!is_slash_command("plain words"));
     assert!(!is_slash_command("/"));

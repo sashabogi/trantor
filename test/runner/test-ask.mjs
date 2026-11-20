@@ -129,10 +129,10 @@ if grep -q "NEW BUS MESSAGE" "$P"; then
     exit 0
   fi
   if grep -q "ANSWER:" "$P"; then
-    node "${ASKJS}" "${HUB}" "${SESSION}" "sasha@mac" "❓ ask on #${CARD}: which region?" "message"
+    node "${ASKJS}" "${HUB}" "${SESSION}" "owner@laptop" "❓ ask on #${CARD}: which region?" "message"
     exit 0
   fi
-  node "${ASKJS}" "${HUB}" "${SESSION}" "sasha@mac" "❓ ask on #${CARD}: which value should DEPLOY_TARGET get? The contract does not say."
+  node "${ASKJS}" "${HUB}" "${SESSION}" "owner@laptop" "❓ ask on #${CARD}: which value should DEPLOY_TARGET get? The contract does not say."
   echo "codex-drill: asked the assigner instead of inventing a value"
   exit 0
 fi
@@ -160,7 +160,7 @@ await until(() => turns().length >= 1);
 ok("boot: the kickoff turn ran", turns().length >= 1);
 
 // ---- act 2: a contract with a missing value arrives; the seat asks --------------------------
-await post({ from: "sasha@mac", to: SESSION,
+await post({ from: "owner@laptop", to: SESSION,
   text: `CONTRACT for you on #${CARD}: set DEPLOY_TARGET in the release config and ship it. (This contract deliberately omits the value.)` });
 const askMsg = await until(() => messages.find(m => m.kind === "ask"));
 ok("the seat asked its assigner (kind:ask reached the hub)", !!askMsg);
@@ -180,7 +180,7 @@ ok("#7756: the asking turn invented no value — its only direct bus write is th
     Array.isArray(pend.wake) && pend.wake.length === 1 && pend.wake[0].text.includes(`#${CARD}`),
     read(PENDF).slice(0, 200));
   ok("#7756: the held queue names the ask it waits on (restart keeps holding)",
-    pend.ask === askMsg?.id && pend.askTo === "sasha@mac", `ask=${pend.ask} askTo=${pend.askTo}`);
+    pend.ask === askMsg?.id && pend.askTo === "owner@laptop", `ask=${pend.ask} askTo=${pend.askTo}`);
 }
 ok("#7756: the ledger row for the asking turn reads outcome \`asked\`, not \`completed\`",
   ledger().some(r => r.outcome === "asked"),
@@ -210,7 +210,7 @@ ok("#7756: the runner is still alive and polling (a park would have exited or an
   runnerExit === null);
 
 // ---- act 3: the assigner answers (re = the ask's id); the seat resumes -----------------------
-await post({ from: "sasha@mac", to: SESSION, re: askMsg.id, text: "ANSWER: DEPLOY_TARGET is staging." });
+await post({ from: "owner@laptop", to: SESSION, re: askMsg.id, text: "ANSWER: DEPLOY_TARGET is staging." });
 await until(() => wakeTurns().length >= 2);
 await until(() => ledger().filter(r => r.outcome === "asked").length === 2);
 await sleep(400);
@@ -230,7 +230,7 @@ ok("#11230: two card-bound ask-only turns read asked", askedRows.length === 2 &&
 ok("#11230: both verdicts label the first line of the question", askedRows.every(r => r.verdict.startsWith("asked: ")));
 ok("#11230: two asks never park or report no-delivery", !messages.some(m => /PARKED|no commit, card/.test(m.text)) && !ledger().some(r => r.outcome === "no-delivery"));
 ok("#11230: the plain question-mark bus ask holds without retry", wakeTurns().length === 2 && JSON.parse(read(PENDF)).ask === secondAsk?.id);
-await post({ from: "sasha@mac", to: SESSION, re: secondAsk?.id, text: "SECOND ANSWER: use us-east." });
+await post({ from: "owner@laptop", to: SESSION, re: secondAsk?.id, text: "SECOND ANSWER: use us-east." });
 await until(() => messages.some(m => String(m.text || "").startsWith("✅ done")));
 ok("#11230: the second answer resumes the seat normally", wakeTurns().length === 3);
 ok("#7756: the queue is cleared once the resumed turn delivers", !existsSync(PENDF));

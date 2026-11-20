@@ -1,13 +1,7 @@
 #!/usr/bin/env node
-// trantor wake-policy drill (#6134, #7766) — the two rules that cut the fleet's turn count:
-// a turn costs a session (on a direct message the SENDER's wake flag decides: unset or true
-// turns, false batches as context; receipts and kind:status never wake) and one session per card
-// (a wake naming a new card = a FRESH CLI session). Hermetic: mock hub + fake CLI, REAL runner.
-// #9832 part 4: the suite grew past the runner's per-suite cap, so it is split by feature — this
-// file keeps the POLICY: the parsing unit tests, the live turn-cost and cross-project drills, and
-// the hub's wake:false storage contract. Session/card binding lives in test-wake-card-binding,
-// sender notices and threading in test-wake-demotions-threading; the shared mock harness is
-// test/lib/wake-mock.mjs.
+// #6134, #7766, #9832: sender wake flags batch context without a turn; receipts and status never
+// wake; a new card starts a fresh CLI session. Uses a mock hub, fake CLI and real runner.
+// Session/card binding and sender threading live in their own suites.
 import { drillEnv } from "../drill-env.mjs";
 import { startTestHub } from "../lib/test-hub.mjs";
 import { createWakeHarness } from "../lib/wake-mock.mjs";
@@ -125,7 +119,7 @@ console.log("\n## the rules");
   // #7763/#7765: a MESSAGE-CARD is a transcript of a bus message parked on the board, never work.
   // The runner checks the board before binding, so the predicate lives where the other rules do.
   ok("#7763: a NEW BUS MESSAGE card is a message-card",
-    isMessageCardTitle("NEW BUS MESSAGE for you: [MacBook-Pro-M1:trantor]: #7938 landed on main"));
+    isMessageCardTitle("NEW BUS MESSAGE for you: [laptop:trantor]: #7938 landed on main"));
   ok("#7763: the join note is one too",
     isMessageCardTitle("You just joined (your arrival was already announced on the bus). 1) relay_inbox"));
   ok("#7763: case and leading space do not hide it", isMessageCardTitle("  new bus messages for you: x"));
@@ -177,7 +171,7 @@ console.log("\n## the rules");
   // #6228: the runner's half of the cross-project guard — a wake from another project is dropped
   // unless the projects are declared linked. Pure decision logic first, the live drop below.
   ok("senderProjectOf reads the name suffix after the LAST colon", senderProjectOf("claude:crebral-com") === "crebral-com");
-  ok("senderProjectOf: no colon -> no home project to fence", senderProjectOf("sasha@mac") === "");
+  ok("senderProjectOf: no colon -> no home project to fence", senderProjectOf("owner@laptop") === "");
   ok("isLinkedProject: the same project is always linked", isLinkedProject("pros", "pros", []));
   ok("isLinkedProject: no project on either side -> nothing to fence", isLinkedProject("", "crebral", []));
   ok("isLinkedProject: different, undeclared projects are NOT linked", !isLinkedProject("pros", "crebral", []));

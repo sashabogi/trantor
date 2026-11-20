@@ -11,7 +11,7 @@ const dir = mkdtempSync(join(tmpdir(), "trantor-keys-"));
 const scrooge = join(dir, "token-scrooge.env");
 const agentbus = join(dir, "agent-bus.env");
 writeFileSync(scrooge, [
-  "# scrooge keys",
+  "# scrooge keys", // gitleaks:allow — synthetic fixture block
   "DEEPSEEK_API_KEY=sk-deepseek-fromscrooge",
   'GEMINI_API_KEY="sk-gemini-quoted"',
   "export ZAI_API_KEY=sk-zai-exported",

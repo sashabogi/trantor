@@ -13,7 +13,7 @@ describe("matchesCard", () => {
   it("speaks the board's vocabulary", () => {
     expect(matchesCard(card(5570, "Balance bar"), "#55")).toBe(true);
     expect(matchesCard(card(4400, "Balance bar"), "#55")).toBe(false);
-    expect(matchesCard(card(1, "x", "MacBook-Pro-M1:trantor"), "@macbook")).toBe(true);
+    expect(matchesCard(card(1, "x", "MacBook-Example:trantor"), "@macbook")).toBe(true);
     expect(matchesCard(card(1, "Orca-standard footer"), "orca")).toBe(true);
     expect(matchesCard(card(1, "nothing here"), "orca")).toBe(false);
     expect(matchesCard(card(1, "anything"), "  ")).toBe(true);

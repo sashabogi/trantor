@@ -22,7 +22,7 @@ const ok = (name, condition, detail = "") => {
 };
 const feed = ids => ids.map(id => ({
   from: "hub:duty",
-  text: `⚠️ UNDELIVERED for 2m: #${id} codex:proj -> MacBook-Pro-M1:proj — "probe"`,
+  text: `⚠️ UNDELIVERED for 2m: #${id} codex:proj -> laptop:proj — "probe"`,
 }));
 
 console.log("# duty runner per-id nudge enforcement");
@@ -36,7 +36,7 @@ try {
   const overlapping = await claimDutyNudges({ messages: feed(["A"]), statePath, owner: "turn-2" });
   ok("an overlapping turn cannot re-plan reserved A", overlapping.items.length === 0);
   const firstPrompt = dutyNudgeDirective(first);
-  ok("prompt names the exact required id", firstPrompt.includes("MacBook-Pro-M1:proj: #A"));
+  ok("prompt names the exact required id", firstPrompt.includes("laptop:proj: #A"));
   ok("prompt limits metronome suppression to the same id", firstPrompt.includes("metronome rule applies only to the SAME id"));
 
   mkdirSync(transcriptDir);
@@ -66,7 +66,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 50));
   }
   ok("watcher persists A before the duty turn ends",
-    JSON.parse(readFileSync(statePath, "utf8")).nudged.A?.recipient === "MacBook-Pro-M1:proj");
+    JSON.parse(readFileSync(statePath, "utf8")).nudged.A?.recipient === "laptop:proj");
   ok("watcher finalizes A by removing its planned mark", !JSON.parse(readFileSync(statePath, "utf8")).planned.A);
   ok("a concurrent second wake with A plans nothing", (await planDutyNudges(feed(["A"]), statePath)).items.length === 0);
   writeFileSync(stopPath, "");
@@ -81,11 +81,11 @@ try {
   });
   ok("verified A produces no failure", firstAudit.missing.length === 0 && firstFailures.length === 0);
   const persisted = JSON.parse(readFileSync(statePath, "utf8"));
-  ok("verified A is persisted", persisted.nudged.A?.recipient === "MacBook-Pro-M1:proj");
+  ok("verified A is persisted", persisted.nudged.A?.recipient === "laptop:proj");
 
   const second = await claimDutyNudges({ messages: feed(["A", "B"]), statePath, owner: "turn-3" });
   ok("second feed suppresses only already-nudged A", second.items.length === 1 && second.items[0].id === "B");
-  ok("second prompt requires B exactly", dutyNudgeDirective(second).includes("MacBook-Pro-M1:proj: #B"));
+  ok("second prompt requires B exactly", dutyNudgeDirective(second).includes("laptop:proj: #B"));
   const skippedFailures = [];
   const skipped = await auditDutyNudges({
     plan: second, observedIds: new Set(), statePath,

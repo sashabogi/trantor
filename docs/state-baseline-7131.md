@@ -1,6 +1,6 @@
 # State baseline — trantor card 7131
 
-Captured 2026-09-10T04:17:06.330Z from `/Users/sashabogojevic/.claude/projects/-Users-sashabogojevic--agent-bus-worktrees-trantor-claude/48c4d9fa-f680-4229-bc30-3e42f919286b.jsonl` on the CURRENT (prose/transcript) path — no sidecar, no assembly. One row is one **model call**, the unit §8.4 compares a state-path step against. This file is the §7.5 pre-condition: the Phase-2a gate in §8 refuses to run until it is in HEAD, so that the ≥5× claim is measured against a number recorded BEFORE the thing it judges.
+Captured 2026-09-10T04:17:06.330Z from `/Users/test/.claude/projects/-Users-operator--agent-bus-worktrees-trantor-claude/48c4d9fa-f680-4229-bc30-3e42f919286b.jsonl` on the CURRENT (prose/transcript) path — no sidecar, no assembly. One row is one **model call**, the unit §8.4 compares a state-path step against. This file is the §7.5 pre-condition: the Phase-2a gate in §8 refuses to run until it is in HEAD, so that the ≥5× claim is measured against a number recorded BEFORE the thing it judges.
 
 | turn | cost usd | input | output | cache read | cache creation |
 |---:|---:|---:|---:|---:|---:|
@@ -93,7 +93,7 @@ Captured 2026-09-10T04:17:06.330Z from `/Users/sashabogojevic/.claude/projects/-
 | 87 | n/a | 56 | 927 | 153516 | 291 |
 | **total** | **n/a** | **4981** | **101497** | **9776326** | **367147** |
 
-Turns: 87. Per-turn rows: `/Users/sashabogojevic/.agent-bus/state/baselines/trantor-7131.jsonl`.
+Turns: 87. Per-turn rows: `/Users/test/.agent-bus/state/baselines/trantor-7131.jsonl`.
 
 ## Context carried per turn
 

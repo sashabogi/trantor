@@ -19,7 +19,7 @@ const ok = (name, condition, detail = "") => {
   else { fail++; console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ""}`); }
 };
 
-const HOST = "MacBook-Pro-M1";
+const HOST = "laptop";
 const work = mkdtempSync(join(tmpdir(), "trantor-duty-audit-"));
 const alert = (id, recipient) => ({
   from: "hub:duty", ts: Date.now(),

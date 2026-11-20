@@ -27,7 +27,7 @@ const read = (p) => { try { return readFileSync(p, "utf8"); } catch { return "";
 
 console.log("# trantor crew-completion drill");
 
-const ORCH = "MacBook-Pro-M1:crebral-health";   // the session that assigns the work
+const ORCH = "laptop:crebral-health";   // the session that assigns the work
 let servedFrom = ORCH;                          // who the waking message claims to be from
 // Cites a card because it IS a contract: since #6134 a direct message with no card ref and no
 // imperative batches into the seat's next turn instead of buying it a CLI session.

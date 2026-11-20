@@ -131,14 +131,14 @@ const hub = http.createServer((req, res) => {
     if (P === "/peer") return reply({ deliveredUpTo: 0 });
     if (P === "/poll") {
       const budgetAlerted = sends.some(s => /hit its token budget/.test(s.text || ""));
-      if (handed === 0) { handed = 1; return reply({ messages: [{ id: 11, from: "sasha@mac", to: u.searchParams.get("session"), text: `contract: work card #${CARDA} for a long stretch`, ts: Date.now() }], cursor: 1 }); }
+      if (handed === 0) { handed = 1; return reply({ messages: [{ id: 11, from: "owner@laptop", to: u.searchParams.get("session"), text: `contract: work card #${CARDA} for a long stretch`, ts: Date.now() }], cursor: 1 }); }
       if (handed === 1 && budgetAlerted) {
         handed = 2;
-        return reply({ messages: [{ id: 12, from: "sasha@mac", to: u.searchParams.get("session"), text: `card #${CARDA}: one more step please`, ts: Date.now() }], cursor: 2 });
+        return reply({ messages: [{ id: 12, from: "owner@laptop", to: u.searchParams.get("session"), text: `card #${CARDA}: one more step please`, ts: Date.now() }], cursor: 2 });
       }
       if (handed === 2 && budgetAlerted) {
         handed = 3;
-        return reply({ messages: [{ id: 13, from: "sasha@mac", to: u.searchParams.get("session"), text: `contract: work card #${CARDB} instead`, ts: Date.now() }], cursor: 3 });
+        return reply({ messages: [{ id: 13, from: "owner@laptop", to: u.searchParams.get("session"), text: `contract: work card #${CARDB} instead`, ts: Date.now() }], cursor: 3 });
       }
       return setTimeout(() => reply({ messages: [], cursor: eventSeq }), 250);
     }
@@ -196,10 +196,10 @@ exit 0
   // and the paused card's redelivery never minting a second pair.
   const budgetSendsA = sends.filter(s => String(s.text || "").includes(`#${CARDA}`) && /hit its token budget/.test(s.text || ""));
   ok("#11559: exactly ONE budget alert reached the assigner for card A",
-    budgetSendsA.filter(s => s.to === "sasha@mac").length === 1,
+    budgetSendsA.filter(s => s.to === "owner@laptop").length === 1,
     JSON.stringify(budgetSendsA.map(s => ({ to: s.to, text: String(s.text).slice(0, 70) }))));
   ok("#11559: the orchestrator row also heard card A's alert once",
-    budgetSendsA.filter(s => s.to !== "sasha@mac").length === 1,
+    budgetSendsA.filter(s => s.to !== "owner@laptop").length === 1,
     JSON.stringify(budgetSendsA.map(s => s.to)));
   ok("#11559: the alert names the card and both token numbers",
     budgetSendsA[0] && budgetSendsA[0].text.includes(`#${CARDA}`) && budgetSendsA[0].text.includes("5000") && budgetSendsA[0].text.includes("4000"),

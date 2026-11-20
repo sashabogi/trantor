@@ -121,7 +121,7 @@ describe("S-unread · the Unread lens on the graph view", () => {
       { type: "file.claim", ts: T1, file: "lib/a.ts", project: "p" },
       { type: "file.claim", ts: T1, file: "src/x.ts", project: "q" },
     ];
-    act(() => root.render(<Home client={stubClient(claims)} me="sasha@mac" onOpenProject={() => {}} />));
+    act(() => root.render(<Home client={stubClient(claims)} me="owner@laptop" onOpenProject={() => {}} />));
     await flush();
     expect(stat()).toContain("2 files");
     expect(stat()).toContain("across 2 projects");
@@ -130,7 +130,7 @@ describe("S-unread · the Unread lens on the graph view", () => {
     act(() => root.unmount());
     root = createRoot(host);
     const read: FileEvent = { type: "file.read", ts: T1 + 1, file: "lib/a.ts", project: "p" };
-    act(() => root.render(<Home client={stubClient([...claims, read])} me="sasha@mac" onOpenProject={() => {}} />));
+    act(() => root.render(<Home client={stubClient([...claims, read])} me="owner@laptop" onOpenProject={() => {}} />));
     await flush();
     expect(stat()).toContain("1 file");
     expect(stat()).toContain("across 1 project");

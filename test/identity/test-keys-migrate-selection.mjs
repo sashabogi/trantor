@@ -15,7 +15,7 @@ const { loadOrCreate, keyPath, injectIdentityKeychain, migrateKeysToKeychain } =
 let passed = 0;
 function check(name, fn) { fn(); passed++; console.log(`ok ${passed} - ${name}`); }
 try {
-  const names = ["sasha@mac", "admin", "trantor-disk", "codex:trantor", "MacBook-Pro-M1:relay-selftest-123", "pctest-456"];
+  const names = ["owner@laptop", "admin", "trantor-disk", "codex:trantor", "laptop:relay-selftest-123", "pctest-456"];
   const fixtures = names.map(name => loadOrCreate(name));
   const before = names.map(name => readFileSync(keyPath(name), "utf8"));
   function cli(args) {
@@ -33,9 +33,9 @@ try {
     assert.deepEqual(result.moved.sort(), names.slice(0, 4).sort());
     assert.equal(result.skippedTests, 2);
   });
-  check("explicit raw name selects exactly one", () => assert.deepEqual(report(["sasha@mac"]).moved, ["sasha@mac"]));
+  check("explicit raw name selects exactly one", () => assert.deepEqual(report(["owner@laptop"]).moved, ["owner@laptop"]));
   check("multiple names are deduplicated and explicit test names are honored", () => {
-    assert.deepEqual(report([names[4], "sasha@mac", "sasha@mac"]).moved.sort(), [names[4], "sasha@mac"].sort());
+    assert.deepEqual(report([names[4], "owner@laptop", "owner@laptop"]).moved.sort(), [names[4], "owner@laptop"].sort());
   });
   check("include-tests overrides the default skip", () => assert.deepEqual(report(["--include-tests"]).moved.sort(), [...names].sort()));
   check("include-tests does not broaden explicit selection", () => assert.deepEqual(report(["--include-tests", "admin"]).moved, ["admin"]));

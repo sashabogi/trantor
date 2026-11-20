@@ -368,14 +368,14 @@ console.log("\n   the card log is decoded at the boundary, not in the runner");
 {
   const rows = [{ id: 6969, title: "P6 — the runner wiring", status: "doing", notes: [
     "an old record: a bare string",
-    { by: "MacBook-Pro-M1:trantor", text: "the order is not a suggestion" },
+    { by: "laptop:trantor", text: "the order is not a suggestion" },
     { by: "seat", note: "an older field name" },
     null,
   ] }];
   const tail = renderCardTail(rows, 6969);
   ok("the header names the card, its title and its status", tail.startsWith("#6969 P6 — the runner wiring · doing"));
   ok("a bare-string note survives", tail.includes("an old record: a bare string"));
-  ok("a {by,text} note is attributed", tail.includes("MacBook-Pro-M1:trantor: the order is not a suggestion"));
+  ok("a {by,text} note is attributed", tail.includes("laptop:trantor: the order is not a suggestion"));
   ok("an older {by,note} record is not dropped", tail.includes("seat: an older field name"));
   ok("a null row does not become a blank line", !tail.includes("\n\n"));
   ok("a card that is not on the board is \"\", never a throw", renderCardTail(rows, 1) === "");

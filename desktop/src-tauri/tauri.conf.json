@@ -19,7 +19,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:4477 http://localhost:4477 http://100.79.242.104:4477"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://*:4477 https:"
     }
   },
   "bundle": {

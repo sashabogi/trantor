@@ -9,7 +9,7 @@ Assessed 2026-10-13 against Trantor base `d748debf3afefd08e0b2659b2f69cb15df1d06
 Evidence notation below gives paths and line ranges, with these roots:
 
 - **H/**: [Hindsight at the inspected commit](https://github.com/vectorize-io/hindsight/tree/610c135b6f2d0d8b972da94146ae635943f36271), locally `.agent-bus-out/hindsight/`.
-- **F/**: installed `/Users/sashabogojevic/.claude/plugins/cache/foundation-plugin/foundation/4.0.1/`. **G/** abbreviates `F/node_modules/@sashabogi/foundation/`. Installed executable JavaScript is the authority here, rather than a potentially different Foundation upstream revision. `G/package.json:2-4` identifies 4.0.1; `G/package.json:29-32` identifies its repository as `sashabogi/foundation`.
+- **F/**: installed `/Users/test/.claude/plugins/cache/foundation-plugin/foundation/4.0.1/`. **G/** abbreviates `F/node_modules/@sashabogi/foundation/`. Installed executable JavaScript is the authority here, rather than a potentially different Foundation upstream revision. `G/package.json:2-4` identifies 4.0.1; `G/package.json:29-32` identifies its repository as `sashabogi/foundation`.
 - **T/**: this Trantor repository at the base above. Relative links below resolve to its source.
 - **CC**: Anthropic's [official memory documentation](https://code.claude.com/docs/en/memory#auto-memory), fetched on the assessment date. The scratch capture `.agent-bus-out/claude-memory.md:432-456` records location, index and loading behavior. Claude Code implementation source was not available for inspection; this part is documentation evidence, not a claim to have audited its internals or the operator's configuration.
 

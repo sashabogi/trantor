@@ -1,8 +1,22 @@
 #!/bin/bash
-# trantor — netcup Debian 13 one-shot server setup. Run as root.
+# trantor — Debian 13 one-shot server setup. Run as root.
+# Required on first run: TRANTOR_HUB_HOST=<hub IP or DNS name>.
+# The value is stored in untracked /etc/trantor/hub.env, never in this repo.
 set -euo pipefail
 
-echo "=== trantor netcup setup (node $(node --version)) ==="
+echo "=== trantor hub setup (node $(node --version)) ==="
+
+if [ ! -f /etc/trantor/hub.env ] && [ -z "${TRANTOR_HUB_HOST:-}" ]; then
+  echo "Set TRANTOR_HUB_HOST to this server's hub IP or DNS name, then re-run."
+  exit 1
+fi
+install -d -m 750 /etc/trantor
+if [ ! -f /etc/trantor/hub.env ]; then
+  printf 'RELAY_HOST=%s\n' "$TRANTOR_HUB_HOST" > /etc/trantor/hub.env
+  chmod 600 /etc/trantor/hub.env
+fi
+source /etc/trantor/hub.env
+: "${RELAY_HOST:?Set RELAY_HOST in /etc/trantor/hub.env}"
 
 if ! id trantor &>/dev/null; then
   useradd -r -m -d /var/lib/trantor -s /usr/sbin/nologin trantor
@@ -14,16 +28,13 @@ install -d -o trantor -g trantor -m 750 /var/lib/trantor/data
 install -d -o trantor -g trantor -m 750 /var/lib/trantor/backups
 
 if [ ! -f /opt/trantor/hub.mjs ]; then
-  echo "copy repo to /opt/trantor first (e.g. rsync ./ netcup:/opt/trantor/), then re-run"
+  echo "copy repo to /opt/trantor first (e.g. rsync ./ server:/opt/trantor/), then re-run"
   exit 1
 fi
 chown -R trantor:trantor /opt/trantor
 
-# secrets: generate Postgres password, write to /etc/trantor/env
-# Secrets live in /etc/trantor/pg.env — the EXACT path trantor-hub.service reads via
-# EnvironmentFile. That file is prefixed `-`, so a name mismatch fails SILENTLY: the hub would boot
-# with no DATABASE_URL and no RELAY_STORE, quietly ignoring the Postgres we just provisioned.
-# It must also carry RELAY_STORE=pg — lib/store-pg.mjs is only selected when that is set.
+# Generate Postgres secrets in /etc/trantor/pg.env, the service's optional EnvironmentFile.
+# RELAY_STORE=pg selects the Postgres store; without these values the hub ignores the database.
 if [ ! -f /etc/trantor/pg.env ]; then
   PG_PASS="$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)"
   install -d -m 750 /etc/trantor
@@ -86,7 +97,7 @@ echo "0 3 * * * root /opt/trantor/deploy/retention.sh" >> /etc/cron.d/trantor
 
 echo ""
 echo "=== done ==="
-echo "Hub:      http://100.79.242.104:4477"
+echo "Hub:      http://${RELAY_HOST}:4477"
 echo "Logs:     journalctl -u trantor-hub -f"
 echo "Backups:  /var/lib/trantor/backups/"
 echo "Restore:  bash /opt/trantor/deploy/restore.sh <file>"

@@ -81,8 +81,8 @@ console.log("\n## trantor seat-why names the park");
 // ---- mock hub: one direct contract, then a second on demand -----------------------------------
 const sends = [];
 let handed = 0, knockAt = 0;
-const CONTRACT = { id: 7, from: "sasha@mac", text: "contract: work card #7914 now", ts: Date.now() };
-const KNOCK = { id: 8, from: "MacBook-Pro-M1:ttcut", text: "contract: the park is noted, take a turn on #7914 now", ts: Date.now() };
+const CONTRACT = { id: 7, from: "owner@laptop", text: "contract: work card #7914 now", ts: Date.now() };
+const KNOCK = { id: 8, from: "laptop:ttcut", text: "contract: the park is noted, take a turn on #7914 now", ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -163,9 +163,9 @@ const runner = spawn("node", ["bin/crew-runner.mjs", "codex", REPO], {
 await sleep(26000);
 const parkRec = (() => { try { return JSON.parse(read(PARKF)); } catch { return null; } })();
 const parkMsgs = sends.filter(s => /PARKED/.test(s.text || ""));
-const toAssigner = parkMsgs.filter(s => s.to === "sasha@mac");
+const toAssigner = parkMsgs.filter(s => s.to === "owner@laptop");
 const toRoom = parkMsgs.filter(s => s.to === "all");
-const toOrch = parkMsgs.filter(s => s.to && s.to !== "all" && s.to !== "sasha@mac");
+const toOrch = parkMsgs.filter(s => s.to && s.to !== "all" && s.to !== "owner@laptop");
 const rows = read(JSONL).split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return {}; } });
 const cutRows = rows.filter(r => r.cut);
 
@@ -188,7 +188,7 @@ ok("#6289: the contract is attempted exactly TWICE — the park replaces the thi
 
 console.log("\n## the notice names its evidence, on the bus");
 ok("#7914: the ASSIGNER of the held contract is told directly, not only the room",
-  toAssigner.length === 1, `${toAssigner.length} notice(s) to sasha@mac`);
+  toAssigner.length === 1, `${toAssigner.length} notice(s) to owner@laptop`);
 ok("#7914: the orchestrator gets the park as a direct alert too",
   toOrch.length >= 1, JSON.stringify(toOrch.map(s => s.to)));
 ok("#7914: the room hears it once", toRoom.length === 1, `${toRoom.length} broadcast(s)`);

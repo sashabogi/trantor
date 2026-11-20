@@ -4,7 +4,7 @@ import HubClient
 import Observation
 import TrantorCore
 
-/// `trantor://enroll?hub=http://100.79.242.104:4477&token=...`
+/// `trantor://enroll?hub=http://100.64.0.10:4477&token=...`
 public struct PairingLink: Equatable, Sendable {
     public var hub: String
     public var token: String

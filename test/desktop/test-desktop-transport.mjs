@@ -1,17 +1,11 @@
 #!/usr/bin/env node
-// The desktop app used to hand the operator reqwest's own words.
-//
-// 2026-08-25: the inbox showed "error decoding response body" in red. It reads like corrupt data and
-// is not — reqwest says that when the BODY READ is interrupted, which is what happens to any request
-// in flight when the hub restarts, i.e. on every deploy. Routine event, alarming message.
-//
-// This imports the REAL module (node strips the types), not a copy of it, because a drill that tests
-// its own transcription of the logic proves nothing.
+// Reqwest's "error decoding response body" can mean an interrupted body read during a hub restart,
+// not corrupt data. Import the real module so the drill cannot diverge from it.
 import { describeTransportFailure } from "../../desktop/src/shared/api/transport-errors.ts";
 
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
-const HUB = "http://100.79.242.104:4477";
+const HUB = "http://100.64.0.10:4477";
 
 console.log("# desktop transport errors");
 

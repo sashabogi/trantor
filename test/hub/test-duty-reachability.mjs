@@ -53,11 +53,11 @@ console.log("# duty reachability + wake-chain diagnostics");
 try {
   const owner = generate();
   await request(owner, "POST", "/enroll", { name: "owner", kind: "human", scopes: [{ project: "*", role: "owner" }] });
-  const target = await enrollAgent(owner, "MacBook-Pro-M1:projTarget", "projTarget");
+  const target = await enrollAgent(owner, "laptop:projTarget", "projTarget");
   const outsider = await enrollAgent(owner, "claude:projOther", "projOther");
-  await request(target, "POST", "/register", { session: "MacBook-Pro-M1:projTarget", project: "projTarget", status: "idle" });
+  await request(target, "POST", "/register", { session: "laptop:projTarget", project: "projTarget", status: "idle" });
   const focusResponse = await request(target, "POST", "/focus", {
-    session: "MacBook-Pro-M1:projTarget", project: "projTarget", title: "orchestrate projTarget", by: "MacBook-Pro-M1:projTarget",
+    session: "laptop:projTarget", project: "projTarget", title: "orchestrate projTarget", by: "laptop:projTarget",
   });
   const focusId = focusResponse.json.id || focusResponse.json.task?.id;
 
@@ -65,34 +65,34 @@ try {
   const duty = await enrollAgent(owner, "claude:trantor-duty", "trantor-duty");
 
   const normalBlocked = await request(outsider, "POST", "/send", {
-    from: "claude:projOther", to: "MacBook-Pro-M1:projTarget", text: "unlinked cross-project send",
+    from: "claude:projOther", to: "laptop:projTarget", text: "unlinked cross-project send",
   });
   ok("ordinary unlinked project traffic is still fenced", normalBlocked.status === 403, JSON.stringify(normalBlocked.json));
 
   const dutyRead = await request(duty, "GET", "/tasks?project=projTarget");
   ok("configured duty identity reads an unlinked project's board", dutyRead.status === 200 && dutyRead.json.tasks.some(task => task.id === focusId), JSON.stringify(dutyRead.json));
   const dutySend = await request(duty, "POST", "/send", {
-    from: "claude:trantor-duty", to: "MacBook-Pro-M1:projTarget", text: "wake-chain drill",
+    from: "claude:trantor-duty", to: "laptop:projTarget", text: "wake-chain drill",
   });
   ok("configured duty identity sends into an unlinked project", dutySend.status === 200, JSON.stringify(dutySend.json));
 
   const receiptProbe = await request(owner, "POST", "/send", {
-    from: "owner", to: "MacBook-Pro-M1:projTarget", project: "projTarget", text: "receipt probe",
+    from: "owner", to: "laptop:projTarget", project: "projTarget", text: "receipt probe",
   });
-  const inbox = await request(target, "GET", `/inbox?session=${encodeURIComponent("MacBook-Pro-M1:projTarget")}&since=${receiptProbe.json.id - 1}`);
-  const peer = await request(target, "GET", `/peer?session=${encodeURIComponent("MacBook-Pro-M1:projTarget")}`);
+  const inbox = await request(target, "GET", `/inbox?session=${encodeURIComponent("laptop:projTarget")}&since=${receiptProbe.json.id - 1}`);
+  const peer = await request(target, "GET", `/peer?session=${encodeURIComponent("laptop:projTarget")}`);
   ok("a signed relay_inbox-style read returns the target message", inbox.json.messages?.some(message => message.id === receiptProbe.json.id), JSON.stringify(inbox.json));
   ok("that non-peek inbox read advances deliveredUpTo", peer.json.deliveredUpTo >= receiptProbe.json.id, JSON.stringify(peer.json));
 
   const failure = await request(duty, "POST", "/duty/failure", {
-    recipient: "MacBook-Pro-M1:projTarget", kind: "skipped-nudge", detail: "ListAgents target was unavailable",
+    recipient: "laptop:projTarget", kind: "skipped-nudge", detail: "ListAgents target was unavailable",
   });
   ok("duty failure report resolves the target project", failure.status === 200 && failure.json.failure.project === "projTarget", JSON.stringify(failure.json));
   const targetCards = await request(target, "GET", "/tasks?project=projTarget");
   const focus = targetCards.json.tasks.find(task => task.id === focusId);
   ok("skipped nudge is appended to the target focus card", focus?.log?.some(entry => /duty seat cannot reach project projTarget: skipped socket nudge/.test(entry.text)), JSON.stringify(focus?.log));
   await request(duty, "POST", "/duty/failure", {
-    recipient: "MacBook-Pro-M1:projTarget", kind: "relay-403", detail: "cross-project link gate refused the report",
+    recipient: "laptop:projTarget", kind: "relay-403", detail: "cross-project link gate refused the report",
   });
   const after403 = await request(target, "GET", "/tasks?project=projTarget");
   const focusAfter403 = after403.json.tasks.find(task => task.id === focusId);

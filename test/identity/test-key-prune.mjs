@@ -17,7 +17,7 @@ const check = (name, condition) => { assert.ok(condition, name); passed++; conso
 const bus = process.env.AGENT_BUS_DIR;
 const guardDir = mkdtempSync(join(bus, "guard-"));
 const baseline = testIdentityFiles(guardDir);
-writeFileSync(join(guardDir, "MacBook-Pro-M1.local_crebral.json"), "{}");
+writeFileSync(join(guardDir, "laptop.local_crebral.json"), "{}");
 writeFileSync(join(guardDir, "session-813d2e56-31ac-469f-9023-036173041ace.json"), "{}");
 check("live session keys do not trip test leak guard", JSON.stringify(testIdentityFiles(guardDir)) === JSON.stringify(baseline));
 writeFileSync(join(guardDir, "host_relay-selftest-123.json"), "{}");
@@ -45,14 +45,14 @@ check("requires numbered known pattern", !isTestIdentity("relay-selftest-persona
 check("recognizes sanitized fixture prefix", isTestIdentity("livetest_relay-selftest-123"));
 check("recognizes host-qualified test names", isTestIdentity("some-host.local:hoff-selftest-123"));
 for (const family of ["defer", "supersede"]) {
-  for (const prefix of ["", "MacBook-Pro-M1:", "MacBook-Pro-M1_"]) {
+  for (const prefix of ["", "laptop:", "laptop_"]) {
     check(`recognizes handoff fixture ${prefix}${family}`, isTestIdentity(`${prefix}${family}-123`));
   }
   for (const suffix of ["", "personal", "123personal", "123-personal"]) {
-    check(`rejects handoff lookalike ${family}-${suffix}`, !isTestIdentity(`MacBook-Pro-M1:${family}-${suffix}`));
+    check(`rejects handoff lookalike ${family}-${suffix}`, !isTestIdentity(`laptop:${family}-${suffix}`));
   }
-  const fixture = mint(`MacBook-Pro-M1:${family}-123`);
-  const lookalike = mint(`MacBook-Pro-M1:${family}-personal`);
+  const fixture = mint(`laptop:${family}-123`);
+  const lookalike = mint(`laptop:${family}-personal`);
   const dryRun = pruneTestKeys({ snapshots: [snapshot], now });
   check(`dry run includes only numbered ${family} fixture`, dryRun.removed.includes(fixture.name) && !dryRun.removed.includes(lookalike.name));
   check(`dry run preserves ${family} files`, existsSync(keyPath(fixture.name)) && existsSync(keyPath(lookalike.name)));

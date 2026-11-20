@@ -58,19 +58,19 @@ describe("drillSteps — verdicts and notes", () => {
 
   it("a Pass note names the drill, the operator, the stage, the screenshot and the auto-check", () => {
     const note = noteFor({
-      verdict: "pass", me: "sasha@mac", project: "drill-20260907-2104",
+      verdict: "pass", me: "owner@laptop", project: "drill-20260907-2104",
       screenshot: "/Users/s/.agent-bus/drills/1-card-5993.png",
       autoCheck: { ok: true, why: "chip row mounted with 2 chip(s)" }, operatorNote: "",
     });
-    expect(note).toBe("drill-mode PASS by sasha@mac on drill-20260907-2104 · screenshot /Users/s/.agent-bus/drills/1-card-5993.png · auto-check ok: chip row mounted with 2 chip(s)");
+    expect(note).toBe("drill-mode PASS by owner@laptop on drill-20260907-2104 · screenshot /Users/s/.agent-bus/drills/1-card-5993.png · auto-check ok: chip row mounted with 2 chip(s)");
   });
 
   it("a Fail note carries the operator's words and says when no auto-check exists", () => {
     const note = noteFor({
-      verdict: "fail", me: "sasha@mac", project: "drill-x", screenshot: null, autoCheck: null,
+      verdict: "fail", me: "owner@laptop", project: "drill-x", screenshot: null, autoCheck: null,
       operatorNote: "  the panel opened on Files again  ",
     });
-    expect(note).toBe("drill-mode FAIL by sasha@mac on drill-x · auto-check none (human only) · the panel opened on Files again");
+    expect(note).toBe("drill-mode FAIL by owner@laptop on drill-x · auto-check none (human only) · the panel opened on Files again");
   });
 
   it("a note never exceeds the hub's 2000-char cap", () => {

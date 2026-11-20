@@ -23,7 +23,7 @@ final class AuroraScreenCaptureTests: XCTestCase {
                 chat.turns = chat.turns.filter { !$0.blocks.contains(where: \.isQuestion) }
                 hub.chatsData["trantor"] = chat
             }
-            let model = AppModel(stub: hub, identity: "ios-sasha", demo: true)
+            let model = AppModel(stub: hub, identity: "ios-user", demo: true)
             await model.refreshAll()
             XCTAssertEqual(model.standingState().wash, waiting ? .waiting : .clear)
             for tab in AppSection.tabs {

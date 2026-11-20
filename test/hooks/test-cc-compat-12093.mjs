@@ -88,10 +88,10 @@ const focusPosts = (r) => r.hits.filter(h => h.path === "/focus");
   ok("prompt-focus: /command with a trivial argument makes no card", focusPosts(r).length === 0);
 }
 {
-  const r = await runHook("prompt-focus.mjs", { hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: CWD, prompt: "/Users/sasha/app/main.ts crashes on boot, please fix it" });
+  const r = await runHook("prompt-focus.mjs", { hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: CWD, prompt: "/Users/test/app/main.ts crashes on boot, please fix it" });
   const posts = focusPosts(r);
   ok("prompt-focus: a prompt that opens with an absolute path is NOT a command",
-    posts.length === 1 && posts[0].body.title.startsWith("/Users/sasha/app/main.ts"), JSON.stringify(posts.map(p => p.body)));
+    posts.length === 1 && posts[0].body.title.startsWith("/Users/test/app/main.ts"), JSON.stringify(posts.map(p => p.body)));
 }
 {
   const r = await runHook("prompt-focus.mjs", { hook_event_name: "UserPromptSubmit", session_id: "s1", cwd: CWD, prompt: "fix the login redirect on the settings page" });

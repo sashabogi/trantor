@@ -1,12 +1,6 @@
 #!/usr/bin/env node
-// trantor hub split-brain detection drill.
-//
-// The fault: a project's crew registers on hub A while its board and orchestrator read hub B.
-// Nothing errors — every seat is green, half the work simply records where nobody looks. It cost
-// two full diagnosis sessions in crebral-health before anyone thought to compare the two hubs.
-// These drills pin the cross-check AND the trap that made the original diagnosis so slow: an
-// unsigned read of an enforce hub answers "signature required", and treating that as an empty
-// roster reports a hub full of agents as deserted.
+// Detect a crew registering on one hub while its board reads another.
+// An enforce hub's "signature required" response must not be mistaken for an empty roster.
 import http from "node:http";
 import { normalizeHub, isLocalHub, hubsFromConfig, probeHub, analyze, scan } from "../../lib/splitbrain.mjs";
 import { loadOrCreate } from "../../lib/identity.mjs";
@@ -23,7 +17,7 @@ console.log("# trantor hub split-brain drill");
 ok("a trailing slash is not a different hub", normalizeHub("http://h:4477/") === normalizeHub("http://h:4477"));
 ok("localhost and 127.0.0.1 are the same hub", normalizeHub("http://localhost:4477") === "http://127.0.0.1:4477");
 ok("loopback is recognised as local", isLocalHub("http://127.0.0.1:4477") && isLocalHub("http://localhost:4477"));
-ok("a tailnet address is not local", !isLocalHub("http://100.79.242.104:4477"));
+ok("a tailnet address is not local", !isLocalHub("http://100.64.0.10:4477"));
 
 // ---- which hubs to check --------------------------------------------------------------
 {
@@ -61,7 +55,7 @@ const ENFORCE = `http://127.0.0.1:${enforce.address().port}`;
 enforce.close();
 
 // ---- the cross-check ------------------------------------------------------------------
-const LOCAL = "http://127.0.0.1:4477", REMOTE = "http://100.79.242.104:4477";
+const LOCAL = "http://127.0.0.1:4477", REMOTE = "http://100.64.0.10:4477";
 const probe = (url, peers) => ({ url, ok: true, reason: "", authMode: "", hubVersion: "", peers });
 const live = (session, project) => ({ session, project, online: true, lastSeen: Date.now(), llm: "" });
 const stale = (session, project) => ({ session, project, online: false, lastSeen: 0, llm: "" });
@@ -69,11 +63,11 @@ const stale = (session, project) => ({ session, project, online: false, lastSeen
 { // the crebral-health case, exactly: crew local, project pinned remote
   const { findings } = analyze(
     [probe(LOCAL, [live("codex:crebral-health", "crebral-health"), live("kimi:crebral-health", "crebral-health")]),
-     probe(REMOTE, [live("MacBook-Pro-M1:crebral-health", "crebral-health")])],
+     probe(REMOTE, [live("laptop:crebral-health", "crebral-health")])],
     { url: LOCAL, hubs: { "crebral-health": REMOTE } });
   ok("a project live on two hubs at once is CRITICAL", findings.length === 1 && findings[0].kind === "split" && findings[0].severity === "critical");
   ok("...and names both hubs and the sessions on each",
-    findings[0].hubs.length === 2 && findings[0].message.includes("codex:crebral-health") && findings[0].message.includes("MacBook-Pro-M1:crebral-health"));
+    findings[0].hubs.length === 2 && findings[0].message.includes("codex:crebral-health") && findings[0].message.includes("laptop:crebral-health"));
   ok("...and the fix points at the PIN, not at whichever hub is louder", findings[0].fix.includes(REMOTE));
 }
 { // the whole crew on the wrong hub — no local half to compare against
@@ -90,7 +84,7 @@ const stale = (session, project) => ({ session, project, online: false, lastSeen
 }
 { // healthy
   const { findings, blind, checked } = analyze(
-    [probe(LOCAL, [stale("old:proj", "proj")]), probe(REMOTE, [live("MacBook-Pro-M1:proj", "proj")])],
+    [probe(LOCAL, [stale("old:proj", "proj")]), probe(REMOTE, [live("laptop:proj", "proj")])],
     { url: LOCAL, hubs: { proj: REMOTE } });
   ok("one hub per project is clean", findings.length === 0 && blind.length === 0 && checked === 2);
   ok("a DEAD peer on the other hub is not a split", findings.length === 0);
@@ -104,7 +98,7 @@ const stale = (session, project) => ({ session, project, online: false, lastSeen
     blind.length === 1 && blind[0].url === REMOTE);
 }
 { // a project with no pin living on the local hub is the normal, quiet case
-  const { findings } = analyze([probe(LOCAL, [live("MacBook-Pro-M1:newproj", "newproj")])], { url: LOCAL, hubs: {} });
+  const { findings } = analyze([probe(LOCAL, [live("laptop:newproj", "newproj")])], { url: LOCAL, hubs: {} });
   ok("a brand-new local-only project is not nagged about", findings.length === 0);
 }
 

@@ -25,7 +25,7 @@ console.log("# trantor liveness-box drill (#7761)");
 const sends = [];
 let eventSeq = 0;
 let handed = 0;
-const MSG = { id: 7, from: "sasha@mac", to: "", text: "contract: build card #7001 now", ts: Date.now() };
+const MSG = { id: 7, from: "owner@laptop", to: "", text: "contract: build card #7001 now", ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -109,9 +109,9 @@ console.log("\n## a turn that keeps moving is extended and completes");
     r.row && r.row.extensions >= 1 && r.row.boxMs === BOX_MS + r.row.extensions * STEP_MS,
     JSON.stringify(r.row && { extensions: r.row.extensions, boxMs: r.row.boxMs }));
   ok("#7761: the assigner heard each extension, as context (wake:false), never as a turn",
-    r.extended.some(s => s.to === "sasha@mac" && s.wake === false && s.kind === "status")
-    && r.extended.filter(s => s.to === "sasha@mac").length === r.row?.extensions,
-    `${r.extended.filter(s => s.to === "sasha@mac").length} notice(s) vs ${r.row?.extensions} extension(s)`);
+    r.extended.some(s => s.to === "owner@laptop" && s.wake === false && s.kind === "status")
+    && r.extended.filter(s => s.to === "owner@laptop").length === r.row?.extensions,
+    `${r.extended.filter(s => s.to === "owner@laptop").length} notice(s) vs ${r.row?.extensions} extension(s)`);
   ok("#7761: the notice names what was alive and the box against the ceiling",
     r.extended.some(s => /alive: worktree/.test(s.text || "") && /of a 20s ceiling/.test(s.text || "")),
     r.extended[0] && r.extended[0].text);
@@ -120,7 +120,7 @@ console.log("\n## a turn that keeps moving is extended and completes");
   ok("#7761: no notice ever carries `re` — an extension is not the contract's answer",
     r.extended.every(s => s.re === undefined));
   ok("#7761: the assigner heard done, never a cut or a stall",
-    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
+    r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || ""))
     && !r.sends.some(s => /STALLED|PARKED/.test(s.text || "")));
 }
 
@@ -135,7 +135,7 @@ console.log("\n## a turn that goes silent still ends at the stall window");
     r.row && r.row.extensions === 1 && r.row.duration_ms < BOX_MS + STEP_MS,
     JSON.stringify(r.row && { extensions: r.row.extensions, duration: r.row.duration_ms }));
   ok("#7761: exactly one extension notice reached the assigner",
-    r.extended.filter(s => s.to === "sasha@mac").length === 1);
+    r.extended.filter(s => s.to === "owner@laptop").length === 1);
   ok("#7761: the stall report still went to the foreman",
     r.sends.some(s => s.to === "drillhost:tt-ext-quiet" && /turn STALLED/.test(s.text || "")));
 }
@@ -154,7 +154,7 @@ console.log("\n## the ceiling is respected");
     r.row && r.row.duration_ms >= CEILING_MS - 1500 && r.row.duration_ms < CEILING_MS + 4000,
     `duration ${r.row && r.row.duration_ms}ms`);
   ok(`#7761: the assigner heard exactly ${EXT_MAX} extension notices, the last one saying ${EXT_MAX}/${EXT_MAX}`,
-    r.extended.filter(s => s.to === "sasha@mac").length === EXT_MAX
+    r.extended.filter(s => s.to === "owner@laptop").length === EXT_MAX
     && r.extended.some(s => new RegExp(`\\(${EXT_MAX}/${EXT_MAX}\\)`).test(s.text || "")),
     r.extended.map(s => s.text?.slice(0, 60)).join(" | "));
   ok("#7099: the ceiling cut's exit is the sweep's own signal, ledgered as cutSignal",

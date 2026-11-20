@@ -23,7 +23,7 @@ let served = 0, serveMsg = true;
 // The fixture cites a card and gives an instruction ON PURPOSE: since #6134 a direct message
 // with neither batches into the next turn's context instead of waking the seat, which is
 // exactly right for an ack and exactly wrong for the escalation this drill is about.
-const MSG = { id: 7, from: "sasha@mac", to: "", text: "ESCALATION #4242: prod is down, fix it now", ts: Date.now() };
+const MSG = { id: 7, from: "owner@laptop", to: "", text: "ESCALATION #4242: prod is down, fix it now", ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -131,7 +131,7 @@ exit 0
 {
   const r = await drill({ failTurns: 0, noMsg: true, waitMs: 6000,
     seedPending: { agent: "codex", project: "tt-redeliver", ts: Date.now(),
-      wake: [{ from: "sasha@mac", to: "codex:tt-redeliver", text: "ESCALATION #4242: prod is down, fix it now" }], bcast: [] } });
+      wake: [{ from: "owner@laptop", to: "codex:tt-redeliver", text: "ESCALATION #4242: prod is down, fix it now" }], bcast: [] } });
   ok("a message left over from a killed runner is redelivered on the next boot",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length}`);
   ok("the restored message is the one that was owed",
@@ -154,7 +154,7 @@ exit 0
     parks.length === 1 && /api-error/.test(parks[0].text || ""), parks[0] && String(parks[0].text).slice(0, 140));
   ok("#6289: the queue survives the park (a restart resumes it)", r.pendingLeft);
   ok("#6289: the assigner hears PARKED once, not a retry notice per attempt",
-    r.sends.filter(s => /PARKED/.test(s.text || "") && s.to === "sasha@mac").length === 1);
+    r.sends.filter(s => /PARKED/.test(s.text || "") && s.to === "owner@laptop").length === 1);
   const retryNotices = r.sends.filter(s => /retrying in/.test(s.text || ""));
   ok("#6289: only the FIRST failure schedules a retry — the second parks instead",
     retryNotices.length === 1, `${retryNotices.length} retry notice(s)`);

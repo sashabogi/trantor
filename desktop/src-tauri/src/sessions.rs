@@ -1007,7 +1007,7 @@ mod tests {
         // No messages array: title and preview come from the store fields, and the preview's
         // injection check runs with the LAST ROW'S REAL ROLE, on the normalized text.
         let value: Value = serde_json::from_str(
-            r#"{"id":"ses_store","directory":"/tmp","title":"x","first_user":"\"You just joined (your arrival was already announced on the bus). 1) relay_inbox\"","last_message":"\"NEW BUS MESSAGE for you: [MacBook-Pro-M1:trantor] — hold.\"","last_role":"user","message_count":2,"model":"","updated_at":1}"#,
+            r#"{"id":"ses_store","directory":"/tmp","title":"x","first_user":"\"You just joined (your arrival was already announced on the bus). 1) relay_inbox\"","last_message":"\"NEW BUS MESSAGE for you: [laptop:trantor] — hold.\"","last_role":"user","message_count":2,"model":"","updated_at":1}"#,
         )
         .unwrap();
         let record = open_code_row(&value).unwrap();

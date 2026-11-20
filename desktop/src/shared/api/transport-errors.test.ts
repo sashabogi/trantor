@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 import { describeTransportFailure } from "./transport-errors";
 
-const HUB = "http://100.79.242.104:4477";
+const HUB = "http://100.64.0.10:4477";
 
 describe("describeTransportFailure", () => {
   it("the restart case says what happened, in words", () => {

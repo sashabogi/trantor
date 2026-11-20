@@ -202,7 +202,7 @@ identity collision, needs no further product decisions, and everything else depe
 - **Delta persistence + LISTEN/NOTIFY** — the hub writes only diffs and reloads on foreign writes;
   a second writer (importer, another hub) surfaces live. Was the pre-Julian blocker.
 - **Brand identity everywhere** — real LLM marks (LobeHub set), LLM-first display names
-  ("claude · MacBook-Pro-M1"), model chips in chat/roster/agents.
+  ("claude · laptop"), model chips in chat/roster/agents.
 
 ### Still open, per this PRD
 - **§5.5 Overseer** — NOT built; its dependency gate (delivery + mechanical detection) is now open.

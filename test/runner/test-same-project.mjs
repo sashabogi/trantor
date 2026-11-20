@@ -48,7 +48,7 @@ console.log("# same-project episode rule tests (#5760)");
 // 5. CREW-ONLY SET — the operator's declared crew is the NORMAL state, not a collision: never
 // fires, not even on first sighting.
 {
-  const d = sameProjectDecision({ previous: null, current: ["glm:alpha", "codex:alpha", "MacBook-Pro-M1:alpha"], declaredCrew: ["glm:alpha", "codex:alpha", "MacBook-Pro-M1:alpha"], lastFiredAt: null, now: NOW });
+  const d = sameProjectDecision({ previous: null, current: ["glm:alpha", "codex:alpha", "laptop:alpha"], declaredCrew: ["glm:alpha", "codex:alpha", "laptop:alpha"], lastFiredAt: null, now: NOW });
   ok(d.fire === false && d.reason === "crew-only", "a declared crew alone never warns");
 }
 

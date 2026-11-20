@@ -631,7 +631,7 @@ const REAL_ASK_TURNS = [
     role: "assistant",
     blocks: [{
       kind: "tool",
-      text: "cd /Users/sashabogojevic/development/trantor; date '+now %H:%M' ...",
+      text: "cd /Users/test/development/trantor; date '+now %H:%M' ...",
       tool: "Bash",
       tool_id: "toolu_01DuwZ2wGQ6Lx65R5PfKVVZw",
     }],

@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-// card #5683 — the crew-runner turn payload is capped.
-//
-// A fresh codex seat burned 306k tokens and crash-looped into a remote-compact 404: every turn of
-// a resumed session re-fed the full lessons block (22,298 of 24,698 chars in the real turn file)
-// plus an unbounded FYI-broadcast backlog, redelivery after redelivery. These drills pin the
-// builder: per-section caps, relevance-ranked lessons, ONE hard total cap with a visible notice,
-// and byte-identical output to the old concatenation for small payloads.
+// card #5683 — cap lessons and broadcast backlog under one visible total limit,
+// while preserving byte-identical output for small payloads.
 import { PAYLOAD_CAPS, capWake, capBcast, pickLessons, composePrompt } from "../../bin/crew-payload.mjs";
 
 let pass = 0, fail = 0;
@@ -15,7 +10,7 @@ console.log("# crew-runner payload caps (#5683)");
 
 // ---- small-payload identity: the composed wake prompt must equal the legacy concatenation ----
 {
-  const wake = [{ from: "MacBook-Pro-M1:trantor", to: "opencode:trantor", text: "CONTRACT card #5683 — do the thing" }];
+  const wake = [{ from: "laptop:trantor", to: "opencode:trantor", text: "CONTRACT card #5683 — do the thing" }];
   const bcast = [{ from: "kimi:trantor", text: "turn failed, retrying" }];
   const rules = "Rules: you are the seat. End your turn when done.";
   const lessons = [

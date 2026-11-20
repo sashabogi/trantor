@@ -53,7 +53,7 @@ const sends = [];
 const events = [];
 let eventSeq = 0;
 let handed = 0;
-const MSG = { id: 7, from: "sasha@mac", to: "", text: "contract: work card #7001 now", ts: Date.now() };
+const MSG = { id: 7, from: "owner@laptop", to: "", text: "contract: work card #7001 now", ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -114,7 +114,7 @@ if grep -q "NEW BUS MESSAGE" "$P"; then
     echo "the contract is satisfied and the card can move to testing with the counts attached."
   fi
   if [ "${mode}" = "reply" ]; then
-    node -e "fetch(process.env.RELAY_URL + '/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: 'codex:${PROJ}', to: 'sasha@mac', project: '${PROJ}', text: 'Replied on the bus.' }) }).catch(() => {})"
+    node -e "fetch(process.env.RELAY_URL + '/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: 'codex:${PROJ}', to: 'owner@laptop', project: '${PROJ}', text: 'Replied on the bus.' }) }).catch(() => {})"
     echo "Replied on the bus."
   fi
 fi
@@ -154,14 +154,14 @@ console.log("\n## a banner is not work");
   ok("#7759: the hub handed the message out ONCE — the second attempt is the runner's own queue",
     r.handed === 1, `handed ${r.handed}`);
   ok("#7759: attempt 2 is labelled a REDELIVERY", r.wakeTurns.filter(t => t.includes("REDELIVERY")).length === 1);
-  const emptyNotices = r.sends.filter(s => s.to === "sasha@mac" && /EMPTY turn/.test(s.text || ""));
+  const emptyNotices = r.sends.filter(s => s.to === "owner@laptop" && /EMPTY turn/.test(s.text || ""));
   ok("#7759: the assigner is told the turn was EMPTY, once",
     emptyNotices.length === 1, `${emptyNotices.length} notice(s)`);
   ok("#7759: the EMPTY notice names both signals (worktree, output)",
     emptyNotices.length === 1 && /no worktree change/.test(emptyNotices[0].text || "")
     && /no substantive output/.test(emptyNotices[0].text || ""), emptyNotices[0] && String(emptyNotices[0].text).slice(0, 160));
   ok("#7759: no done receipt went out for a hollow turn",
-    !r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || "")));
+    !r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || "")));
   ok("#7759: the wake is NOT consumed — the queue file survives the park", r.pendingLeft);
   const parks = r.sends.filter(s => s.to === "all" && /PARKED/.test(s.text || ""));
   ok("#7759: the second hollow attempt PARKS the seat, announced once, naming empty-turn",
@@ -180,7 +180,7 @@ console.log("\n## a changed worktree is work");
   const r = await drill("edit");
   ok("#7759: a turn that writes a file completes and consumes the wake",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
-  ok("#7759: the assigner hears done", r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || "")));
+  ok("#7759: the assigner hears done", r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || "")));
   ok("#7759: no EMPTY notice for a working turn", !r.sends.some(s => /EMPTY turn/.test(s.text || "")));
   ok("#7759: the queue is cleared once the turn did work", !r.pendingLeft);
   const row = r.rows.find(x => x.trigger === "direct message");
@@ -194,7 +194,7 @@ console.log("\n## a substantive answer is work");
   const r = await drill("answer");
   ok("#7759: a turn that answers past the chrome floor completes and consumes the wake",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
-  ok("#7759: the assigner hears done", r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || "")));
+  ok("#7759: the assigner hears done", r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || "")));
   ok("#7759: the queue is cleared", !r.pendingLeft);
   ok("#7759: no park happened", !r.sends.some(s => /PARKED/.test(s.text || "")));
 }
@@ -206,8 +206,8 @@ console.log("\n## bus activity is work");
   ok("#7759: a turn that answered via relay_send completes and consumes the wake, however terse",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
   ok("#7759: the assigner hears done, not EMPTY",
-    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
-    && !r.sends.some(s => s.to === "sasha@mac" && /EMPTY turn/.test(s.text || "")));
+    r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || ""))
+    && !r.sends.some(s => s.to === "owner@laptop" && /EMPTY turn/.test(s.text || "")));
   ok("#7759: the queue is cleared", !r.pendingLeft);
   ok("#7759: no park happened", !r.sends.some(s => /PARKED/.test(s.text || "")));
   const row = r.rows.find(x => x.trigger === "direct message");

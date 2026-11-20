@@ -5,8 +5,8 @@ import TrantorCore
 
 @MainActor
 final class HubSwitchTests: XCTestCase {
-    private let tailnet = "http://100.79.242.104:4477"
-    private let publicURL = URL(string: "https://netcup-qdrant.tail0f2afd.ts.net")!
+    private let tailnet = "http://100.64.0.10:4477"
+    private let publicURL = URL(string: "https://hub.example")!
 
     /// A SettingsStore paired against `hub`; records every URL a client is built against.
     private func pair(hub: StubHub, address: String, bound: Locked<[URL]>, defaults: UserDefaults) async -> SettingsStore {
@@ -38,7 +38,7 @@ final class HubSwitchTests: XCTestCase {
 
     func testPublicHubURLOnlyForTailnetPairingsThatAdvertiseOne() async {
         let hub = StubHub()
-        hub.healthData = HealthInfo(ok: true, publicUrl: "https://netcup-qdrant.tail0f2afd.ts.net")
+        hub.healthData = HealthInfo(ok: true, publicUrl: "https://hub.example")
         let bound = Locked<[URL]>([])
         let settings = await pair(hub: hub, address: tailnet, bound: bound, defaults: freshDefaults())
         let model = AppModel(settings: settings, cache: StoreCache(directory: nil))
@@ -46,7 +46,7 @@ final class HubSwitchTests: XCTestCase {
         XCTAssertEqual(offer, publicURL)
 
         // Already on a public (https) hub: nothing to offer.
-        let httpsSettings = await pair(hub: hub, address: "https://netcup-qdrant.tail0f2afd.ts.net",
+        let httpsSettings = await pair(hub: hub, address: "https://hub.example",
                                        bound: bound, defaults: freshDefaults())
         let httpsModel = AppModel(settings: httpsSettings, cache: StoreCache(directory: nil))
         let httpsOffer = await httpsModel.publicHubURL()

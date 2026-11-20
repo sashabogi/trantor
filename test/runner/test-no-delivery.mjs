@@ -35,7 +35,7 @@ let cardFail = false;
 let followup = false;
 let blockedFollowup = false;
 const cards = new Map([[CARD, { id: CARD, status: "todo" }]]);
-const MSG = { id: 7, from: "sasha@mac", to: "", text: `contract: work card #${CARD} — run the tests and gate output`, ts: Date.now() };
+const MSG = { id: 7, from: "owner@laptop", to: "", text: `contract: work card #${CARD} — run the tests and gate output`, ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -65,7 +65,7 @@ const hub = http.createServer((req, res) => {
     }
     if (P === "/events") {
       const since = Number(u.searchParams.get("since") || 0);
-      return reply({ events: eventSeq > since ? [{ id: eventSeq, ts: Date.now(), type: "message", project: "", by: "sasha@mac" }] : [], cursor: eventSeq, latest: eventSeq });
+      return reply({ events: eventSeq > since ? [{ id: eventSeq, ts: Date.now(), type: "message", project: "", by: "owner@laptop" }] : [], cursor: eventSeq, latest: eventSeq });
     }
     if (P === "/contracts") return reply({ contracts: [] });
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
@@ -173,11 +173,11 @@ console.log("\n## the ibkr shape is no-delivery");
     r.wakeTurns.length === 2, `got ${r.wakeTurns.length} wake turn(s)`);
   ok("#10197: the hub handed the message out ONCE — the second attempt is the runner's own queue",
     r.handed === 1, `handed ${r.handed}`);
-  const warns = r.sends.filter(s => s.to === "sasha@mac" && /⚠ no commit, card #10491 still todo/.test(s.text || ""));
+  const warns = r.sends.filter(s => s.to === "owner@laptop" && /⚠ no commit, card #10491 still todo/.test(s.text || ""));
   ok("#10197: the assigner hears '⚠ no commit, card #10491 still todo', once",
     warns.length === 1, `${warns.length} notice(s): ${warns.map(s => String(s.text).slice(0, 120)).join(" | ")}`);
   ok("#10197: no done receipt went out for a no-delivery turn",
-    !r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || "")));
+    !r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || "")));
   ok("#10197: the wake is NOT consumed — the queue file survives the park", r.pendingLeft);
   const parks = r.sends.filter(s => s.to === "all" && /PARKED/.test(s.text || ""));
   ok("#10197: the second no-delivery attempt PARKS the seat, naming no-delivery",
@@ -213,7 +213,7 @@ console.log("\n## a new commit is delivery");
   const r = await drill("commit");
   ok("#10197: a turn that ships a commit completes and consumes the wake",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
-  ok("#10197: the assigner hears done", r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || "")));
+  ok("#10197: the assigner hears done", r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || "")));
   ok("#10197: no no-delivery notice for a committing turn",
     !r.sends.some(s => /no commit, card/.test(s.text || "")));
   ok("#10197: the queue is cleared once the turn delivered", !r.pendingLeft);
@@ -229,7 +229,7 @@ console.log("\n## a card move is delivery");
   ok("#10197: a turn that moves its card to testing completes and consumes the wake",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
   ok("#10197: the assigner hears done, not no-delivery",
-    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
+    r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || ""))
     && !r.sends.some(s => /no commit, card/.test(s.text || "")));
   ok("#10197: the queue is cleared", !r.pendingLeft);
   const row = r.rows.find(x => x.trigger === "direct message");
@@ -241,7 +241,7 @@ console.log("\n## a failed hub read stands down");
 {
   const r = await drill("ibkr", { failCard: true });
   ok("#10197: with /card failing the turn still reads done — never no-delivery on a dead read",
-    r.wakeTurns.length === 1 && r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || "")),
+    r.wakeTurns.length === 1 && r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || "")),
     `wakeTurns ${r.wakeTurns.length}`);
   ok("#10197: no no-delivery notice went out on a dead read",
     !r.sends.some(s => /no commit, card/.test(s.text || "")));
@@ -275,7 +275,7 @@ console.log("\n## #11551: a runner persona differing from the agent label delive
   ok("#11551: codex-2 running codex commits and moves its card with a single wake turn",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
   ok("#11551: the assigner hears done, never 'no commit, card'",
-    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
+    r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || ""))
     && !r.sends.some(s => /no commit, card|PARKED/.test(s.text || "")));
   ok("#11551: the wake is consumed", !r.pendingLeft);
   const row = r.rows.find(x => x.trigger === "direct message");
@@ -289,7 +289,7 @@ console.log("\n## #11551: a redelivered contract on an already-delivered card is
   ok("#11551: the card was at testing BEFORE the turn and the turn shipped nothing new",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
   ok("#11551: the turn reads completed, not no-delivery",
-    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
+    r.sends.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || ""))
     && !r.sends.some(s => /no commit, card/.test(s.text || "")));
   ok("#11551: no park follows for already-shipped work", !r.sends.some(s => /PARKED/.test(s.text || "")));
   ok("#11551: the queue is cleared — the redelivery consumed the wake", !r.pendingLeft);

@@ -13,15 +13,15 @@ describe("genesisFlow", () => {
 
   it("offers adopt when the CLI reports a non-empty existing directory", () => {
     const creating = genesisReducer(GENESIS_IDLE, { type: "submit" });
-    const message = 'trantor new: "/Users/sasha/development/pr-os" already exists and is not empty — pass --adopt to adopt it';
+    const message = 'trantor new: "/Users/test/development/pr-os" already exists and is not empty — pass --adopt to adopt it';
     expect(isExistsNotEmptyError(message)).toBe(true);
     const exists = genesisReducer(creating, {
       type: "createExists",
-      parent: "/Users/sasha/development",
+      parent: "/Users/test/development",
       name: "pr-os",
       message,
     });
-    expect(exists).toEqual({ status: "exists", parent: "/Users/sasha/development", name: "pr-os", message });
+    expect(exists).toEqual({ status: "exists", parent: "/Users/test/development", name: "pr-os", message });
     // no toast for this one — the sheet itself carries the adopt offer
     expect(toastForTransition(creating, exists)).toBeNull();
   });

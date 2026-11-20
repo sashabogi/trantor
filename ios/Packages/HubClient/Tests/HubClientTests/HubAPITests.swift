@@ -47,7 +47,7 @@ final class HubAPITests: XCTestCase {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.protocolClasses = [StubURLProtocol.self]
         signer = try Signer(rawPrivateKey: Data((0..<32).map { UInt8($0) }))
-        api = HubAPI(baseURL: URL(string: "http://100.79.242.104:4477")!, signer: signer, session: URLSession(configuration: cfg))
+        api = HubAPI(baseURL: URL(string: "http://100.64.0.10:4477")!, signer: signer, session: URLSession(configuration: cfg))
     }
 
     func testDeviceRegistrationAndUnregistrationSignTheJSONBody() async throws {
