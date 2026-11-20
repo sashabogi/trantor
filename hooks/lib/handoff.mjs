@@ -14,6 +14,9 @@ import { signedPost, loadIdentity } from "./api.mjs";
 import { signedHeaders } from "../../lib/signed-fetch.mjs";
 import { loadAutonomy, resolveAutonomy } from "../../lib/autonomy.mjs";
 import { resolveProject, orchSessionsPath, hostId } from "../../lib/project.mjs";
+// #13875: the ONE slug for ~/.claude/projects/<slug>/memory — Claude Code replaces every
+// non-alphanumeric character, and memoryDirectory is the copy of that rule this repo shares.
+import { memoryDirectory } from "../../lib/memory-pins.mjs";
 // Trantor State (TDD §4.5). Dark behind TRANTOR_STATE_HANDOFF: these are imported unconditionally
 // because they are pure modules with no side effects at load, and a lazy import would make
 // attachState async on a path that is deliberately synchronous.
@@ -860,13 +863,13 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
   } catch (e) { process.stderr.write(`[trantor] maybeSpawn error: ${e?.message}\n`); return false; }
 }
 
-/** #8232: the one read-first path knowable WITHOUT the model — the project's own memory index, at
- *  the encoded-cwd location Claude Code keeps it (the same resolver bin/reconcile.mjs reads).
- *  "" when the project has none: naming a file that does not exist would arm a gate no successor
- *  could ever satisfy, and the stamp would nag at every Stop forever. */
+/** #8232: the one read-first path knowable WITHOUT the model — the project's own memory index.
+ *  #13875: resolved via memoryDirectory's shared slug — every non-alphanumeric becomes "-", so a
+ *  DOTTED path lands in the folder Claude Code loads; the old slash-only rule found no index
+ *  there and quietly disarmed the gate. "" when the project has none. */
 export function memoryIndexPath(projectDir) {
   try {
-    const p = join(homedir(), ".claude", "projects", String(projectDir || "").replaceAll("/", "-"), "memory", "MEMORY.md");
+    const p = join(memoryDirectory(projectDir || ""), "MEMORY.md");
     return existsSync(p) ? p : "";
   } catch { return ""; }
 }
