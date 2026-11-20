@@ -18,6 +18,7 @@ import { orchWriterSid } from "../../lib/project.mjs";
 import { freshEngaged, originalStillWorking } from "../../bin/baton-close.mjs";
 import { takeoverSessionId, supersededHandoff, HANDOFF_SUPERSEDE_GRACE_SECS } from "../../bin/crew/open.mjs";
 import { resolveOrchestratorDir } from "../../bin/crew/worktrees.mjs";
+import { memoryDirectory } from "../../lib/memory-pins.mjs";
 import { drillEnv } from "../drill-env.mjs";
 
 let pass = 0, fail = 0;
@@ -662,7 +663,10 @@ rmSync(projDir, { recursive: true, force: true });
   // Hermetic HOME (#8263): the memory index the read-first floor appends is CREATED here, never
   // borrowed from the operator's disk — a fixture may read a live artifact, never depend on one.
   const home2 = join(tmpdir(), "manual-home-" + process.pid);
-  const memDir = join(home2, ".claude", "projects", wp2Dir.replaceAll("/", "-"), "memory");
+  // #13875: the index lives where memoryDirectory slugs it (every non-alphanumeric → "-"). The
+  // slash-only rule this fixture used missed this tmpdir's dotted ".agent-bus-out" segment, so the
+  // floor found no index and disarmed — exactly what the seat tmpdir makes the shared rule catch.
+  const memDir = memoryDirectory(wp2Dir, join(home2, ".claude"));
   mkdirSync(memDir, { recursive: true });
   const memIdx = join(memDir, "MEMORY.md");
   writeFileSync(memIdx, "# memory index fixture\n");
