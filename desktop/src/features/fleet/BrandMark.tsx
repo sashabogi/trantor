@@ -2,9 +2,15 @@
 // the monogram circle when no mark is vendored. Extracted from BalanceStrip so the Usage
 // popover's roster rows and drill-in share the exact same rendering as the footer chips —
 // one mark, three surfaces, no drift.
-import { BRAND_PATHS } from "./brands";
+import { BRAND_PATHS, BRAND_SVGS } from "./brands";
 
 export function BrandMark({ icon, mono, hue, fg }: { icon: string | null; mono: string; hue: string; fg: string }) {
+  const full = icon ? BRAND_SVGS[icon] : undefined;
+  if (full) {
+    // Vendored, bundled SVG (no user input), sized by its 1em width.
+    return <span className="inline-flex shrink-0" style={{ fontSize: 13, lineHeight: 0 }} aria-hidden
+      dangerouslySetInnerHTML={{ __html: full }} />;
+  }
   const d = icon ? BRAND_PATHS[icon] : undefined;
   if (d) {
     return (

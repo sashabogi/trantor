@@ -21,7 +21,7 @@ type Brand = { svg: string; hex: string; label: string };
 const BRANDS = {
   claude:     { svg: claudeSvg, hex: "#D97757", label: "Claude" },
   anthropic:  { svg: claudeSvg, hex: "#D97757", label: "Claude" },
-  codex:      { svg: codexSvg, hex: "#e8e8ee", label: "Codex" },
+  codex:      { svg: codexSvg, hex: "#7A9DFF", label: "Codex" },
   opencode:   { svg: opencodeSvg, hex: "#e8e8ee", label: "OpenCode" },
   openai:     { svg: openaiSvg, hex: "#e8e8ee", label: "OpenAI" },
   deepseek:   { svg: deepseekSvg, hex: "#5786FE", label: "DeepSeek" },
