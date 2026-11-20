@@ -43,7 +43,7 @@ function ageTree(root, t) {
 
 // Canned exec: answers by command shape. `dirty` maps worktree path -> porcelain output;
 // `tracked` maps rel path -> ls-files output; `psLines` is the ps snapshot.
-function makeExec({ dirty = {}, tracked = {}, psLines = [], cwdDirs = [] } = {}) {
+function makeExec({ dirty = {}, statusFailures = [], tracked = {}, psLines = [], cwdDirs = [] } = {}) {
   const calls = [];
   const exec = (file, args) => {
     calls.push([file, args]);
@@ -52,6 +52,7 @@ function makeExec({ dirty = {}, tracked = {}, psLines = [], cwdDirs = [] } = {})
     if (file === "ps") return { stdout: psLines.join("\n"), status: 0 };
     if (file === "git" && a.includes("status --porcelain")) {
       const cwd = args[args.indexOf("-C") + 1];
+      if (statusFailures.includes(cwd)) return { stdout: "", stderr: "not a git worktree", status: 1 };
       return { stdout: dirty[cwd] || "", status: 0 };
     }
     if (file === "git" && a.includes("ls-files")) {
@@ -72,10 +73,11 @@ try {
   // every must-stay-fresh tree is explicitly stamped with NOW (as test-disk.mjs does).
   const idle = wt("proj", "idle-clean");       // 8d old, clean, dead → PRUNE
   const dirty = wt("proj", "dirty");           // 8d old, uncommitted changes → KEPT, NAMED
+  const statusUnknown = wt("proj", "status-unknown"); // old, but git status failed → KEPT
   const fresh = wt("proj", "fresh");           // touched now → KEPT
   const live = wt("proj", "live");             // a live process names its path → KEPT
   const stamped = wt("proj", "stamped");       // crew row alone → KEPT
-  for (const w of [idle, dirty, fresh, live, stamped]) {
+  for (const w of [idle, dirty, statusUnknown, fresh, live, stamped]) {
     mkdirSync(join(w, "src"), { recursive: true });
     writeFileSync(join(w, "src", "a.js"), "x".repeat(2048));
   }
@@ -100,6 +102,7 @@ try {
   const { exec } = makeExec({
     psLines: [`100 1 node /fixture/crew-runner.mjs live ${live}`, "101 100 worker"],
     dirty: { [dirty]: " M src/a.js" },
+    statusFailures: [statusUnknown],
     tracked: { [join(".agent-bus-out", "vendored", "target")]: "some/file" },
   });
 
@@ -114,6 +117,9 @@ try {
   const keptReasons = Object.fromEntries(stale.kept.map((k) => [k.path, k.reason]));
   ok("a worktree with uncommitted changes is kept", !!keptReasons[dirty]);
   ok("the kept dirty worktree is NAMED with its reason", (keptReasons[dirty] || "").includes("uncommitted changes"), keptReasons[dirty]);
+  ok("a failed git status keeps the whole worktree out of the prune plan",
+    !planned.includes(statusUnknown) && (keptReasons[statusUnknown] || "").includes("could not determine git status"),
+    JSON.stringify({ planned, kept: keptReasons[statusUnknown] }));
   ok("a freshly touched worktree is kept", !!keptReasons[fresh], JSON.stringify(Object.keys(keptReasons)));
   ok("a worktree a live process uses is kept", !!keptReasons[live]);
   ok("a freshly touched worktree is kept by the age rule", (keptReasons[stamped] || "").includes("touched within 7 days"), keptReasons[stamped]);
