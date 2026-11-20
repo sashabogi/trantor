@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { seatProcesses, signalProcesses } from "./processes.mjs";
 import { call, listPids, run } from "./core.mjs";
 import { hostId } from "../../lib/project.mjs";
@@ -126,7 +127,15 @@ function closeTmux(ctx, row, perSeat, seen) {
 
 async function unregisterSeat(ctx, project, persona) {
   const path = project === ctx.project ? `${ctx.hub}/unregister` : "/unregister";
-  const response = await signedPost(path, { session: `${persona}:${project}`, project }, { project });
+  let ownerIdentity = "";
+  try {
+    const configPath = join(ctx.env?.AGENT_BUS_DIR || process.env.AGENT_BUS_DIR || join(ctx.home || homedir(), ".agent-bus"), "config.json");
+    ownerIdentity = JSON.parse(readFileSync(configPath, "utf8")).ownerIdentity || "";
+  } catch {}
+  const response = await signedPost(path, { session: `${persona}:${project}`, project }, {
+    project,
+    ...(ownerIdentity ? { session: ownerIdentity } : { session: `${persona}:${project}` }),
+  });
   if (!response.ok || !response.json?.ok) throw new Error(response.json?.error || response.reason || `hub HTTP ${response.status}`);
   return response.json;
 }
