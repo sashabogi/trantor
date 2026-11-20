@@ -9,6 +9,8 @@ import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { draftForget, draftLoad, draftPersist, fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBody } from "./fileApi";
 import { CodeView } from "./CodeView";
 import { ChangesView } from "./ChangesView";
+import { RemoteDoc } from "./RemoteDoc";
+import { useMachineSshTargets, useOwnMachineId, useSeatMachine } from "./remoteScope";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, GRAPH_PATH, markDirty, markExternalMutation, openGraphTab, openInTabs, tabLabel, togglePin, type CodeTab, type TabView } from "./codeTabs";
 import { GraphView } from "./GraphView";
@@ -81,6 +83,17 @@ export function Files({ client, project, lens, onLens, path, seat, graphOrigin =
   const activePath = activeTab?.path ?? null;
   const activeScope = activeTab?.scope ?? "project";
   const activeView = activeTab?.view ?? "code";
+
+  // #13938 — a seat on another machine has no worktree here: the lens reads it over ssh and
+  // every file opens READ-ONLY (RemoteDoc), never in the editable tab machinery. The machine
+  // labels resolve async; until they do the lens behaves as it always did locally, and a race
+  // that fires one doomed local read only ever shows as a cleared error.
+  const seatMachine = useSeatMachine(client, project, seat);
+  const ownMachine = useOwnMachineId();
+  const remoteCandidate = !!(seat && seatMachine && ownMachine && seatMachine !== ownMachine);
+  const sshByMachine = useMachineSshTargets(remoteCandidate && seatMachine ? [seatMachine] : []);
+  const isRemote = !!(remoteCandidate && seatMachine && sshByMachine.get(seatMachine));
+  const [remotePath, setRemotePath] = useState<string | null>(null);
 
   // The disk stat we last acted on, and whether the editor holds unsaved work. Both live in refs
   // so the poll reads the CURRENT values without tearing the interval down every render.
@@ -214,13 +227,21 @@ export function Files({ client, project, lens, onLens, path, seat, graphOrigin =
   };
 
   // The Files column (AppShell) opens paths from the tree: a preview open under this scope.
-  // GRAPH_PATH is the ModePane footer's graph chip, not a file.
+  // GRAPH_PATH is the ModePane footer's graph chip, not a file. A REMOTE scope (#13938) never
+  // enters the tab machinery at all: the path becomes RemoteDoc's read-only subject, and the
+  // graph chip — a local lens — stands down.
   useEffect(() => {
-    if (!path) return;
+    if (!path) { setRemotePath(null); return; }
+    if (isRemote) {
+      setError(null);
+      setRemotePath(path === GRAPH_PATH ? null : path);
+      return;
+    }
+    setRemotePath(null);
     if (path === GRAPH_PATH) openGraph(seat ?? "project");
     else openPath(seat ?? "project", path, "code");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, seat]);
+  }, [path, seat, isRemote]);
 
   // Load the active tab's documents. body/head reset per tab; the draft survives in the store.
   // A graph tab has no document: the same reset, and nothing is read.
@@ -337,12 +358,14 @@ export function Files({ client, project, lens, onLens, path, seat, graphOrigin =
 
   const dirty = body !== null && draft !== body.text;
   const scopeLabel = activeScope === "project" ? "project" : `seat/${activeScope}`;
-  const sub = activeView === "graph"
-    ? `${scopeLabel} · graph`
-    : activePath
-      ? `${scopeLabel} · ${activePath}${body ? ` · ${body.bytes.toLocaleString()} bytes` : ""}`
-      : "pick a file in the sidebar";
-  const visibleTabs = tabs.filter(t => t.scope === (seat ?? "project"));
+  const sub = isRemote
+    ? `seat/${seat} on ${seatMachine} · ${remotePath ? `${remotePath} · ` : ""}read-only`
+    : activeView === "graph"
+      ? `${scopeLabel} · graph`
+      : activePath
+        ? `${scopeLabel} · ${activePath}${body ? ` · ${body.bytes.toLocaleString()} bytes` : ""}`
+        : "pick a file in the sidebar";
+  const visibleTabs = isRemote ? [] : tabs.filter(t => t.scope === (seat ?? "project"));
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -351,7 +374,9 @@ export function Files({ client, project, lens, onLens, path, seat, graphOrigin =
         <div className="flex items-center gap-1">
           <BackToGraph origin={graphOrigin} project={project} activePath={activePath} onBack={() => onBackToGraph?.()} />
           {/* WHICH COPY lives in the ModePane footer now (#5841) — one picker feeds tree, editor,
-              and git. This row keeps only the view toggle and Save. */}
+              and git. This row keeps only the view toggle and Save; a REMOTE scope has neither
+              (#13938): everything over ssh is read-only, so the row stands down entirely. */}
+          {!isRemote && (
           <div className="ml-auto flex items-center gap-2">
             {activePath && body && changedFromHead && (
               <div className="flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]">
@@ -389,6 +414,7 @@ export function Files({ client, project, lens, onLens, path, seat, graphOrigin =
               {saving ? "Saving…" : "Save"}
             </button>
           </div>
+          )}
         </div>
 
         {/* The tab strip (#5813): one set per source, dirty dot follows the draft, pin makes a
@@ -464,10 +490,21 @@ export function Files({ client, project, lens, onLens, path, seat, graphOrigin =
         {saved && !dirty && (
           <div className="px-1 text-[11.5px] text-tr-ok">Saved.</div>
         )}
-        {error && <div className="tr-mono px-1 text-[12px] text-tr-danger">{error}</div>}
+        {error && !isRemote && <div className="tr-mono px-1 text-[12px] text-tr-danger">{error}</div>}
 
         <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-1.5">
-          {activeView === "graph" ? (
+          {isRemote ? (
+            remotePath && seatMachine ? (
+              <RemoteDoc project={project} seat={seat ?? ""} machine={seatMachine} path={remotePath} />
+            ) : (
+              <div className="flex h-full items-center justify-center">
+                <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+                  seat/{seat} runs on {seatMachine}. Pick one of its changed files in the pane — it
+                  opens here read-only, over ssh.
+                </div>
+              </div>
+            )
+          ) : activeView === "graph" ? (
             <GraphView
               key={project}
               project={project}

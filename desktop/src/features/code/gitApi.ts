@@ -10,8 +10,9 @@ export type GitStatusEntry = { path: string; x: string; y: string };
 export type GitLogEntry = { sha: string; author: string; when: string; subject: string };
 
 /** +N/−N for one changed path vs HEAD. Untracked and binary paths are absent — git counts
- *  neither, and a fake zero would read as "known small". */
-export type GitLineCount = { path: string; plus: number; minus: number };
+ *  neither, and a fake zero would read as "known small". null counts (binary) are carried, not
+ *  zeroed: the chip renders nothing for a path git could not measure. */
+export type GitLineCount = { path: string; plus: number | null; minus: number | null };
 
 /** One (seat, path) change row from `project_changes` (#5959). seat null = the project checkout. */
 export type ProjectChangeRow = {
@@ -205,5 +206,6 @@ export function lineCountFor(
   path: string,
 ): { plus: number; minus: number } | null {
   const hit = counts.find(c => c.path === path);
-  return hit ? { plus: hit.plus, minus: hit.minus } : null;
+  if (!hit || hit.plus === null || hit.minus === null) return null;
+  return { plus: hit.plus, minus: hit.minus };
 }

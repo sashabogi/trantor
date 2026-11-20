@@ -16,6 +16,7 @@ import {
   stageableChanges,
   type GitPanelSnapshot,
 } from "./gitApi";
+import type { RemoteSeatState } from "./remoteScope";
 
 /** The +N/−N chip, colored from the git decoration tokens the tree rows share
  *  (styles.css --git-decoration-*; Orca's diff-line-counts.tsx is the shape). Renders nothing
@@ -46,7 +47,163 @@ function PathLabel({ path }: { path: string }) {
   );
 }
 
-export function GitPanel({ project, seat, onChanged, onOpenFile }: {
+/** The remote read-only state ModePane already polled (#13938) — the panel renders it without
+ *  a second ssh round trip, and renders NOTHING mutable: no stage, no commit, no push. */
+export type RemotePanelProps = {
+  seat: string;
+  machine: string;
+  state: RemoteSeatState;
+};
+
+export function GitPanel({ project, seat, onChanged, onOpenFile, remote = null }: {
+  project: string; seat: string; onChanged?: () => void; onOpenFile?: (path: string) => void;
+  remote?: RemotePanelProps | null;
+}) {
+  if (remote) {
+    return <RemoteGitPanel seat={remote.seat} machine={remote.machine} state={remote.state} onOpenFile={onOpenFile} />;
+  }
+  return <LocalGitPanel project={project} seat={seat} onChanged={onChanged} onOpenFile={onOpenFile} />;
+}
+
+/** #13938 — a seat on another machine: branch, position, staged/changes, log, all over ssh,
+ *  all read-only. Unreachable renders as unreachable, never as a clean panel. */
+function RemoteGitPanel({ seat, machine, state, onOpenFile }: RemotePanelProps & { onOpenFile?: (path: string) => void }) {
+  const [stagedOpen, setStagedOpen] = useState(true);
+  const [changesOpen, setChangesOpen] = useState(true);
+  return (
+    <div className="tr-card flex h-full min-h-0 flex-col px-3 py-2.5">
+      <div className="flex items-center gap-2 px-1 pb-2">
+        <span className="text-[13px] font-semibold">git</span>
+        <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px] text-tr-muted">
+          {state.kind === "ok" ? (state.snap.branch || "detached") : state.kind === "loading" ? "…" : "—"}
+        </span>
+        {state.kind === "ok" && (
+          <span className="tr-mono shrink-0 text-[11px] text-tr-muted" title={state.snap.upstream ?? "no upstream — ahead counts unlanded work against main"}>
+            {aheadLabel(state.snap)}
+          </span>
+        )}
+      </div>
+
+      <div className="mx-1 mb-2 rounded-[8px] border border-tr-edge px-2.5 py-1.5 text-[11px] leading-relaxed text-tr-muted">
+        read-only — seat/{seat}'s worktree is on {machine}; remote editing is out of scope.
+      </div>
+
+      {state.kind === "unreachable" && (
+        <div className="tr-card-ghost my-1 px-3 py-3 text-[12px] leading-relaxed">
+          <div>unreachable — seat/{seat} on {machine} could not be read.</div>
+          <div className="tr-mono mt-1 text-[11px] text-tr-muted">{state.reason}</div>
+        </div>
+      )}
+      {state.kind === "error" && (
+        <div className="tr-card-ghost my-1 px-3 py-3 text-[12px] leading-relaxed">
+          git state unreadable: <span className="tr-mono">{state.reason}</span>
+        </div>
+      )}
+
+      {state.kind === "ok" && (
+        <RemoteGitSections
+          state={state}
+          stagedOpen={stagedOpen}
+          changesOpen={changesOpen}
+          setStagedOpen={setStagedOpen}
+          setChangesOpen={setChangesOpen}
+          onOpenFile={onOpenFile}
+        />
+      )}
+    </div>
+  );
+}
+
+function RemoteGitSections({ state, stagedOpen, changesOpen, setStagedOpen, setChangesOpen, onOpenFile }: {
+  state: Extract<RemoteSeatState, { kind: "ok" }>;
+  stagedOpen: boolean; changesOpen: boolean;
+  setStagedOpen: (v: boolean) => void; setChangesOpen: (v: boolean) => void;
+  onOpenFile?: (path: string) => void;
+}) {
+  const buckets = bucketStatus(state.snap.status);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto">
+      <section>
+        <div className="flex items-center gap-1 px-1 py-1">
+          <button type="button" onClick={() => setStagedOpen(!stagedOpen)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+            <span className="w-3 shrink-0 text-[10px] text-tr-muted">{stagedOpen ? "▾" : "▸"}</span>
+            <span className="truncate text-[11px] font-medium text-tr-muted">Staged ({buckets.staged.length})</span>
+          </button>
+        </div>
+        {stagedOpen && buckets.staged.length === 0 && (
+          <div className="px-1 py-0.5 text-[11.5px] text-tr-muted/70">Nothing staged.</div>
+        )}
+        {stagedOpen && buckets.staged.map(e => (
+          <div key={`s-${e.path}`} className="flex items-center gap-1.5 rounded-md px-1 py-[3px]">
+            <button
+              type="button"
+              onClick={() => onOpenFile?.(e.path)}
+              className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+              title={`${e.x}${e.y} ${e.path} — open read-only`}
+            ><PathLabel path={e.path} /></button>
+            <LineCountChip counts={state.snap.counts} path={e.path} />
+            {isUnmerged(e) && (
+              <span className="tr-chip shrink-0" title="unmerged on the remote worktree — git needs a human there">conflict</span>
+            )}
+          </div>
+        ))}
+      </section>
+      <section>
+        <div className="flex items-center gap-1 px-1 py-1">
+          <button type="button" onClick={() => setChangesOpen(!changesOpen)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+            <span className="w-3 shrink-0 text-[10px] text-tr-muted">{changesOpen ? "▾" : "▸"}</span>
+            <span className="truncate text-[11px] font-medium text-tr-muted">
+              Changes ({buckets.unstaged.length + buckets.untracked.length})
+            </span>
+          </button>
+        </div>
+        {changesOpen && buckets.unstaged.length === 0 && buckets.untracked.length === 0 && (
+          <div className="px-1 py-0.5 text-[11.5px] text-tr-muted/70">No uncommitted changes.</div>
+        )}
+        {changesOpen && buckets.unstaged.map(e => (
+          <div key={`u-${e.path}`} className="flex items-center gap-1.5 rounded-md px-1 py-[3px]">
+            <button
+              type="button"
+              onClick={() => onOpenFile?.(e.path)}
+              className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+              title={`${e.x}${e.y} ${e.path} — open read-only`}
+            ><PathLabel path={e.path} /></button>
+            <LineCountChip counts={state.snap.counts} path={e.path} />
+            {isUnmerged(e) && (
+              <span className="tr-chip shrink-0" title="unmerged on the remote worktree — git needs a human there">conflict</span>
+            )}
+          </div>
+        ))}
+        {changesOpen && buckets.untracked.map(p => (
+          <div key={`n-${p}`} className="flex items-center gap-1.5 rounded-md px-1 py-[3px]">
+            <button
+              type="button"
+              onClick={() => onOpenFile?.(p)}
+              className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+              title={`untracked ${p} — open read-only`}
+            ><PathLabel path={p} /></button>
+            <span className="tr-chip shrink-0">new</span>
+          </div>
+        ))}
+      </section>
+      <section>
+        <div className="px-1 pb-1 text-[11px] font-medium text-tr-muted">Recent</div>
+        {state.snap.log.length === 0 && (
+          <div className="px-1 py-0.5 text-[11.5px] text-tr-muted/70">No commits yet.</div>
+        )}
+        {state.snap.log.map(c => (
+          <div key={c.sha} className="flex items-baseline gap-2 rounded-md px-1 py-[3px]">
+            <span className="tr-mono shrink-0 text-[11px] text-tr-doing">{c.sha}</span>
+            <span className="min-w-0 flex-1 truncate text-[11.5px]" title={`${c.author} · ${c.when} · ${c.subject}`}>{c.subject}</span>
+            <span className="tr-mono shrink-0 text-[10.5px] text-tr-muted/70">{c.when}</span>
+          </div>
+        ))}
+      </section>
+    </div>
+  );
+}
+
+function LocalGitPanel({ project, seat, onChanged, onOpenFile }: {
   project: string; seat: string; onChanged?: () => void; onOpenFile?: (path: string) => void;
 }) {
   const [snap, setSnap] = useState<GitPanelSnapshot | null>(null);

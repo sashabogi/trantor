@@ -12,6 +12,8 @@ import { MachineBadge, machineBadgesVisible } from "../../shared/MachineBadge";
 import { GitPanel } from "./GitPanel";
 import { Chat } from "../chat/Chat";
 import { folderSeats, mergeChanges, mergedCountFor, projectChanges, type ProjectChangeRow } from "./gitApi";
+import { remoteChangeRows } from "./remoteSeatApi";
+import { remoteSeatMachines, useMachineSshTargets, useOwnMachineId, useRemoteSeatSnapshots } from "./remoteScope";
 import { FileTree } from "./FileTree";
 import { SessionsMode } from "./SessionsMode";
 import { stripLabelsNeed, tabsMode, type TabsMode } from "./tabStrip";
@@ -204,6 +206,47 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   // Changed-file count per seat, for the footer chips: the one-click answer to "which worktree
   // has edits". Absent = clean, never a zero.
   const seats = useMemo(() => scopeSeats(peers, project), [peers, project]);
+
+  // #13938 — seats whose /peers machine label differs from THIS machine's machine-id have no
+  // local worktree: their answer comes over ssh (machines.<label>.ssh in config.json). Remote
+  // seats without a target still list — saying where they live — but are never counted "clean"
+  // on the strength of a missing local worktree.
+  const ownMachine = useOwnMachineId();
+  const remoteMachines = useMemo(
+    () => remoteSeatMachines(peers, project, ownMachine),
+    [peers, project, ownMachine],
+  );
+  const sshTargets = useMachineSshTargets([...new Set(remoteMachines.values())]);
+  const configuredRemoteSeats = useMemo(
+    () => [...remoteMachines.entries()].filter(([, m]) => sshTargets.get(m)).map(([seat, machine]) => ({ seat, machine })),
+    [remoteMachines, sshTargets],
+  );
+  const remoteSnaps = useRemoteSeatSnapshots(project, configuredRemoteSeats);
+  const selectedMachine = seat ? remoteMachines.get(seat) : undefined;
+  const selectedRemote = seat && selectedMachine && sshTargets.get(selectedMachine)
+    ? { seat, machine: selectedMachine }
+    : null;
+  const selectedRemoteState = selectedRemote ? (remoteSnaps.get(selectedRemote.seat) ?? { kind: "loading" }) : null;
+  const remoteRows = selectedRemoteState?.kind === "ok" ? remoteChangeRows(selectedRemoteState.snap) : [];
+
+  /** The honest right-hand label for a seat row: a count only when measured over ssh, the
+   *  machine's name when no target is configured, "unreachable" when ssh is down. */
+  const remoteRowState = (name: string): { label: string; danger?: boolean } | null => {
+    const machine = remoteMachines.get(name);
+    if (!machine) return null;
+    const target = sshTargets.get(machine);
+    if (target === null) return { label: `on ${machine}` };
+    if (!target) return { label: "reading…" };
+    const state = remoteSnaps.get(name);
+    if (!state) return { label: "reading…" };
+    if (state.kind === "ok") {
+      const n = remoteChangeRows(state.snap).length;
+      return n > 0 ? { label: `${n} changed` } : { label: "clean" };
+    }
+    if (state.kind === "unreachable") return { label: "unreachable", danger: true };
+    return { label: "unreadable", danger: true };
+  };
+  const selectedRowState = seat ? remoteRowState(seat) : null;
   const seatMachines = useMemo(() => new Map(
     peers.filter(peer => peer.session.endsWith(`:${project}`)).map(peer => [peer.session.split(":")[0], peer.machine]),
   ), [peers, project]);
@@ -362,64 +405,123 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
             />
           </div>
           <div className="px-3 pt-1 pb-0.5 text-[9px] font-semibold tracking-[0.13em] text-tr-muted/60">
-            CHANGED · all sources
+            {selectedRemote
+              ? `CHANGED · seat/${selectedRemote.seat} on ${selectedRemote.machine} · read-only`
+              : "CHANGED · all sources"}
           </div>
           <div className="max-h-[220px] shrink-0 overflow-y-auto px-1.5">
-            {changedRows.length === 0 && (
-              <div className="px-2 py-1 text-[11.5px] text-tr-muted/70">
-                {changeRows.length === 0 || merged.length === 0 ? "Clean — no changes anywhere." : "reading…"}
+            {!selectedRemote && selectedMachine ? (
+              <div className="px-2 py-1 text-[11.5px] leading-relaxed text-tr-muted/70">
+                seat/{seat} lives on {selectedMachine}. Add <span className="tr-mono">machines.{selectedMachine}.ssh</span> to
+                ~/.agent-bus/config.json to read its files here over ssh.
               </div>
-            )}
-            {changedRows.map(e => (
-              <div key={e.path} className="mb-0.5">
-                <button
-                  type="button"
-                  onClick={() => openChanged(e.path, e.seats)}
-                  title={`${e.path} — open the editable diff in its writer's worktree`}
-                  className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1 text-left hover:bg-white/[0.05]"
-                >
-                  <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px] text-tr-muted">{tailPath(e.path)}</span>
-                  {e.status === "??" && <span className="tr-mono shrink-0 text-[10px] text-tr-warn">new</span>}
-                  {(() => {
-                    const n = mergedCountFor(merged, e.path);
-                    return n ? (
-                      <span className="tr-mono shrink-0 text-[10px] tabular-nums">
-                        <span style={{ color: "var(--git-decoration-added)" }}>+{n.plus}</span>
-                        <span style={{ color: "var(--git-decoration-deleted)" }}>−{n.minus}</span>
-                      </span>
-                    ) : null;
-                  })()}
-                  {e.seats.filter((s): s is string => s !== null).map(s => (
-                    <BrandGlyph key={s} name={s} size={11} />
-                  ))}
-                </button>
-                {chooserFor === e.path && e.seats.filter((s): s is string => s !== null).length > 1 && (
-                  <div className="ml-4 flex flex-wrap gap-1 rounded-[7px] border border-tr-edge bg-tr-panel/60 px-2 py-1">
-                    <span className="py-0.5 text-[10.5px] text-tr-muted/70">whose copy?</span>
-                    {e.seats.filter((s): s is string => s !== null).map(s => (
+            ) : selectedRemote ? (
+              selectedRemoteState?.kind === "ok" ? (
+                remoteRows.length === 0 ? (
+                  <div className="px-2 py-1 text-[11.5px] text-tr-muted/70">
+                    Clean — no changes on {selectedRemote.machine}.
+                  </div>
+                ) : (
+                  remoteRows
+                    .filter(e => !filter || e.path.toLowerCase().includes(filter.toLowerCase()))
+                    .map(e => (
                       <button
-                        key={s}
+                        key={e.path}
                         type="button"
-                        onClick={() => { onSeat(s); onOpenFile(e.path); setChooserFor(null); }}
-                        className="tr-chip hover:text-tr-text"
+                        onClick={() => onOpenFile(e.path)}
+                        title={`${e.path} — open read-only from seat/${selectedRemote.seat} on ${selectedRemote.machine}`}
+                        className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1 text-left hover:bg-white/[0.05]"
                       >
-                        {s}
+                        <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px] text-tr-muted">{tailPath(e.path)}</span>
+                        {e.untracked && <span className="tr-mono shrink-0 text-[10px] text-tr-warn">new</span>}
+                        {e.plus !== null && e.minus !== null && (
+                          <span className="tr-mono shrink-0 text-[10px] tabular-nums">
+                            <span style={{ color: "var(--git-decoration-added)" }}>+{e.plus}</span>
+                            <span style={{ color: "var(--git-decoration-deleted)" }}>−{e.minus}</span>
+                          </span>
+                        )}
+                        <span className="tr-mono shrink-0 text-[10px] text-tr-muted/60">{selectedRemote.machine}</span>
                       </button>
-                    ))}
+                    ))
+                )
+              ) : selectedRemoteState?.kind === "unreachable" ? (
+                <div className="px-2 py-1 text-[11.5px] leading-relaxed text-tr-danger">
+                  unreachable — seat/{selectedRemote.seat} on {selectedRemote.machine} could not be read.
+                  <div className="tr-mono text-[10px] text-tr-muted">{selectedRemoteState.reason}</div>
+                </div>
+              ) : selectedRemoteState?.kind === "error" ? (
+                <div className="px-2 py-1 text-[11.5px] leading-relaxed text-tr-danger">
+                  <div className="tr-mono text-[10px]">{selectedRemoteState.reason}</div>
+                </div>
+              ) : (
+                <div className="px-2 py-1 text-[11.5px] text-tr-muted/70">reading seat/{selectedRemote.seat} over ssh…</div>
+              )
+            ) : (
+              <>
+                {changedRows.length === 0 && (
+                  <div className="px-2 py-1 text-[11.5px] text-tr-muted/70">
+                    {changeRows.length === 0 || merged.length === 0 ? "Clean — no changes anywhere." : "reading…"}
                   </div>
                 )}
-              </div>
-            ))}
+                {changedRows.map(e => (
+                  <div key={e.path} className="mb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => openChanged(e.path, e.seats)}
+                      title={`${e.path} — open the editable diff in its writer's worktree`}
+                      className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1 text-left hover:bg-white/[0.05]"
+                    >
+                      <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px] text-tr-muted">{tailPath(e.path)}</span>
+                      {e.status === "??" && <span className="tr-mono shrink-0 text-[10px] text-tr-warn">new</span>}
+                      {(() => {
+                        const n = mergedCountFor(merged, e.path);
+                        return n ? (
+                          <span className="tr-mono shrink-0 text-[10px] tabular-nums">
+                            <span style={{ color: "var(--git-decoration-added)" }}>+{n.plus}</span>
+                            <span style={{ color: "var(--git-decoration-deleted)" }}>−{n.minus}</span>
+                          </span>
+                        ) : null;
+                      })()}
+                      {e.seats.filter((s): s is string => s !== null).map(s => (
+                        <BrandGlyph key={s} name={s} size={11} />
+                      ))}
+                    </button>
+                    {chooserFor === e.path && e.seats.filter((s): s is string => s !== null).length > 1 && (
+                      <div className="ml-4 flex flex-wrap gap-1 rounded-[7px] border border-tr-edge bg-tr-panel/60 px-2 py-1">
+                        <span className="py-0.5 text-[10.5px] text-tr-muted/70">whose copy?</span>
+                        {e.seats.filter((s): s is string => s !== null).map(s => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => { onSeat(s); onOpenFile(e.path); setChooserFor(null); }}
+                            className="tr-chip hover:text-tr-text"
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
           </div>
           <div className="px-3 pb-0.5 pt-3 text-[9px] font-semibold tracking-[0.13em] text-tr-muted/60">ALL FILES</div>
           <div className="min-h-0 flex-1 overflow-y-auto pb-1">
-            <FileTree
-              project={project}
-              seat={seat}
-              openPath={null}
-              onOpen={p => onOpenFile(p)}
-              marks={{ entries: merged, folders: folderMarks }}
-            />
+            {selectedRemote ? (
+              <div className="tr-card-ghost mx-2 mt-2 px-3 py-3 text-[11.5px] leading-relaxed text-tr-muted">
+                seat/{selectedRemote.seat}'s worktree lives on {selectedRemote.machine}. Its changed files are
+                listed above and open read-only — browsing the whole remote tree is out of scope for now.
+              </div>
+            ) : (
+              <FileTree
+                project={project}
+                seat={seat}
+                openPath={null}
+                onOpen={p => onOpenFile(p)}
+                marks={{ entries: merged, folders: folderMarks }}
+              />
+            )}
           </div>
         </>
       )}
@@ -448,7 +550,12 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
                 <span className="tr-mono text-[11px] text-tr-muted">seat/{seat} → main</span>
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto">
-                <GitPanel project={project} seat={seat} onOpenFile={onOpenFile} />
+                <GitPanel
+                  project={project}
+                  seat={seat}
+                  onOpenFile={onOpenFile}
+                  remote={selectedRemote ? { ...selectedRemote, state: selectedRemoteState ?? { kind: "loading" } } : null}
+                />
               </div>
               <div className="shrink-0 border-t border-tr-edge px-3 py-2.5">
                 <div className="flex items-center gap-2 px-0.5 pb-1">
@@ -522,7 +629,11 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
               {seat ? `seat/${seat}` : "project"}
             </span>
             {seat && showMachineBadges && <MachineBadge machine={seatMachines.get(seat)} />}
-            {seat && seatCount(seat) > 0 && (
+            {seat && selectedRowState ? (
+              <span className={`tr-mono shrink-0 text-[10.5px] ${selectedRowState.danger ? "text-tr-danger" : selectedRowState.label.endsWith(" changed") ? "text-tr-doing" : "text-tr-muted/70"}`}>
+                {selectedRowState.label}
+              </span>
+            ) : seat && seatCount(seat) > 0 && (
               <span className="tr-mono shrink-0 text-[10.5px] text-tr-doing">{seatCount(seat)} changed</span>
             )}
             <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 text-tr-muted" />
@@ -553,6 +664,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
               </button>
               {seats.map(name => {
                 const n = seatCount(name);
+                const remote = remoteRowState(name);
                 return (
                   <button
                     key={name}
@@ -563,7 +675,9 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
                   >
                     <span className="tr-mono flex-1">seat/{name}</span>
                     {showMachineBadges && <MachineBadge machine={seatMachines.get(name)} />}
-                    {n > 0
+                    {remote ? (
+                      <span className={`shrink-0 text-[10.5px] ${remote.danger ? "text-tr-danger" : "text-tr-muted/70"}`}>{remote.label}</span>
+                    ) : n > 0
                       ? <span className="tr-mono text-[10.5px] text-tr-doing">{n} changed</span>
                       : <span className="text-[10.5px] text-tr-muted/70">clean</span>}
                   </button>
