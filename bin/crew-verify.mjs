@@ -1,11 +1,5 @@
 #!/usr/bin/env node
-// crew-verify — prove that spawned crew agents ACTUALLY joined the bus (don't trust the spawn).
-//
-//   node crew-verify.mjs <project> <agent...> [--timeout 30]
-//
-// An agent counts as UP when its session (<agent>:<project>) has registered with a lastSeen
-// AFTER this verifier started. Prints one line per agent; exits non-zero listing failures —
-// the launcher retries those, and the orchestrator gets the truth instead of a green lie.
+// crew-verify checks that spawned crew sessions registered with the hub.
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -13,29 +7,19 @@ import { homedir } from "node:os";
 const args = process.argv.slice(2);
 const ti = args.indexOf("--timeout");
 const TIMEOUT = ti >= 0 ? Number(args.splice(ti, 2)[1]) : 30;
-// --since <ms>: the spawn epoch captured by the launcher BEFORE it spawned the windows.
-// An agent counts as up the moment it registers (even "booting") with lastSeen >= this epoch.
-// Without it we'd default to "now", but the launcher only starts us AFTER the spawn+serialize
-// sleep, so a runner's early "booting" registration can land just before our own start and then
-// go silent through a slow first turn (e.g. opencode+GLM cold start ~40s) — a false failure that
-// triggers a duplicate respawn. Anchoring to the pre-spawn epoch removes that race.
+// --since anchors freshness to the launcher's pre-spawn epoch, so early boot registration counts.
 const si = args.indexOf("--since");
 const SINCE = si >= 0 ? Number(args.splice(si, 2)[1]) : NaN;
 const [PROJ, ...AGENTS] = args;
 if (!PROJ || !AGENTS.length) { console.error("usage: crew-verify.mjs <project> <agent...> [--timeout 30] [--since <ms>]"); process.exit(2); }
 
-// Signed + per-project hub (2026-07-31, agent-UX audit): unsigned /peers is a dead 401 under
-// enforce — crew verification would report every seat missing while the crew was fine.
-import { resolveHub, hostId } from "../lib/project.mjs";
-import { loadOrCreate } from "../lib/identity.mjs";
+// /peers requires a signed request when hub auth is enforced.
+import { resolveHub } from "../lib/project.mjs";
+import { resolveOwnerIdentity } from "../lib/identity.mjs";
 import { sfetchJson } from "../lib/signed-fetch.mjs";
 const HUB = process.env.RELAY_URL || resolveHub(PROJ);
-const VERIFY_ID = loadOrCreate(process.env.RELAY_SESSION || `${hostId()}:${PROJ}`, "agent");
-// Two distinct clocks, deliberately separate:
-//  - FRESH_SINCE: the freshness threshold. A registration counts only if lastSeen >= this.
-//    Prefer the launcher's pre-spawn epoch (so an early "booting" beat counts); else our start.
-//  - DEADLINE: how long WE poll, always measured from our own start so it can't be skewed
-//    (e.g. an epoch far in the past wouldn't shrink the window; one in the future wouldn't hang).
+const VERIFY_ID = await resolveOwnerIdentity(HUB);
+// Keep freshness anchored to spawn while measuring the polling deadline from this process start.
 const DEADLINE = Date.now() + TIMEOUT * 1000;
 const FRESH_SINCE = Number.isFinite(SINCE) ? SINCE : Date.now();
 
