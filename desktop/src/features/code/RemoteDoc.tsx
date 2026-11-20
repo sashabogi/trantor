@@ -2,20 +2,21 @@
 // the file's diff vs the seat's merge base, no editing — remote editing is out of scope for
 // this slice and the banner says so. A deleted file falls through to its diff; an unreachable
 // machine shows unreachable, never an empty viewer.
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState, type ComponentType } from "react";
 import { errorLine, isUnreachable, remoteFileBody, remoteFilePatch } from "./remoteSeatApi";
 
-// Lazy on purpose: CodeView carries monaco, and monaco is only worth loading when a file body
-// is actually on screen — the diff and every failure state render without it.
+// Lazy on purpose: both viewers carry monaco, which loads only when their state is on screen.
 const CodeView = lazy(() => import("./CodeView").then(m => ({ default: m.CodeView })));
+const UnifiedDiffView = lazy(() => import("./ChangesView").then(m => ({ default: m.UnifiedDiffView })));
 
 type Leg<T> = { state: "loading" } | { state: "ok"; value: T } | { state: "failed"; reason: string; unreachable: boolean };
 
-export function RemoteDoc({ project, seat, machine, path }: {
+export function RemoteDoc({ project, seat, machine, path, diffView: DiffView = UnifiedDiffView }: {
   project: string;
   seat: string;
   machine: string;
   path: string;
+  diffView?: ComponentType<{ value: string }>;
 }) {
   const [view, setView] = useState<"file" | "diff">("file");
   const [body, setBody] = useState<Leg<{ text: string; truncated: boolean; bytes: number }>>({ state: "loading" });
@@ -93,10 +94,12 @@ export function RemoteDoc({ project, seat, machine, path }: {
               No diff vs base — this path is unchanged since the seat branched.
             </div>
           ) : patch.state === "ok" ? (
-            <div className="h-full overflow-auto">
-              <pre className="tr-mono whitespace-pre px-2 py-1 text-[11px] leading-[1.55] text-tr-muted">{patch.value.patch}</pre>
+            <div className="flex h-full min-h-0 flex-col">
+              <Suspense fallback={<div className="flex h-full items-center justify-center text-[12px] text-tr-muted/70">opening the diff…</div>}>
+                <DiffView value={patch.value.patch} />
+              </Suspense>
               {patch.value.truncated && (
-                <div className="px-2 pb-2 text-[11px] text-tr-warn">Cut at 400 KB — this is the head of the diff, not all of it.</div>
+                <div className="shrink-0 px-2 pb-2 text-[11px] text-tr-warn">Cut at 400 KB — this is the head of the diff, not all of it.</div>
               )}
             </div>
           ) : (

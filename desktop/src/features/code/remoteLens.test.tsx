@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // #13938 — the drill's three states: a dirty remote seat lists its changed files with counts,
 // a clean one says clean, ssh down says unreachable — never clean. GitPanel's remote variant is
-// read-only; RemoteDoc diffs a deleted file without loading the monaco viewer (lazy import).
+// read-only; RemoteDoc diffs a deleted file through its injected unified-diff viewer.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -183,6 +183,7 @@ describe("GitPanel remote variant (#13938)", () => {
 });
 
 describe("RemoteDoc (#13938)", () => {
+  const testDiffView = ({ value }: { value: string }) => <pre>{value}</pre>;
   let host: HTMLDivElement;
   let root: Root;
   beforeEach(() => {
@@ -202,7 +203,7 @@ describe("RemoteDoc (#13938)", () => {
       if (command === "remote_file_patch") return JSON.stringify({ patch: "--- a/gone.ts\n+++ b/gone.ts\n@@ -1 +0,0 @@\n-one\n", truncated: false });
       return undefined;
     });
-    act(() => root.render(<RemoteDoc project="trantor" seat="kimi-9" machine="netcup" path="gone.ts" />));
+    act(() => root.render(<RemoteDoc project="trantor" seat="kimi-9" machine="netcup" path="gone.ts" diffView={testDiffView} />));
     await act(async () => {});
     const text = host.textContent ?? "";
     expect(text).toContain("read-only");

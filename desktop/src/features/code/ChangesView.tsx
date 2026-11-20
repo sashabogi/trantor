@@ -98,3 +98,37 @@ export function ChangesView({ base, value, path, editable, onChange, onSave }: {
 
   return <div ref={host} className="h-full min-h-0 overflow-hidden rounded-lg" />;
 }
+
+export function UnifiedDiffView({ value }: { value: string }) {
+  const host = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!host.current) return;
+    const model = monaco.editor.createModel(value, "diff");
+    const ed = monaco.editor.create(host.current, {
+      model,
+      theme: "trantor-calm",
+      readOnly: true,
+      automaticLayout: true,
+      ...fontOptions,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      stickyScroll: { enabled: false },
+      renderLineHighlight: "none",
+      occurrencesHighlight: "off",
+      quickSuggestions: false,
+      suggestOnTriggerCharacters: false,
+      lineNumbers: "off",
+      glyphMargin: false,
+      folding: false,
+      padding: { top: 6, bottom: 6 },
+      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+    });
+    return () => {
+      ed.dispose();
+      model.dispose();
+    };
+  }, [value]);
+
+  return <div ref={host} className="h-full min-h-0 overflow-hidden rounded-lg" />;
+}

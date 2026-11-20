@@ -10,6 +10,7 @@ import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+import { unifiedDiffTokenRules } from "./unifiedDiff";
 
 // SAFETY: MonacoEnvironment is monaco's documented global hook and globalThis carries no type
 // for it; the value assigned is a monaco.Environment, so the assertion only names the one key.
@@ -43,6 +44,11 @@ const diagnosticsOptions = {
 monacoTS.typescriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
 monacoTS.javascriptDefaults.setDiagnosticsOptions(diagnosticsOptions);
 
+monaco.languages.register({ id: "diff", extensions: [".diff", ".patch"] });
+monaco.languages.setMonarchTokensProvider("diff", {
+  tokenizer: { root: unifiedDiffTokenRules },
+});
+
 monacoTS.typescriptDefaults.setCompilerOptions({
   ...monacoTS.typescriptDefaults.getCompilerOptions(),
   jsx: monacoTS.JsxEmit.Preserve,
@@ -72,6 +78,10 @@ monaco.editor.defineTheme("trantor-calm", {
     { token: "attribute.name", foreground: "d9a441" },
     { token: "attribute.value", foreground: "14b8a6" },
     { token: "regexp", foreground: "ef6a6a" },
+    { token: "markup.inserted", foreground: "14b8a6" },
+    { token: "markup.deleted", foreground: "ef6a6a" },
+    { token: "meta.diff.header", foreground: "4a90d9", fontStyle: "bold" },
+    { token: "meta.diff.file", foreground: "d9a441" },
   ],
   colors: {
     "editor.background": "#131316",
