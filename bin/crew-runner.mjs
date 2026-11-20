@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mk
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
+import { machineLabel } from "../lib/machine-label.mjs";
 import { resolveSecrets, shadowEnv, withSecretExports } from "../lib/secrets.mjs";
 import { runnerPersona } from "../lib/persona.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
@@ -91,6 +92,9 @@ const DIR = process.argv[3] || process.cwd();
 // back to the git-repo-root basename — never a loose dir basename that could
 // fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
 const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
+let machineConfig = {};
+try { machineConfig = JSON.parse(readFileSync(join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "config.json"), "utf8")); } catch {}
+const MACHINE_LABEL = machineLabel(machineConfig);
 
 function gitOut(args, cwd = DIR) {
   const r = spawnSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 8000 });
@@ -183,8 +187,13 @@ const banner = (trigger) => {
 };
 
 async function api(path, body) {
+  let payload;
+  if (body) {
+    payload = { ...body };
+    if (path === "/register" && MACHINE_LABEL) payload.machine = MACHINE_LABEL;
+  }
   const opts = body
-    ? { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body: JSON.stringify(body) }
+    ? { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body: JSON.stringify(payload) }
     : { headers: { connection: "close" } };   // fresh socket per call — long-polls on stale keep-alive sockets reset
   // Sign as THIS seat. Unsigned calls are 401 on an enforce hub, and because the runner fails open
   // that shows up as a seat that quietly records nothing rather than one that errors.
@@ -602,7 +611,9 @@ async function balanceRows() {
 // #7749: the live phase + its start ride the same call, so /peers answers what the seat does NOW.
 async function registerStatus(status, extra = {}) {
   const url = HUB + "/register";
-  const body = JSON.stringify({ session: SESSION, project: PROJ, status, persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, ...extra });
+  const payload = { session: SESSION, project: PROJ, status, persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, ...extra };
+  if (MACHINE_LABEL) payload.machine = MACHINE_LABEL;
+  const body = JSON.stringify(payload);
   try {
     const opts = { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body };
     await fetch(url, { ...opts, headers: { ...opts.headers, ...signedHeaders(identity, url, opts) }, signal: AbortSignal.timeout(5000) });
@@ -1888,6 +1899,7 @@ async function resolveWakeCard(messages, { session }) {
     // (and resets the counter with the fresh session below); the paused card itself never buys
     // another CLI session. The wake stays owed and retries on a long clock, so the orchestrator
     // sees the pause, not a silent seat.
+
     // #13474: never run a metered provider under a subscription label (or any model off its label).
     // A `trantor swap` (CREW_SWAP_DRIVER) is the operator choosing another provider on purpose.
     const mismatch = process.env.CREW_SWAP_DRIVER ? null : providerMismatch(AGENT, MODEL);

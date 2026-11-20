@@ -54,7 +54,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const b = await body(req);
       const cpg = crossProjectGuard(auth, P, b);
       if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
-      touch(b.session, b.status, b.project, b.hookVersion, auth);
+      touch(b.session, b.status, b.project, b.hookVersion, auth, b.machine);
       // WHO is this, really: the LLM brand + the exact model currently loaded. In-memory like the
       // rest of presence — the next heartbeat re-supplies it after a restart.
       const pr = state.peers[b.session];
@@ -391,7 +391,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       return json(res, 200, { hubVersion: HUB_VERSION, authMode: AUTH_MODE, peers: peerRows.map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "", phase: v.phase || "", phaseSince: v.phaseSince || 0,
         pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "",
         kind: peerKindOf(v),   // #8723 bounce-3: same resolver declaredCrewFor reads — never a roster-only answer
-        llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
+        llm: v.llm || "", model: v.model || "", machine: v.machine || undefined, hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
     }
     // --- Provider balances (prepaid credit) ---
     // The hub runs under launchd with no provider keys, so it can't fetch balances itself. Env-having

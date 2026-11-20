@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-// relay-watch — a live feed of the bus via SSE (true push, no polling). Run in a terminal
-// to watch sessions talk in real time, or to monitor a presence/status board.
-//   node bin/relay-watch.mjs [session]   (default: "all" — see every message)
-// Signed + per-project hub (2026-07-31, agent-UX audit): the hand-rolled relayUrl() here read
-// only the global config `url` (wrong hub for a migrated project) and fetched unsigned (dead
-// 401 under RELAY_AUTH=enforce). Now: canonical resolver + this session's keypair on every call.
+// relay-watch streams the bus and lists live peer status.
+// Run `node bin/relay-watch.mjs [session]`; the default watches every session.
 import { resolveProject, hostId, resolveHub } from "../lib/project.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { sfetch, sfetchJson } from "../lib/signed-fetch.mjs";
@@ -22,7 +18,7 @@ async function showPeers() {
     const { peers } = await (await sfetchJson(`${URL_BASE}/peers`, { method: "GET", identity })).json();
     const live = peers.filter(p => p.online);
     console.log(`\n  live sessions (${live.length}):`);
-    for (const p of live) console.log(`   🟢 ${p.session}${p.status ? `  — ${p.status}` : ""}`);
+    for (const p of live) console.log(`   🟢 ${p.session}${p.machine ? `  [${p.machine}]` : ""}${p.status ? `  — ${p.status}` : ""}`);
     console.log("");
   } catch {}
 }

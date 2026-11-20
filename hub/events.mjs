@@ -23,13 +23,15 @@ function applyPeerAuth(p, auth) {
     p.authWarning = auth.warning;
   }
 }
-function touch(session, status, project, hookVersion, auth) {
+function touch(session, status, project, hookVersion, auth, machine) {
   if (!session || session === "all") return;   // "all" is a wildcard, not a real peer
   const p = state.peers[session] || { lastSeen: 0, status: "", project: "" };
   // Peers carry no terminal address: /send is unauthenticated and `from` is self-asserted, so one
   // would turn any local process into arbitrary keystrokes. Messages reach agents only through
   // channels their own harness controls (hooks/inbox-deliver.mjs and hooks/stop-inbox.mjs).
   delete p.tty; delete p.windowId; delete p.host;
+  // Keep only an operator-chosen short label. Never retain the full host field.
+  if (typeof machine === "string" && /^[a-z0-9-]{1,24}$/.test(machine)) p.machine = machine;
   const wasOnline = p._on === true;   // explicit flag, so the log gets ONE event per transition
   p.lastSeen = now();
   if (status !== undefined) p.status = String(status).slice(0, 280);

@@ -12,6 +12,7 @@ import { armBaton, readArm, clearArm, readConfig, contextUsage, warnFrac, alread
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { installedVersion } from "./lib/update-check.mjs";   // report our hook version so the hub can flag stale sessions
 import { signedPost } from "./lib/api.mjs";
+import { machineLabel } from "../lib/machine-label.mjs";
 import { gitCheckoutRoot } from "./lib/git-checkout.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
@@ -166,6 +167,8 @@ async function main(stdinRaw) {
     llm: process.env.RELAY_LLM || (process.env.RELAY_AGENT ? process.env.RELAY_AGENT.replace(/-orch$/, "") : "claude"),
     model: modelFromTranscript(stdinRaw),
     hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() };
+  const machine = machineLabel(readConfig());
+  if (machine) beatBody.machine = machine;
   if (beatKind) beatBody.kind = beatKind;
   await signedPost("/register", beatBody, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
 

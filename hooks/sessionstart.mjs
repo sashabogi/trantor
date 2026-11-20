@@ -19,6 +19,7 @@ import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox
 import { ensureEnrolled } from "../lib/enroll.mjs";
 import { memoryStartLine } from "./lib/memory-start.mjs";
 import { staleResumeLine } from "./lib/cc-signals.mjs";
+import { machineLabel } from "../lib/machine-label.mjs";
 
 // The build doctrine (docs/BUILD-DOCTRINE.md) in short form, one line per rule, injected for every
 // project's ORCHESTRATOR at boot (#6452): orchestrators that never opened the doc missed the ruling.
@@ -194,6 +195,8 @@ try {
   // (#6075): strict match badge === project, since a badge of "1" carries no name. Absent kind is preserved by /register.
   const orchBadge = process.env.TRANTOR_ORCH || "";
   const registerBody = { session, project, status: `active in ${project}` };
+  const machine = machineLabel(readConfig());
+  if (machine) registerBody.machine = machine;
   if (orchBadge === project) registerBody.kind = "orch";
   await jpost(`${url}/register`, registerBody, session).catch(() => {});
 
