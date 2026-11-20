@@ -1,7 +1,7 @@
 // trantor balance feature tests — pure helpers (isLow/fmtBalance/fetchBalances skip) + hub POST/GET
 // round-trip with low-flagging and profile→subscription merge. Hermetic: temp data dir, no network
 // for the hub tests (adapters are verified live separately).
-import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
@@ -118,11 +118,14 @@ ok(isLow({ ok: true, kind: "windows", windows: [{ name: "5h", usedPct: 91 }] }) 
   const home = mkdtempSync(join(tmpdir(), "trantor-kimi-oauth-"));
   const credentials = join(home, ".kimi-code", "credentials");
   mkdirSync(credentials, { recursive: true });
-  writeFileSync(join(credentials, "kimi-code.json"), JSON.stringify({ access_token: "kimi-oauth-token" }));
+  const credentialPath = join(credentials, "kimi-code.json");
+  writeFileSync(credentialPath, JSON.stringify({ access_token: "kimi-oauth-token", expires_at: Date.now() + 60 * 60e3 }));
   const previousHome = process.env.HOME;
   process.env.HOME = home;
   const resetTime = Date.now() + 60 * 60e3;
+  let requests = 0;
   const api = http.createServer((req, res) => {
+    requests++;
     ok(req.headers.authorization === "Bearer kimi-oauth-token", "Kimi OAuth: usage request uses credentials access_token");
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -137,6 +140,14 @@ ok(isLow({ ok: true, kind: "windows", windows: [{ name: "5h", usedPct: 91 }] }) 
   ok(kimi?.ok && kimi.via === "oauth", "Kimi OAuth: credentials file enables a row without KIMI_API_KEY");
   ok(kimi?.kind === "quota" && kimi.remainingPct === 25, "Kimi OAuth: remainingPct comes from left/limit in the 5h window, not weekly quota");
   ok(kimi?.resetTime === resetTime, "Kimi OAuth: row uses the 5h window resetTime");
+  writeFileSync(credentialPath, JSON.stringify({ access_token: "expired-oauth-token", expires_at: Date.now() - 1000 }));
+  const expired = await fetchBalances({ KIMI_CODE_BASE_URL: `http://127.0.0.1:${api.address().port}` }, { only: ["kimi"] });
+  const expiredKimi = expired.find((row) => row.provider === "kimi");
+  ok(expiredKimi?.ok && expiredKimi.remainingPct === null
+    && expiredKimi.detail === "Kimi Code login token expired; open Kimi Code to refresh",
+  "Kimi OAuth: expired access token returns an explicit unknown quota detail");
+  ok(requests === 1 && JSON.parse(readFileSync(credentialPath, "utf8")).access_token === "expired-oauth-token",
+    "Kimi OAuth: expired token skips the request and leaves credentials untouched");
   await new Promise((resolve) => api.close(resolve));
   if (previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = previousHome;
