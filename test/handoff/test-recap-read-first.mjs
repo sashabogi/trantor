@@ -5,8 +5,7 @@
 // not be able to disarm the gate either.
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync } from "node:fs";
 
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
@@ -19,7 +18,10 @@ mkdirSync(out, { recursive: true });
 const dir = mkdtempSync(join(out, "recap-"));
 process.env.AGENT_BUS_DIR = join(dir, "bus");
 process.env.HOME = dir;
+delete process.env.CLAUDE_CONFIG_DIR;   // memoryDirectory must key off HOME, like Claude Code
 const { readFirstPaths, pathsReadIn, writeHandoff, memoryIndexPath, capSummary } = await import("../../hooks/lib/handoff.mjs");
+const { currentStatePath } = await import("../../hooks/lib/current-state.mjs");
+const { memoryDirectory } = await import("../../lib/memory-pins.mjs");
 /** A transcript carrying the given tool calls, in the shape Claude Code actually writes. */
 const transcript = (calls) => {
   const p = join(dir, `t-${Math.random().toString(36).slice(2)}.jsonl`);
@@ -118,12 +120,16 @@ console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
     for (const k of VARS) delete process.env[k];
     process.env.RELAY_URL = "http://127.0.0.1:1";   // storm guard: dead port → fail-open, offline
 
-    projDir = mkdtempSync(join(out, "recap-proj-"));
-    memRoot = join(homedir(), ".claude", "projects", projDir.replaceAll("/", "-"));
+    // #13875: a DOTTED project path — Claude Code slugs every non-alphanumeric character, so the
+    // old slash-only rule pointed READ FIRST at a memory folder nothing ever loads.
+    projDir = mkdtempSync(join(out, "recap-proj-1.5-"));
+    memRoot = dirname(memoryDirectory(projDir));
     const memIndex = join(memRoot, "memory", "MEMORY.md");
     mkdirSync(join(memRoot, "memory"), { recursive: true });
     writeFileSync(memIndex, "# index — the durable record lives here\n");
     ok("memoryIndexPath resolves the project's index at the encoded-cwd location", memoryIndexPath(projDir) === memIndex, memoryIndexPath(projDir));
+    ok("a dotted path lands in the one folder memoryDirectory slugs (Claude Code's rule, not slash-only)", memoryIndexPath(projDir) === join(memoryDirectory(projDir), "MEMORY.md"), `${memoryIndexPath(projDir)} vs ${join(memoryDirectory(projDir), "MEMORY.md")}`);
+    ok("READ FIRST's index and the current-state file share the one memory folder Claude Code loads", dirname(memoryIndexPath(projDir)) === dirname(currentStatePath(projDir)), `${dirname(memoryIndexPath(projDir))} vs ${dirname(currentStatePath(projDir))}`);
     ok("memoryIndexPath is empty for a project that has none", memoryIndexPath(join(out, "recap-no-such-proj")) === "");
 
     const argsFile = join(dir, "scrooge-args.txt");
