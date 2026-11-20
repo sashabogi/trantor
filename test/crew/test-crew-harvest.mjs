@@ -104,6 +104,16 @@ console.log("\nA harvested commit syncs clean, receipt on disk and on the card:"
 
 console.log("\nAn unharvested commit makes sync refuse and name it:");
 {
+  const c = commit(seatDir, "c.txt", "seat lands c without receipt");
+  commit(repo, "main3.txt", "main moves on for receipt-free cherry");
+  git(repo, ["cherry-pick", c]);
+  const cMain = git(repo, ["rev-parse", "HEAD"]);
+  git(repo, ["push", "-q", "origin", "main"]);
+  ok("the receipt-free cherry-pick has a new sha", cMain !== c);
+  const sCherry = await cli("sync.mjs", ["codex"], repo);
+  ok("a patch already cherry-picked to main syncs without a receipt", sCherry.code === 0, sCherry.out);
+  ok("receipt-free sync moves the seat branch to origin/main", git(seatDir, ["rev-parse", "HEAD"]) === cMain);
+
   const b = commit(seatDir, "b.txt", "seat lands b unharvested");
   const s = await cli("sync.mjs", ["codex", "--no-fetch"], repo);
   ok("sync exits 1", s.code === 1, s.out);

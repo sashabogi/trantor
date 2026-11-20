@@ -156,7 +156,3 @@ The in-place fix and the backend are not competitors: the in-place fix must ship
 - Actual clone/push timings from the Mac orchestrator host (probe here was from the linux seat host only).
 - Partial clone (`--filter`) from Artifacts: docs conflict with ArtifactFS's blobless claim; irrelevant at our size but worth knowing before any large-repo use.
 - Whether the operator's existing Cloudflare account already carries Workers Paid (changes the cost line from "new $5/mo" to "already sunk").
-
-### #13921 implementation recon (2026-11-20)
-
-The runner currently chooses an explicit `base:` from the wake, then falls back to `main^{commit}` in the linked worktree without refreshing it (`bin/crew-runner.mjs`). The fallback must fetch `origin/main` and use its refreshed tracking ref. Worktree setup currently only fast-forwards an existing clean worktree from the source `HEAD`; a diverged branch is left alone. On recreation, it uses `-B seat/<agent> HEAD` only when the old branch tip is already an ancestor of `HEAD`, otherwise it attaches the existing branch tip. This appears to preserve divergent commits, but it has no explicit receipt-aware audit or per-contract parking ref. The regression should cover the seat branch refresh/recreation against a moved base and prove an unharvested commit remains reachable.
