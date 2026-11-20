@@ -88,6 +88,15 @@ describe("quota rows", () => {
     expect(c.tooltip).toContain("quota unknown");
   });
 
+  it("marks a numberless Kimi quota as usage unread in warn tone", () => {
+    const c = chipFrom(row({ provider: "kimi", label: "Kimi Code", kind: "quota" }))!;
+    expect(c.label).toBe("Kimi");
+    expect(c.value).toBe("usage unread");
+    expect(c.tone).toBe("warn");
+    expect(c.barPct).toBeNull();
+    expect(c.tooltip).toBe("Kimi Code · usage unread");
+  });
+
   // #7413 — qwen reads only the wall: an active plan has no number, and that is not "unknown".
   it("reads an active plan with a console-only gauge as active, never a question mark", () => {
     const c = chipFrom(row({ provider: "qwen", label: "Qwen", kind: "quota", plan: "token plan", detail: "plan active (remaining % is console-only)" }))!;
