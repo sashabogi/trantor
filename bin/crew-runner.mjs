@@ -1516,6 +1516,11 @@ async function resolveWakeCard(messages, { session }) {
       signal: AbortSignal.timeout(2500),
     });
   } catch {}
+  if (releaseState) {
+    const since = Date.now();
+    writeTurnState(PERSONA, PROJ, { phase: "idle", since });
+    await registerStatus("idle", { phase: "idle", phaseSince: since });
+  }
 
   // Wake messages this seat has PULLED off the bus but not yet worked successfully, plus the
   // broadcasts batched behind them. Restored from disk first: a runner that was killed mid-turn
