@@ -62,6 +62,22 @@ console.log("saveDelta: statement selection");
   ok(!stmts.some(s => s.includes("NOT (id = ANY")), "NO delete-everything-not-in-memory anywhere (foreign rows survive)");
 }
 
+console.log("saveDelta: unchanged append-only events keep shared rows without stringify churn");
+{
+  const { pool } = mockPool();
+  const store = new PgStore({ pool });
+  let serialized = 0;
+  const events = Array.from({ length: 50000 }, (_, i) => ({
+    id: i + 1, ts: 1, type: "message", project: "p", by: "seat",
+    toJSON() { serialized++; return { id: this.id, ts: this.ts, type: this.type, project: this.project, by: this.by }; },
+  }));
+  const prev = baseState({ events });
+  const next = baseState({ events: events.slice() });
+  const changed = await store.saveDelta("local", prev, next, { src: "test-hub" });
+  ok(changed === 0, "unchanged event log produces no database writes");
+  ok(serialized === 0, "unchanged event rows are not re-stringified on a dirty persist tick");
+}
+
 console.log("the append-only log actually appends (the 18-day silent death)");
 {
   // eventFromRow spread the JSON payload over the column fields, so a payload carrying its own `id`

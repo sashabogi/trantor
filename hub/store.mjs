@@ -172,7 +172,17 @@ const persistHealth = createPersistHealth({
   maxMs: process.env.RELAY_PERSIST_RETRY_MAX_MS,
   logIntervalMs: process.env.RELAY_PERSIST_LOG_INTERVAL_MS,
 });
-const snapshotState = () => JSON.parse(JSON.stringify({ ...state, cardEvents: state.events.filter(e => ["created", "moved", "updated"].includes(e?.type)) }));
+// Events are append-only: share rows between PG snapshots so unchanged rows skip JSON stringifying.
+// Copy the array so later appends/trims cannot change prior membership. JSON writes stringify now,
+// so sharing immutable event rows is safe there too.
+const snapshotState = () => {
+  const events = state.events.slice();
+  const cardEvents = events.filter(e => ["created", "moved", "updated"].includes(e?.type));
+  const snapshot = JSON.parse(JSON.stringify({ ...state, events: [], cardEvents: [] }));
+  snapshot.events = events;
+  snapshot.cardEvents = cardEvents;
+  return snapshot;
+};
 // This hub's writer id: saveDelta stamps it into every NOTIFY so we can tell our own change
 // notifications apart from a second writer's (importer, admin psql, another hub instance).
 const HUB_SRC = `hub-${process.pid}-${randomBytes(4).toString("hex")}`;
