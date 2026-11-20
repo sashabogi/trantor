@@ -425,7 +425,7 @@ trantor setup | doctor | connect | profile | provider | models
   holds, proposals and gates; never deletes projects or mints invites) and prints a
   `trantor://enroll` link. `--sim` opens it in the booted simulator, `--json` prints it for
   scripts, and `--role owner` widens the scope. The desktop app's Settings shows the same invite
-  as a QR code. It signs as the operator's owner identity (`TRANTOR_IDENTITY`, default `sasha@mac`).
+  as a QR code. It signs as the operator's owner identity (`TRANTOR_IDENTITY`, default `owner@laptop`).
 
 - **`trantor new <name>`** — project genesis in one command: makes the dir under your dev root
   (`TRANTOR_DEV_ROOT` or `~/development`), git on main (or `--from <git-url>`, or `--adopt` an

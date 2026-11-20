@@ -45,7 +45,7 @@ console.log("\n## the rules");
 const sends = [];
 let eventSeq = 0;
 let handed = 0;
-const MSG = { id: 7, from: "sasha@mac", to: "", text: "contract: work card #7001 now", ts: Date.now() };
+const MSG = { id: 7, from: "owner@laptop", to: "", text: "contract: work card #7001 now", ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -187,7 +187,7 @@ console.log("\n## a silent turn ends at the stall window");
     && /codex/.test(park.text || "") && /qwen3\/deepseek-v4-pro/.test(park.text || ""),
     park && String(park.text).slice(0, 140));
   ok("#7752: the assigner hears STALLED with the wake still owed, never a clean done",
-    r.sends.some(s => s.to === "sasha@mac" && /STALLED on/.test(s.text || "") && /wake stays owed/.test(s.text || ""))
+    r.sends.some(s => s.to === "owner@laptop" && /STALLED on/.test(s.text || "") && /wake stays owed/.test(s.text || ""))
     && !r.sends.some(s => /✅ done on/.test(s.text || "")));
   ok("#7752: the vanished contract's wake is NOT consumed — the queue survives the park",
     r.pendingLeft);

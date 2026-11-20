@@ -17,7 +17,7 @@ function home() {
 
 test("existing netcup owner comes from its Keychain stub and hub authorization", async t => {
   home();
-  const id = loadOrCreate("sasha@mac", "human");
+  const id = loadOrCreate("owner@laptop", "human");
   writeFileSync(keyPath(id.name), JSON.stringify({ ...id, privkey: undefined }));
   injectIdentityKeychain({ get: name => name === id.name ? JSON.stringify(id) : null });
   t.after(() => injectIdentityKeychain(null));
@@ -28,10 +28,10 @@ test("existing netcup owner comes from its Keychain stub and hub authorization",
     assert.equal(options.redirect, "error");
     return new Response("{}", { status: 200 });
   });
-  const owner = await resolveOwnerIdentity("http://100.79.242.104:4477");
-  assert.equal(owner.name, "sasha@mac");
-  assert.deepEqual(calls, ["http://100.79.242.104:4477/keys/usage"]);
-  assert.equal(phoneHubAddress("http://100.79.242.104:4477", "https://netcup-qdrant.tail0f2afd.ts.net").hub, "https://netcup-qdrant.tail0f2afd.ts.net");
+  const owner = await resolveOwnerIdentity("http://100.64.0.10:4477");
+  assert.equal(owner.name, "owner@laptop");
+  assert.deepEqual(calls, ["http://100.64.0.10:4477/keys/usage"]);
+  assert.equal(phoneHubAddress("http://100.64.0.10:4477", "https://hub.example").hub, "https://hub.example");
 });
 
 test("fresh remote home never creates or enrolls an owner", async t => {
@@ -91,5 +91,5 @@ test("phone checks reject local addresses while enrollment rejects deceptive hos
   for (const base of ["http://127.example.com", "http://localhost@example.com", "http://127.0.0.1/proxy", "file://localhost"]) {
     assert.equal(loopbackHub(base), false);
   }
-  assert.equal(phoneHubAddress("http://100.79.242.104:4477", "https://public.example.com", true).hub, "http://100.79.242.104:4477");
+  assert.equal(phoneHubAddress("http://100.64.0.10:4477", "https://public.example.com", true).hub, "http://100.64.0.10:4477");
 });

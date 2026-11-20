@@ -33,7 +33,7 @@ const renderLens = (root: Root, over: {
   const opened: string[] = [];
   act(() => root.render(
     <GraphLens
-      client={stubClient(["kimi:p", "glm:p", "MacBook-Pro-M1:p", "kimi:other"])}
+      client={stubClient(["kimi:p", "glm:p", "MacBook-Example:p", "kimi:other"])}
       project="p" lens="graph"
       onLens={() => {}}
       seat={null}

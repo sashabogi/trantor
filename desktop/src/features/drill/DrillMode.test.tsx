@@ -42,7 +42,7 @@ describe("DrillMode", () => {
   const flush = async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); };
   const mount = async (api: DrillApi, onClose = vi.fn()) => {
     await act(async () => {
-      root.render(<DrillMode me="sasha@mac" onClose={onClose} deps={api} />);
+      root.render(<DrillMode me="owner@laptop" onClose={onClose} deps={api} />);
       await flush();
     });
     return onClose;
@@ -90,7 +90,7 @@ describe("DrillMode", () => {
     expect(order).toEqual(["settle hidden=hidden", "shot", "move"]);
     expect(api.screenshot).toHaveBeenCalledWith(`card-${first}`);
     expect(api.moveCard).toHaveBeenCalledWith(first, "done",
-      `drill-mode PASS by sasha@mac on drill-20260907-2104 · screenshot /tmp/drills/9-card-${first}.png · auto-check none (human only)`);
+      `drill-mode PASS by owner@laptop on drill-20260907-2104 · screenshot /tmp/drills/9-card-${first}.png · auto-check none (human only)`);
     expect(host.textContent).toContain(`#${DRILL_STEPS[1].card}`);
     expect(host.textContent).toContain(`2 / ${DRILL_STEPS.length}`);
     // the panel is visible again after the capture
@@ -111,7 +111,7 @@ describe("DrillMode", () => {
     await click("Fail");
     expect(api.screenshot).not.toHaveBeenCalled();
     expect(api.moveCard).toHaveBeenCalledWith(first, "doing",
-      "drill-mode FAIL by sasha@mac on drill-20260907-2104 · auto-check none (human only) · sheet did not switch to From a brief");
+      "drill-mode FAIL by owner@laptop on drill-20260907-2104 · auto-check none (human only) · sheet did not switch to From a brief");
     expect(host.textContent).toContain(`#${DRILL_STEPS[1].card}`);
   });
 

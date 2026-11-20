@@ -28,10 +28,10 @@ const cards = new Map([
   [CARD_A, { id: CARD_A, status: "todo" }],
   [CARD_B, { id: CARD_B, status: "todo" }],
 ]);
-const MSG_A = { id: 11, from: "sasha@mac", text: `contract: work card #${CARD_A} — run the tests and gate output`, ts: Date.now() };
+const MSG_A = { id: 11, from: "owner@laptop", text: `contract: work card #${CARD_A} — run the tests and gate output`, ts: Date.now() };
 // B names only #Y: a bare citation, no assignment shape, no mention of A's card at all — exactly
 // the shape whose binding the old scan lost to A's "contract: card #X" sitting queued behind it.
-const MSG_B = { id: 12, from: "sasha@mac", text: `#${CARD_B} is the one to work now — the earlier contract stays owed until this lands`, ts: Date.now() };
+const MSG_B = { id: 12, from: "owner@laptop", text: `#${CARD_B} is the one to work now — the earlier contract stays owed until this lands`, ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -57,7 +57,7 @@ const hub = http.createServer((req, res) => {
     }
     if (P === "/events") {
       const since = Number(u.searchParams.get("since") || 0);
-      return reply({ events: eventSeq > since ? [{ id: eventSeq, ts: Date.now(), type: "message", project: "", by: "sasha@mac" }] : [], cursor: eventSeq, latest: eventSeq });
+      return reply({ events: eventSeq > since ? [{ id: eventSeq, ts: Date.now(), type: "message", project: "", by: "owner@laptop" }] : [], cursor: eventSeq, latest: eventSeq });
     }
     if (P === "/contracts") return reply({ contracts: [] });
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
@@ -148,12 +148,12 @@ console.log("\n## contract A #X is served, stays owed, then B naming only #Y is 
       && !r.wakeTurns[1].includes(`relay_board with card:${CARD_A}`), r.wakeTurns[1]?.slice(0, 400));
   // #10197: B is a fresh contract, not A's retry. Each warns on its first attempt;
   // B's own retry parks, and all three outcomes must name the card actually served.
-  const warns = r.sends.filter(s => s.to === "sasha@mac" && s.text?.startsWith("⚠ no commit"));
+  const warns = r.sends.filter(s => s.to === "owner@laptop" && s.text?.startsWith("⚠ no commit"));
   ok("#10824: no-delivery warnings name A then B as each contract is served",
     warns.length === 2 && warns[0].text.includes(`card #${CARD_A} still todo`)
       && warns[1].text.includes(`card #${CARD_B} still todo`),
     warns.map(s => String(s.text).slice(0, 110)).join(" | "));
-  const parks = r.sends.filter(s => s.to === "sasha@mac" && /PARKED/.test(s.text || ""));
+  const parks = r.sends.filter(s => s.to === "owner@laptop" && /PARKED/.test(s.text || ""));
   ok("#10824: the park notice names #Y — the second no-delivery turn read the SERVED card",
     parks.length === 1 && new RegExp(`card #${CARD_B} unmoved`).test(parks[0].text || ""),
     parks[0] && String(parks[0].text).slice(0, 160));

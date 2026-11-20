@@ -13,7 +13,7 @@ final class CrewTransportTests: XCTestCase {
         let api = HubAPI(baseURL: URL(string: "https://hub.example")!, signer: Signer(privateKey: key), session: session)
         CrewURLProtocol.reset()
         let roster = try await api.crewRoster()
-        XCTAssertEqual(roster.first?.machine, "sasha@mac")
+        XCTAssertEqual(roster.first?.machine, "owner@laptop")
         XCTAssertEqual(roster.first?.seats.first?.agent, "glm")
         let receipt = try await api.crewCommand(project: "a & b", action: .up, seats: [try XCTUnwrap(roster.first?.seats.first?.launchSpec)])
         XCTAssertEqual(receipt.status, "queued")
@@ -75,7 +75,7 @@ private final class CrewURLProtocol: URLProtocol {
         Self.lock.lock(); Self.captured.append((request, body)); Self.lock.unlock()
         let payload: String
         if request.url?.path == "/crew/roster" {
-            payload = #"{"machines":[{"machine":"sasha@mac","updatedAt":1000,"seats":[{"agent":"glm","spec":"glm:zai-coding-plan","metered":false,"available":true,"reason":""}]}]}"#
+            payload = #"{"machines":[{"machine":"owner@laptop","updatedAt":1000,"seats":[{"agent":"glm","spec":"glm:zai-coding-plan","metered":false,"available":true,"reason":""}]}]}"#
         } else if request.httpMethod == "POST" { payload = #"{"id":77,"status":"queued"}"# }
         else { payload = #"{"id":77,"status":"done","outcome":"done","output":"glm started"}"# }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!

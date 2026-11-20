@@ -66,7 +66,7 @@ keep the block short (≤12 lines). Do not touch any other hook file.
 - exit 0 always (report tool, not a gate).
 Duty doctrine: in bin/duty.mjs find the RULES/doctrine string the duty seat receives; add a
 PATROL step: each watch cycle run `node <root>/bin/patrol.mjs --json`; reap only when orphans
-are provably dead; DM the human (sasha) about anything ambiguous (live orphan runner, dev
+are provably dead; DM the human (the operator) about anything ambiguous (live orphan runner, dev
 server >24h old); summarize actions in the on-watch broadcast. Do NOT touch bin/cli.mjs —
 the orchestrator wires the `trantor patrol` route.
 Tests mirror #4214's stub style. Run: `node test-patrol.mjs` → "ALL PASS (n)", exit 0.

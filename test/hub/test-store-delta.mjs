@@ -154,12 +154,12 @@ console.log("contractReap: the kv key survives the round-trip (the ghost backlog
 console.log("balancesByMachine: the meta kv row round-trips per-machine snapshots (#12010)");
 {
   // netcup runs the Postgres store, so the per-machine usage snapshots have to survive its meta row
-  const byMachine = { "MacBook-Pro-M1": { ts: 9, by: "", entries: [{ provider: "kimi", ok: true }], profile: { kimi: { tier: "capped-sub" } } } };
+  const byMachine = { "laptop": { ts: 9, by: "", entries: [{ provider: "kimi", ok: true }], profile: { kimi: { tier: "capped-sub" } } } };
   const { log, pool } = mockPool();
   const store = new PgStore({ pool });
   await store.saveDelta("local", baseState({ balancesByMachine: {} }), baseState({ balancesByMachine: byMachine }), { src: "test-hub" });
   const meta = log.filter(l => l.sql.includes("INSERT INTO kv") && l.vals[1] === "meta");
-  ok(meta.length === 1 && JSON.parse(meta[0].vals[2] || "{}").balancesByMachine?.["MacBook-Pro-M1"]?.entries?.[0]?.provider === "kimi",
+  ok(meta.length === 1 && JSON.parse(meta[0].vals[2] || "{}").balancesByMachine?.["laptop"]?.entries?.[0]?.provider === "kimi",
      "saveDelta writes balancesByMachine inside the meta row");
   const rows = { tasks: [], peers: [], events: [], messages: [], identities: [], kv: [{ key: "meta", value: { balancesByMachine: byMachine } }] };
   const client = {
@@ -167,7 +167,7 @@ console.log("balancesByMachine: the meta kv row round-trips per-machine snapshot
     release: () => {}, on: () => client, once: () => client,
   };
   const loaded = await new PgStore({ pool: { query: client.query, connect: async () => client } }).loadSnapshot("local");
-  ok(loaded.balancesByMachine?.["MacBook-Pro-M1"]?.profile?.kimi?.tier === "capped-sub", "loadSnapshot rehydrates balancesByMachine from meta");
+  ok(loaded.balancesByMachine?.["laptop"]?.profile?.kimi?.tier === "capped-sub", "loadSnapshot rehydrates balancesByMachine from meta");
 }
 
 console.log("task extra fields: pack + unpack (the cost-metadata fidelity fix)");
@@ -316,7 +316,7 @@ if (!PG_URL) {
   // 08:20 on 09-03). This is register -> snapshot -> reload, against real Postgres.
   await A.touchPeer(orgId, "claude:p6170", { project: "p6170", status: "active", kind: "agent" });
   await A.touchPeer(orgId, "mac:p6170", { project: "p6170", status: "orchestrating", kind: "orch" });
-  await A.touchPeer(orgId, "sasha@mac", { project: "p6170", status: "watching" });   // genuinely kindless
+  await A.touchPeer(orgId, "owner@laptop", { project: "p6170", status: "watching" });   // genuinely kindless
 
   // the heartbeats that used to erase it: same peers, no kind on the beat
   await A.touchPeer(orgId, "claude:p6170", { project: "p6170" });
@@ -334,7 +334,7 @@ if (!PG_URL) {
      "#6170: a kind persisted by the hub's own delta tick survives the reload");
   ok(reloaded.peers["claude:p6170"]?.kind === "agent", "#6170: a crew seat is still 'agent' after a reload");
   ok(reloaded.peers["mac:p6170"]?.kind === "orch", "#6170: the orchestrator is still 'orch' — not demoted by its own beat");
-  ok(!reloaded.peers["sasha@mac"]?.kind, "#6170: a peer that never declared a kind stays blank, not invented");
+  ok(!reloaded.peers["owner@laptop"]?.kind, "#6170: a peer that never declared a kind stays blank, not invented");
 
   // And the exemption that consumes it: same predicate the hub's declaredCrewFor uses.
   const crew = Object.entries(reloaded.peers)

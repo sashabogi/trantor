@@ -3,7 +3,7 @@
 Read + written by a sub-agent; independently cross-checked against a second read (statusline,
 OAuth endpoint, Fable scoping, reset-credit flow all confirmed twice).
 
-Source: `/Users/sashabogojevic/development/trantor/.scratch/orca` (Electron/TypeScript). All
+Source: `/Users/test/development/trantor/.scratch/orca` (Electron/TypeScript). All
 paths below are relative to that repo root unless given absolute. Read-only pass, no edits made.
 
 ## 1. Data sources per agent

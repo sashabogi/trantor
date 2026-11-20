@@ -12,13 +12,13 @@ const flagged = s => !assertNoSecrets(s).ok;
 console.log("\nReal secrets MUST be caught:");
 const secrets = {
   "openai/openrouter key": "sk-abcdefghijklmnopqrstuvwxyz012345",
-  "stripe live key":       "sk_live_abcdefghijklmnop1234",
+  "stripe live key":       "sk_live_abcdefghijklmnop1234", // gitleaks:allow — synthetic fixture
   "xai key":               "xai-abcdefghijklmnopqrst1234",
   "aws access key id":     "AKIAIOSFODNN7EXAMPLE",
   "github pat":            "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
   "google api key":        "AIzaSyDRabcdefghijklmnopqrstuvwxyz01234",
   "slack token":           "xoxb-1234567890-abcdefghij",
-  "jwt":                   "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+  "jwt":                   "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk", // gitleaks:allow — synthetic fixture
   "bearer token":          "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123",
   "pem private key":       "-----BEGIN RSA PRIVATE KEY-----",
   "pem private key plain": "-----BEGIN PRIVATE KEY-----",
@@ -61,7 +61,7 @@ for (const [label, v] of [["null", null], ["undefined", undefined], ["number", 4
 console.log("\nStructure:");
 {
   const f = findSecrets("sk-abcdefghijklmnopqrstuvwxyz012345");
-  ok("returns {kind,index,length}", f.length === 1 && typeof f[0].kind === "string" && Number.isInteger(f[0].index) && f[0].length > 0);
+  ok("returns {kind,index,length}", f.length === 1 && f[0].kind.length > 0 && Number.isInteger(f[0].index) && f[0].length > 0);
   ok("assertNoSecrets reports unique kinds", assertNoSecrets("sk-aaaaaaaaaaaaaaaaaaaa sk-bbbbbbbbbbbbbbbbbbbb").kinds.length === 1);
   ok("clean text -> {ok:true}", assertNoSecrets("hello").ok === true);
   const t0 = Date.now(); findSecrets(("x".repeat(200) + " sk-aaaaaaaaaaaaaaaaaaaa ").repeat(200));

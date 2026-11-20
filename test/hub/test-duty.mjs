@@ -44,11 +44,11 @@ try {
   }
 
   // Desktop peek reads need an explicit acknowledgment to suppress delivery escalations.
-  await post("/send", { from: "arch:projA", to: "sasha@mac", text: "a question for the human", project: "projA" });
-  const humanBox = await get(`/inbox?session=${encodeURIComponent("sasha@mac")}&since=0&peek=1`);
-  const humanMsg = (humanBox.messages || []).filter(m => m.to === "sasha@mac").pop();
+  await post("/send", { from: "arch:projA", to: "owner@laptop", text: "a question for the human", project: "projA" });
+  const humanBox = await get(`/inbox?session=${encodeURIComponent("owner@laptop")}&since=0&peek=1`);
+  const humanMsg = (humanBox.messages || []).filter(m => m.to === "owner@laptop").pop();
   ok("the human's message is there to be read", !!humanMsg, JSON.stringify(humanBox).slice(0, 120));
-  const ackRes = await post("/delivered", { session: "sasha@mac", upTo: humanMsg?.id ?? 0 });
+  const ackRes = await post("/delivered", { session: "owner@laptop", upTo: humanMsg?.id ?? 0 });
   await sleep(1800);
   {
     const box = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
@@ -58,7 +58,7 @@ try {
     // Straight from the endpoint that recorded it — /peers does not serialize deliveredUpTo.
     ok("…and the hub reports the new delivery watermark", (ackRes?.deliveredUpTo || 0) >= (humanMsg?.id ?? 1),
       JSON.stringify(ackRes || {}));
-    const again = await post("/delivered", { session: "sasha@mac", upTo: 1 });
+    const again = await post("/delivered", { session: "owner@laptop", upTo: 1 });
     ok("…monotonically — a lower ack never rewinds it", (again?.deliveredUpTo || 0) >= (humanMsg?.id ?? 1),
       JSON.stringify(again || {}));
   }

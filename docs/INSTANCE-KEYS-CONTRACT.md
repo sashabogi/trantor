@@ -7,10 +7,10 @@ memory `trantor-agent-ux-gap` (the handoff-twin incident this fixes).
 
 Three problems, one mechanism:
 
-1. **The handoff-twin race.** A durable identity (`MacBook-Pro-M1:trantor`) is one keypair, one
+1. **The handoff-twin race.** A durable identity (`laptop:trantor`) is one keypair, one
    inbox cursor, one delivery ledger. A baton twin and its dying predecessor are therefore the
    SAME peer: whichever one's hooks fire first eats shared messages, and the hub cannot tell them
-   apart (2026-07-30: the live update had to be relayed via `sasha@mac`).
+   apart (2026-07-30: the live update had to be relayed via `owner@laptop`).
 2. **No per-restart freshness.** The durable key lives until rotated by hand. A leaked key is
    valid forever; there is no cheap revocation story.
 3. **Teams needs short-lived credentials.** In an org, "a user's agent on a machine" is durable,
@@ -29,7 +29,7 @@ plaintext is the product — board, FEED, overseer detection, narration all depe
 ```js
 // instance key file — ~/.agent-bus/keys/instances/<safe(durable)>@<safe(instanceId)>.json, 0600
 {
-  name: "<durable name>",            // e.g. "MacBook-Pro-M1:trantor"
+  name: "<durable name>",            // e.g. "laptop:trantor"
   instanceId: "<opaque id>",          // hooks: the harness session_id; MCP server: random at boot
   pubkey: "<hex64>", privkey: "<hex64>",
   createdAt: <ms>,

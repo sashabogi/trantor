@@ -30,7 +30,7 @@ console.log("\n## the real specimens classify permission-rejected, never success
   ok("the verdict names the refused path", v.includes("/tmp/w0-base/*"), v);
   ok("the verdict never says success", !/success/.test(v), v);
   const vt = verdictFor(0, 0, false, TRANTOR, false, false);
-  ok("the trantor verdict names its own refused path", vt.startsWith("classified permission-rejected") && vt.includes("/Users/sashabogojevic/.agent-bus/*"), vt);
+  ok("the trantor verdict names its own refused path", vt.startsWith("classified permission-rejected") && vt.includes("/Users/test/.agent-bus/*"), vt);
   const v1 = verdictFor(0, 1, false, IBKR, false, false);
   ok("the lifted-exit path names permission-rejected too", v1.startsWith("classified permission-rejected because"), v1);
   ok("classifyFailure(exit 1, ibkr) is permission-rejected, never crashed",

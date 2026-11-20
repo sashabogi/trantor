@@ -240,7 +240,7 @@ try {
     I.post("/register", { session: "codex:alpha", project: "alpha", kind: "agent" }).catch(() => {});
     I.post("/register", { session: "kimi:alpha", project: "alpha", kind: "agent" }).catch(() => {});
     I.post("/register", { session: "glm:alpha", project: "alpha", kind: "agent" }).catch(() => {});
-    I.post("/register", { session: "MacBook-Pro-M1:alpha", project: "alpha", kind: "orch" }).catch(() => {});
+    I.post("/register", { session: "laptop:alpha", project: "alpha", kind: "orch" }).catch(() => {});
   }, 150);
   await sleep(2500);
   let ev = await I.get("/events?type=overseer.&limit=100");
@@ -285,7 +285,7 @@ console.log("\n#6170: peer kinds survive a hub restart");
     const K = mk(hubK.base);
     await K.post("/register", { session: "claude:kk", project: "kk", status: "active", kind: "agent" });
     await K.post("/register", { session: "mac:kk", project: "kk", status: "orchestrating", kind: "orch" });
-    await K.post("/register", { session: "sasha@mac", project: "kk", status: "watching" });
+    await K.post("/register", { session: "owner@laptop", project: "kk", status: "watching" });
     // the beat that carries no kind — the one that used to demote the orchestrator
     await K.post("/register", { session: "mac:kk", project: "kk" });
 
@@ -301,7 +301,7 @@ console.log("\n#6170: peer kinds survive a hub restart");
     const after = (await mk(hubK.base).get("/peers")).peers;
     ok(kindOf(after, "claude:kk") === "agent", "#6170: a crew seat is still 'agent' after the restart");
     ok(kindOf(after, "mac:kk") === "orch", "#6170: the orchestrator is still 'orch' after the restart");
-    ok(kindOf(after, "sasha@mac") === "", "#6170: a peer that never declared a kind is not given one");
+    ok(kindOf(after, "owner@laptop") === "", "#6170: a peer that never declared a kind is not given one");
   } catch (e) { fail++; console.log(`  ✗ #6170 restart: ${e.message}`); }
   finally { await hubK.stop(); rmSync(dirK, { recursive: true, force: true }); }
 }

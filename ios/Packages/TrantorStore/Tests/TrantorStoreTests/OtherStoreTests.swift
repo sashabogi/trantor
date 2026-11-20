@@ -91,15 +91,15 @@ final class OtherStoreTests: XCTestCase {
     }
 
     func testPairingLinkParsing() {
-        let ok = PairingLink.parse(URL(string: "trantor://enroll?hub=http://100.79.242.104:4477&token=abc123")!)
-        XCTAssertEqual(ok, PairingLink(hub: "http://100.79.242.104:4477", token: "abc123"))
+        let ok = PairingLink.parse(URL(string: "trantor://enroll?hub=http://100.64.0.10:4477&token=abc123")!)
+        XCTAssertEqual(ok, PairingLink(hub: "http://100.64.0.10:4477", token: "abc123"))
         XCTAssertNil(PairingLink.parse(URL(string: "trantor://enroll?hub=x")!))
         XCTAssertNil(PairingLink.parse(URL(string: "https://enroll?hub=x&token=y")!))
         XCTAssertNil(PairingLink.parse(URL(string: "trantor://other?hub=x&token=y")!))
     }
 
     func testHubAddressNormalizing() {
-        XCTAssertEqual(SettingsStore.normalizeHub("100.79.242.104:4477/")?.absoluteString, "http://100.79.242.104:4477")
+        XCTAssertEqual(SettingsStore.normalizeHub("100.64.0.10:4477/")?.absoluteString, "http://100.64.0.10:4477")
         XCTAssertEqual(SettingsStore.normalizeHub(" http://hub.local:4477 ")?.absoluteString, "http://hub.local:4477")
         XCTAssertNil(SettingsStore.normalizeHub(""))
         XCTAssertEqual(SettingsStore.defaultDeviceName("iPhone 17 Pro"), "ios-iphone17pro")
@@ -111,7 +111,7 @@ final class OtherStoreTests: XCTestCase {
         let hub = StubHub()
         let settings = SettingsStore(defaults: defaults, keyStore: keys, makeAPI: { _, _ in hub })
         XCTAssertFalse(settings.isPaired)
-        await settings.pair(hub: "100.79.242.104:4477", token: "tok", deviceName: "ios-phone")
+        await settings.pair(hub: "100.64.0.10:4477", token: "tok", deviceName: "ios-phone")
         XCTAssertTrue(settings.isPaired)
         XCTAssertEqual(settings.identityName, "ios-phone")
         XCTAssertEqual(settings.scopes.first?.role, "owner")

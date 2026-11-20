@@ -7,9 +7,9 @@ final class ModelDecodingTests: XCTestCase {
     }
 
     func testHealthDecodesThePublicUrlWhenPresent() throws {
-        let withUrl = try decode(HealthInfo.self, #"{"ok":true,"authMode":"enforce","peers":3,"messages":9,"publicUrl":"https://netcup-qdrant.tail0f2afd.ts.net"}"#)
+        let withUrl = try decode(HealthInfo.self, #"{"ok":true,"authMode":"enforce","peers":3,"messages":9,"publicUrl":"https://hub.example"}"#)
         XCTAssertTrue(withUrl.ok)
-        XCTAssertEqual(withUrl.publicUrl, "https://netcup-qdrant.tail0f2afd.ts.net")
+        XCTAssertEqual(withUrl.publicUrl, "https://hub.example")
         // Hubs before RELAY_PUBLIC_URL have no such field; an empty one means "no public address".
         XCTAssertNil(try decode(HealthInfo.self, #"{"ok":true,"authMode":"enforce"}"#).publicUrl)
         XCTAssertNil(try decode(HealthInfo.self, #"{"ok":true,"publicUrl":""}"#).publicUrl)

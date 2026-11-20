@@ -1,21 +1,6 @@
 #!/usr/bin/env node
-// A hub staleness alert expires. A peer's message never does.
-//
-// The 2026-09-09 wedge, and the reason restarting the duty seat did not clear it. The hub sends the
-// duty seat alerts of the form "⚠️ UNDELIVERED for 2m: #16909 …" — go nudge someone. That is true
-// for about two minutes. The pending queue had no expiry, so:
-//
-//   hub notices undelivered mail → alerts duty → duty is parked and cannot work it off →
-//   hub notices again → more alerts → queue grows → restart faithfully redelivers the backlog →
-//   seat re-wedges on work that expired hours ago
-//
-// Measured on the real queue at the time of the fix: 49 held, 44 of them expired hub alerts, the
-// oldest 22.1 hours old, every one describing a two-minute condition.
-//
-// The rule is deliberately narrow and this file exists mostly to keep it that way: ONLY messages
-// the hub generated, ONLY past the TTL. A peer's message is never dropped for being old — a seat
-// that silently discards a teammate's request is the exact failure the bus exists to prevent, and
-// no backlog is worth causing it.
+// Expire only hub-generated staleness alerts after their TTL; peer messages never expire.
+// Otherwise a parked duty seat's queue grows with obsolete alerts and restart redelivers them.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -49,7 +34,7 @@ console.log("\nA PEER'S MESSAGE IS NEVER DROPPED, at any age");
 {
   ok("a 22h-old peer message survives", !isExpiredHubAlert(msg("codex:stone-tracker", 22 * HOUR)));
   ok("a 30-DAY-old peer message survives", !isExpiredHubAlert(msg("glm:trantor", 30 * 24 * HOUR)));
-  ok("an orchestrator message survives", !isExpiredHubAlert(msg("MacBook-Pro-M1:trantor", 48 * HOUR)));
+  ok("an orchestrator message survives", !isExpiredHubAlert(msg("laptop:trantor", 48 * HOUR)));
   ok("a message with no timestamp survives — unknown age is not old age",
     !isExpiredHubAlert({ from: "hub:duty", text: "x" }));
   ok("a malformed entry does not throw", !isExpiredHubAlert(null) && !isExpiredHubAlert(undefined));

@@ -20,5 +20,5 @@ python/ibkr/app/server_ws.py
 7d0ed7c Merge remote-tracking branch 'origin/or-parity' into m2-integ
 [0m
 [93m[1m! [0mpermission requested: external_directory (/tmp/w0-base/*); auto-rejecting
-[0m✗ [0m/Users/sashabogojevic/.agent-bus/worktrees/ibkr/glm/.venv/bin/python -m pytest python/tests/test_council_import_graph.py -q 2>&1 | tail -6 failed
+[0m✗ [0m/Users/test/.agent-bus/worktrees/ibkr/glm/.venv/bin/python -m pytest python/tests/test_council_import_graph.py -q 2>&1 | tail -6 failed
 [91m[1mError: [0mThe user rejected permission to use this specific tool call.

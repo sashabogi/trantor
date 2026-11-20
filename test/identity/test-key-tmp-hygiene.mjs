@@ -46,7 +46,7 @@ check("race-loser instance tmp is cleaned up", tmpsIn(instDir).length === 0);
 
 // [4] pruneStaleTmp: only aged *.tmp in the keys tree; never a real key, never a symlink
 mkdirSync(instDir, { recursive: true });
-const agedTmp = join(keysDir(), "sasha_mac.json.13017.dc830a7d.tmp");
+const agedTmp = join(keysDir(), "owner_laptop.json.13017.dc830a7d.tmp");
 const freshTmp = join(keysDir(), "other.json.999.abcdef01.tmp");
 const agedInstTmp = join(instDir, "x@sess.json.1.2222.tmp");
 const realKey = keyPath("operator-keep");

@@ -23,7 +23,7 @@ console.log("\n## the fixture is the real tail, masked");
     /You've reached your weekly \(7-day\) usage limit\./.test(TAIL));
   ok("the fixture carries the reset line — the verdict evidence can name it",
     /quota will reset when the current 7-day window ends/.test(TAIL));
-  ok("the mask held — no home path in the fixture", !/sashabogojevic/.test(TAIL));
+  ok("the mask held — no home path in the fixture", !/operator/.test(TAIL));
 }
 
 console.log("\n## the replay: the runner's exact classify input is the capture tail (lastErrText = ownOut.slice(-4000))");

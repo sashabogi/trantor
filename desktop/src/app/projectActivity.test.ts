@@ -14,7 +14,7 @@ describe("computeProjectActivity — mid-turn is a report, not a heartbeat (#777
     // The bug, exactly: ten projects reading "mid-turn" at once because each had touched the hub
     // recently. The runner says it is idle; recency of the heartbeat must not overrule that.
     const peers: Peer[] = [
-      { session: "sasha@mac", project: "trantor", lastSeen: NOW - 5_000, status: "idle" },
+      { session: "owner@laptop", project: "trantor", lastSeen: NOW - 5_000, status: "idle" },
     ];
     const act = computeProjectActivity([], peers, NOW);
     expect(act.get("trantor")?.state).toBe("idle");
@@ -56,22 +56,22 @@ describe("computeProjectActivity — mid-turn is a report, not a heartbeat (#777
 
   it("drops a peer the hub no longer considers online — a stale status is a memory, not a report", () => {
     const peers: Peer[] = [
-      { session: "sasha@mac", project: "trantor", lastSeen: NOW - ONLINE_MS - 1, status: "working · edit" },
+      { session: "owner@laptop", project: "trantor", lastSeen: NOW - ONLINE_MS - 1, status: "working · edit" },
     ];
     expect(computeProjectActivity([], peers, NOW).has("trantor")).toBe(false);
   });
 
   it("drops a peer explicitly marked offline even with a fresh lastSeen", () => {
     const peers: Peer[] = [
-      { session: "sasha@mac", project: "trantor", lastSeen: NOW, status: "working · edit", online: false },
+      { session: "owner@laptop", project: "trantor", lastSeen: NOW, status: "working · edit", online: false },
     ];
     expect(computeProjectActivity([], peers, NOW).has("trantor")).toBe(false);
   });
 
   it("dedupes peers across multiple hub URLs, keeping the freshest per session", () => {
     const peers: Peer[] = [
-      { session: "sasha@mac", project: "trantor", lastSeen: NOW - 60_000, status: "working · edit" },
-      { session: "sasha@mac", project: "trantor", lastSeen: NOW, status: "idle" },
+      { session: "owner@laptop", project: "trantor", lastSeen: NOW - 60_000, status: "working · edit" },
+      { session: "owner@laptop", project: "trantor", lastSeen: NOW, status: "idle" },
     ];
     // the freshest row for that session says idle, so the stale "working" must not win
     expect(computeProjectActivity([], peers, NOW).get("trantor")?.state).toBe("idle");
@@ -88,7 +88,7 @@ describe("computeProjectActivity — mid-turn is a report, not a heartbeat (#777
   it("never lets an idle peer downgrade a project herdr reports working", () => {
     const open: LocalSession[] = [{ project: "trantor", status: "working" }];
     const peers: Peer[] = [
-      { session: "sasha@mac", project: "trantor", lastSeen: NOW, status: "idle" },
+      { session: "owner@laptop", project: "trantor", lastSeen: NOW, status: "idle" },
     ];
     expect(computeProjectActivity(open, peers, NOW).get("trantor")?.state).toBe("working");
   });
@@ -135,7 +135,7 @@ describe("wakeIsReal (#7775 item 1)", () => {
 describe("activityTitle (#7775 item 4)", () => {
   it("prints the evidence itself, so the tooltip asserts nothing extra", () => {
     const act = computeProjectActivity([], [
-      { session: "sasha@mac", project: "trantor", lastSeen: NOW, status: "idle" },
+      { session: "owner@laptop", project: "trantor", lastSeen: NOW, status: "idle" },
     ], NOW);
     expect(activityTitle(act.get("trantor"))).toBe("a session is here and nothing reports a turn executing");
     expect(activityTitle(undefined)).toBeUndefined();

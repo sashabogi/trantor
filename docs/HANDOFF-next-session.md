@@ -35,7 +35,7 @@ each other, and two are already resolved:
 | Thing | After reboot | Action |
 |---|---|---|
 | Local hub (launchd `com.trantor.hub`) | comes back automatically | verify `curl -s 127.0.0.1:4477/health` |
-| Remote hub (netcup, systemd) | unaffected, it's another machine | verify `curl -s http://100.79.242.104:4477/health` |
+| Remote hub (netcup, systemd) | unaffected, it's another machine | verify `curl -s http://100.64.0.10:4477/health` |
 | Tailscale | app auto-starts, but it was manually stopped once already | `tailscale status` must NOT say "stopped"; `pgrep tailscaled` must be non-empty |
 | Duty seat (`claude:fleet`) | dead, plain process | `trantor duty up` |
 | Bridge (`bin/bridge.mjs`, was pid 72342) | dead, plain process | leave it down (see §4) |
@@ -47,7 +47,7 @@ Health check for all of it in one pass:
 ```bash
 tailscale status | head -3
 curl -s 127.0.0.1:4477/health; echo
-curl -s -m 8 http://100.79.242.104:4477/health; echo
+curl -s -m 8 http://100.64.0.10:4477/health; echo
 trantor duty status
 ```
 

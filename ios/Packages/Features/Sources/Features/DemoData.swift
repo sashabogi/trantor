@@ -7,7 +7,7 @@ import TrantorStore
 @MainActor
 public enum DemoData {
     public static func model() -> AppModel {
-        let m = AppModel(stub: hub(), identity: "ios-sasha", demo: true)
+        let m = AppModel(stub: hub(), identity: "ios-user", demo: true)
         Task {
             await m.refreshAll()
             await m.board.load(project: "trantor")
@@ -39,9 +39,9 @@ public enum DemoData {
                      condition: "Pair-a-phone dialog only", exclusions: "No other dependency changes", ts: ago(11)),
         ]
         hub.inboxData = [
-            BusMessage(id: 29701, ts: ago(1), from: "codex-4:trantor", to: "ios-sasha",
+            BusMessage(id: 29701, ts: ago(1), from: "codex-4:trantor", to: "ios-user",
                        text: "#12113 is in testing at b821f32. Want me to take the QR scanner next?", project: "trantor", kind: "ask"),
-            BusMessage(id: 29688, ts: ago(14), from: "claude:trantor-duty", to: "ios-sasha",
+            BusMessage(id: 29688, ts: ago(14), from: "claude:trantor-duty", to: "ios-user",
                        text: "crebral-health has been idle 3h with 2 cards in doing.", project: "crebral-health"),
             BusMessage(id: 29650, ts: ago(48), from: "kimi-8:trantor", to: "all",
                        text: "APNs notifier wired to appendEvent; JWT reuse at 50 minutes.", project: "trantor"),
@@ -76,19 +76,19 @@ public enum DemoData {
             ], meta: ChatMeta(working: true, model: "Orchestrator", context: ChatContext(tokens: 42000, window: 200000, frac: 0.21)),
             updatedAt: ago(0.1), host: "demo-mac")]
         hub.cardsData = [
-            Card(id: 12079, project: "trantor", title: "iOS companion: the full build", status: "doing", assignee: "MacBook-Pro-M1:trantor",
+            Card(id: 12079, project: "trantor", title: "iOS companion: the full build", status: "doing", assignee: "laptop:trantor",
                  difficulty: "hard", phase: "building", updated: ago(1),
                  checklist: [ChecklistItem(text: "Design system from ibkr", done: true), ChecklistItem(text: "Live hub run"), ChecklistItem(text: "TestFlight")]),
             Card(id: 12114, project: "trantor", title: "Hub push: device registry and APNs notifier", status: "doing", assignee: "kimi-8:trantor", difficulty: "hard", updated: ago(3)),
             Card(id: 12115, project: "trantor", title: "Pair a phone from the desktop app", status: "doing", assignee: "glm-4:trantor", difficulty: "easy", updated: ago(4)),
             Card(id: 12113, project: "trantor", title: "Approver role between write and owner", status: "testing", assignee: "codex-4:trantor", difficulty: "medium", updated: ago(5)),
-            Card(id: 12112, project: "trantor", title: "Scope-filter /stream", status: "done", assignee: "MacBook-Pro-M1:trantor", updated: ago(60)),
+            Card(id: 12112, project: "trantor", title: "Scope-filter /stream", status: "done", assignee: "laptop:trantor", updated: ago(60)),
             Card(id: 12109, project: "trantor", title: "Plan approval in chat", status: "todo", difficulty: "medium"),
             Card(id: 12110, project: "trantor", title: "Clickable file and command chips", status: "todo", difficulty: "easy"),
             Card(id: 11585, project: "trantor", title: "Kill guard for runner suites", status: "blocked", assignee: "codex:trantor", difficulty: "medium"),
         ]
         hub.peersData = [
-            Peer(session: "MacBook-Pro-M1:trantor", online: true, status: "orchestrating", project: "trantor", model: "opus-5.5", kind: "claude", lastSeen: ago(0.2)),
+            Peer(session: "laptop:trantor", online: true, status: "orchestrating", project: "trantor", model: "opus-5.5", kind: "claude", lastSeen: ago(0.2)),
             Peer(session: "codex-4:trantor", online: true, status: "working", project: "trantor", llm: "codex", model: "gpt-5.5", kind: "agent", lastSeen: ago(0.5)),
             Peer(session: "kimi-8:trantor", online: true, status: "working", project: "trantor", llm: "kimi", model: "k3", kind: "agent", lastSeen: ago(0.4)),
             Peer(session: "glm-4:trantor", online: true, status: "idle", project: "trantor", llm: "glm", model: "glm-5.3-flash", kind: "agent", lastSeen: ago(1)),
@@ -112,7 +112,7 @@ public enum DemoData {
             HubEvent(id: 6, ts: ago(9), type: "presence.online", project: "trantor", by: "glm-4:trantor"),
             HubEvent(id: 5, ts: ago(22), type: "verify.gate.opened", project: "trantor", by: "codex-4:trantor",
                      payload: .object(["claim": .string("Approver role decides holds")])),
-            HubEvent(id: 4, ts: ago(61), type: "moved", project: "trantor", by: "MacBook-Pro-M1:trantor", taskId: 12112,
+            HubEvent(id: 4, ts: ago(61), type: "moved", project: "trantor", by: "laptop:trantor", taskId: 12112,
                      payload: .object(["title": .string("Scope-filter /stream"), "to": .string("done")])),
         ]
         return hub

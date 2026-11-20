@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-// trantor wake-cap drill (#7063) — the cap must never eat a work order's INSTRUCTIONS.
-//
-// orchestrators write context-first, asks-last: "here is what I found … so, do this: 1) … 2) …",
-// with the card id and the base: line near the end. capWake used to slice(0, 2000) — a HEAD cut —
-// so the tail (the asks) died and the seat was left with a message that READS complete. Two work
-// orders lost their item 2 in one turn that way. Now the middle is what gets cut: the first ~1200
-// and the last ~700 chars survive around one marker line, per message, never a batch budget.
+// #7063: preserve each work order's head and tail, including its card id, base and instructions.
+// Cut the middle per message, never with a shared batch budget.
 import { capWake } from "../../bin/crew-payload.mjs";
 
 let pass = 0, fail = 0;
@@ -25,7 +20,7 @@ console.log("# trantor wake cap keeps head and tail (#7063)");
   const body = `${firstLine}\n${filler}${closing}`;
   if (body.length <= 2000 || closing.length > 700) { console.log(`  fixture mis-sized: body=${body.length} closing=${closing.length}`); process.exit(1); }
 
-  const got = capWake([{ from: "MacBook-Pro-M1:trantor", to: "glm:trantor", text: body }]);
+  const got = capWake([{ from: "laptop:trantor", to: "glm:trantor", text: body }]);
   const text = got.text;
   ok("the message is over the cap and so was capped once", text.includes("chars of this message elided from the middle]"), text.length);
   ok("the FIRST LINE survives", text.includes(firstLine));
@@ -34,7 +29,7 @@ console.log("# trantor wake cap keeps head and tail (#7063)");
     && text.includes("Commit early so a box cut on a clean tree loses the turn, not the work."));
   ok("the marker names how many chars were elided", text.includes(`${(body.length - 1200 - 700).toLocaleString("en-US")} chars of this message elided from the middle`));
   ok("the capped body is bounded near head+tail", text.length < 1200 + 700 + 200, `len=${text.length}`);
-  ok("the metadata prefix is intact", text.startsWith("[MacBook-Pro-M1:trantor]: "));
+  ok("the metadata prefix is intact", text.startsWith("[laptop:trantor]: "));
 }
 
 // ---- a short contract is untouched, byte for byte ----

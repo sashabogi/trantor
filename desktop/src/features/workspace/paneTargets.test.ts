@@ -4,7 +4,7 @@ import type { Peer } from "../../shared/api/client";
 import type { HerdrSeat } from "./herdr";
 
 const orch: HerdrSeat = { project: "trantor", agent: "orchestrator", surface: "surf-1", kind: "orch" };
-const host: Peer = { session: "MacBook-Pro-M1:trantor", online: true, status: "working", lastSeen: 5 };
+const host: Peer = { session: "laptop:trantor", online: true, status: "working", lastSeen: 5 };
 const codex: Peer = { session: "codex:trantor", online: true, status: "idle" };
 
 describe("paneTargets", () => {
@@ -17,13 +17,13 @@ describe("paneTargets", () => {
   });
   it("the orchestrator row keeps the herdr pane name as its terminal key and brands from the host (0.3.99 regression)", () => {
     // 0.3.99 wrote the host session into `agent` to get the Claude mark, and the terminal pane
-    // then looked up a herdr surface named "MacBook-Pro-M1:trantor" — none exists, so the
+    // then looked up a herdr surface named "laptop:trantor" — none exists, so the
     // operator's own session rendered as "has no terminal pane". Two fields, two jobs.
     const [lead] = paneTargets([codex], orch, host, "trantor");
     expect(lead.isOrchestrator).toBe(true);
     expect(lead.agent).toBe("orchestrator");
-    expect(lead.brand).toBe("MacBook-Pro-M1:trantor");
-    expect(lead.session).toBe("MacBook-Pro-M1:trantor");
+    expect(lead.brand).toBe("laptop:trantor");
+    expect(lead.session).toBe("laptop:trantor");
     expect(lead.status).toBe("working");
   });
 
@@ -61,7 +61,7 @@ describe("paneTargets", () => {
     expect(lead.label).toBe("handing off");
     // the terminal lookup key and the identity NEVER change mid-chain — only the label does
     expect(lead.agent).toBe("orchestrator");
-    expect(lead.brand).toBe("MacBook-Pro-M1:trantor");
+    expect(lead.brand).toBe("laptop:trantor");
     expect(lead.key).toBe("__orchestrator__");
     expect(seat.isOrchestrator).toBe(false);
     expect(seat.label).toBe("codex");

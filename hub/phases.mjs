@@ -2,7 +2,7 @@
 const PHASE_GAP_MS = 8 * 60 * 60 * 1000;
 const agentBrand = (a) => { const s = String(a || ""); const i = s.indexOf(":"); return i > 0 ? s.slice(0, i) : (s || ""); };
 // Crew = a known helper-CLI brand; anything else with a brand (a machine hostname like
-// "MacBook-Pro-M1.local" or "MacBookPro.hsd1.fl.comcast.net", or a generic "host") is the
+// "laptop.local" or "host.lan.example", or a generic "host") is the
 // orchestrator. Brand-based (not hostname-pattern) so it's robust to hostname instability.
 const CREW_BRANDS = /^(codex|gemini|kimi|deepseek|claude|qwen|grok|glm|mistral|llama)$/i;
 const isOrchAssignee = (a) => { const b = agentBrand(a); return !!b && !CREW_BRANDS.test(b); };

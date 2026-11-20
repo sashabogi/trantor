@@ -1,10 +1,5 @@
-// Regression for #5869: seat err logs (~/.agent-bus/err-<agent>-<project>.txt) carried LIVE
-// provider keys whenever a CLI echoed its environment or dumped a config, and any seat on the
-// machine could read them. Three layers now scrub, and this test feeds key-shaped output through
-// each: (1) redactKeys() the pure scrubber, (2) the runner's tee replacement (lib/redact.mjs
-// --tee/--tee2 — raw to the live window, redacted to the err file), (3) the exact runTurn bash
-// topology plus the at-rest scrub pass before the file is read back. Ordinary lines must stay
-// byte-identical; the auth/empty-output classifier phrases must survive redaction.
+// #5869: feed key-shaped output through redactKeys, the tee replacements and runTurn's bash
+// topology. Logs must redact secrets while ordinary lines and classifier phrases survive.
 import { spawnSync } from "node:child_process";
 import { readFileSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,10 +16,10 @@ const KEYS = {
   sk: "sk-live-9f8e7d6c5b4a3210fedcba9876543210",
   sksp: "sk-sp-q7w8e9r0t1y2u3i4o5p6a7s8d9f0g1h2",
   skws: "sk-ws-zz9988yy77xx66ww55vv44uu33tt22ss",
-  aiza: "AIzaSyD1234567890abcdefghijklmnopqrstuv",
+  aiza: "AIzaSyD1234567890abcdefghijklmnopqrstuv", // gitleaks:allow — synthetic fixture
   xai: "xai-0123456789abcdef0123456789abcdef",
   ghp: "ghp_AbCdEf0123456789AbCdEf0123456789ab",
-  envKey: "DEEPSEEK_API_KEY=0123456789abcdef0123456789abcdef",
+  envKey: "DEEPSEEK_API_KEY=0123456789abcdef0123456789abcdef", // gitleaks:allow — synthetic fixture
   envToken: "SCROOGE_TOKEN=YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NQ==",
   bearer: "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQ",
 };
@@ -64,7 +59,7 @@ const flat = (s) => s.split("\n");
   const outLines = new Set(flat(out));
   for (const l of PLAIN) ok(outLines.has(l), `redactKeys: ordinary line untouched — "${l.slice(0, 30)}…"`);
   // classifier phrases survive (auth + empty-output checks read redacted text)
-  ok(redactKeys("Invalid API key provided: sk-abc123456789012345").includes("Invalid API key"),
+  ok(redactKeys("Invalid API key provided: sk-abc123456789012345").includes("Invalid API key"), // gitleaks:allow — synthetic fixture
     "redactKeys: auth classifier phrase survives");
   // idempotent: scrubbing twice equals scrubbing once
   ok(redactKeys(out) === out, "redactKeys: idempotent");

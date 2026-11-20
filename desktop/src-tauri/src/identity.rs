@@ -144,9 +144,9 @@ mod owner_tests {
     fn respects_explicit_configured_and_existing_operator_identities() {
         let dir = std::env::temp_dir().join(format!("trantor-owner-existing-{}", std::process::id()));
         fs::create_dir_all(dir.join("keys")).unwrap();
-        fs::write(dir.join("keys/sasha_mac.json"), r#"{"name":"sasha@mac","kind":"human","pubkey":"stub"}"#).unwrap();
+        fs::write(dir.join("keys/owner_laptop.json"), r#"{"name":"owner@laptop","kind":"human","pubkey":"stub"}"#).unwrap();
         fs::write(dir.join("keys/seat.json"), r#"{"name":"seat","kind":"agent"}"#).unwrap();
-        assert_eq!(owner_candidates(&dir, None), vec!["sasha@mac"]);
+        assert_eq!(owner_candidates(&dir, None), vec!["owner@laptop"]);
         fs::write(dir.join("config.json"), r#"{"ownerIdentity":"julian@mac"}"#).unwrap();
         assert_eq!(owner_candidates(&dir, None), vec!["julian@mac"]);
         assert_eq!(owner_candidates(&dir, Some("override".into())), vec!["override"]);
@@ -424,8 +424,8 @@ mod keychain_tests {
     fn stub_resolves_raw_account_and_signs_without_exposing_key() {
         let secret = record(7);
         let stub = serde_json::json!({ "pubkey": "stale-display-value", "keychain": "trantor-identity" }).to_string();
-        let (key, pubkey) = resolve_key("sasha@mac", Some(&stub), |account| {
-            assert_eq!(account, "sasha@mac");
+        let (key, pubkey) = resolve_key("owner@laptop", Some(&stub), |account| {
+            assert_eq!(account, "owner@laptop");
             Ok(Some(secret))
         }).expect("stub resolves");
         assert_eq!(pubkey, hex(&key.verifying_key().to_bytes()));
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn safe_name_cannot_traverse() {
         assert!(!safe_name("../../etc/passwd").contains(".."));
-        assert_eq!(safe_name("MacBook-Pro-M1:trantor"), "MacBook-Pro-M1_trantor");
+        assert_eq!(safe_name("laptop:trantor"), "laptop_trantor");
         assert_eq!(safe_name("builtbetter.ai"), "builtbetter.ai");
     }
 }
@@ -589,7 +589,7 @@ mod parity {
     #[test]
     fn matches_js_safe_name_for_the_owner_identity() {
         // JS: String(s).replace(/\.{2,}/g,"_").replace(/[^A-Za-z0-9_.-]/g,"_")
-        assert_eq!(safe_name("sasha@mac"), "sasha_mac");
+        assert_eq!(safe_name("owner@laptop"), "owner_laptop");
         assert_eq!(safe_name("codex:reddit-weekly"), "codex_reddit-weekly");
     }
 }

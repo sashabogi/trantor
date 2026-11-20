@@ -23,7 +23,7 @@ public struct SignedHeaders: Equatable, Sendable {
 public final class Signer: @unchecked Sendable {
     public static let scheme = "trantor-v1"
 
-    private let key: Curve25519.Signing.PrivateKey
+    private let key: Curve25519.Signing.PrivateKey // gitleaks:allow — type declaration, not key material
     private let lock = NSLock()
     private var offsetMs: Int64 = 0
 

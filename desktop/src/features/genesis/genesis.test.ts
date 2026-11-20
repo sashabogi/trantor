@@ -11,8 +11,8 @@ describe("genesis project helpers", () => {
   it("derives a CLI-safe slug and target under the development root", () => {
     const slug = slugProjectName("  New Client / Portal!  ");
     expect(slug).toBe("new-client-portal");
-    expect(projectTarget("/Users/sasha/development/", slug)).toBe(
-      "/Users/sasha/development/new-client-portal",
+    expect(projectTarget("/Users/test/development/", slug)).toBe(
+      "/Users/test/development/new-client-portal",
     );
   });
 

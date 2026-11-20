@@ -24,8 +24,8 @@ test("first evidence wins: harvest, card, author, Claude, unknown", () => {
 
 test("a card assigned to the orchestrator's own session counts as orchestrator, not the host name", () => {
   const data = evidence();
-  data.cards.set(42, "MacBook-Pro-M1:trantor");
-  assert.deepEqual(resolveCommit({ ...commit, author: "sashabogi" }, data), { agent: "orchestrator", instance: "MacBook-Pro-M1", rule: "card" });
+  data.cards.set(42, "laptop:trantor");
+  assert.deepEqual(resolveCommit({ ...commit, author: "sashabogi" }, data), { agent: "orchestrator", instance: "laptop", rule: "card" });
 });
 
 test("ambiguous branches fall through to receipt card; conflicting subject cards never guess", () => {

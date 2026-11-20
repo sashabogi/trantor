@@ -479,7 +479,7 @@ mod tests {
     fn args() -> ProjectNewArgs {
         ProjectNewArgs {
             name: "new-client-portal".into(),
-            target: "/Users/sasha/development/new-client-portal".into(),
+            target: "/Users/test/development/new-client-portal".into(),
             source: Some("https://example.test/repo.git".into()),
             adopt: false,
             brief: "Build the portal.".into(),
@@ -514,7 +514,7 @@ mod tests {
                 "new",
                 "new-client-portal",
                 "--dir",
-                "/Users/sasha/development",
+                "/Users/test/development",
                 "--json",
                 "--from",
                 "https://example.test/repo.git",
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn target_name_mismatch_is_rejected() {
         let mut input = args();
-        input.target = "/Users/sasha/development/wrong-name".into();
+        input.target = "/Users/test/development/wrong-name".into();
         assert!(project_new_cli_args(&input, None)
             .unwrap_err()
             .contains("must end in /new-client-portal"));

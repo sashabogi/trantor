@@ -180,8 +180,8 @@ mod machine_id_tests {
         let dir = std::env::temp_dir().join(format!("trantor-machine-id-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(machine_id_in(&dir), "");
-        std::fs::write(dir.join("machine-id"), "MacBook-Pro\n").unwrap();
-        assert_eq!(machine_id_in(&dir), "MacBook-Pro");
+        std::fs::write(dir.join("machine-id"), "laptop\n").unwrap();
+        assert_eq!(machine_id_in(&dir), "laptop");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

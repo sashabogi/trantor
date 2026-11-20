@@ -1,15 +1,7 @@
 #!/usr/bin/env node
-// trantor — a session that walks into another project must be TOLD it now has two bus identities.
-//
-// Found 2026-08-24. The relay MCP server is a separate long-lived process: it resolves its project
-// once, from the directory the session started in, and cannot see a later `cd`. The hooks resolve
-// per tool call from the CURRENT directory. So a session started in ~ and then working in
-// ~/development/trantor receives mail as MacBook-Pro-M1:trantor (enrolled, works) while relay_send
-// still speaks as MacBook-Pro-M1:sashabogojevic (not enrolled, 401s). Both identities had real
-// traffic on the production hub: 50 messages to one, 33 to the other.
-//
-// The MCP cannot be made to follow the shell, so the fix is not to hide the split but to name it
-// the moment it appears, with the two commands that resolve it.
+// MCP resolves the startup project once, while hooks follow the current directory. A session that
+// changes projects can therefore receive as laptop:trantor but send as laptop:operator; name that
+// split immediately instead of hiding it.
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -43,11 +35,11 @@ for (const n of ["started", "wandered"]) { const d = join(w, n); mkdirSync(d, { 
 // SESSION started in, which is exactly what the MCP server is stuck with. Both already exist.
 function runHook(cwd, startProject, sessionId = "drift-1") {
   return new Promise((resolve) => {
+    const env = { ...drillEnv(), AGENT_BUS_DIR: BUS, RELAY_HOST_ID: "host",
+      RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "" };
+    if (startProject) env.CLAUDE_PROJECT_DIR = join(w, startProject);
     const kid = spawn(process.execPath, [join(ROOT, "hooks", "inbox-deliver.mjs")], {
-      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...drillEnv(), AGENT_BUS_DIR: BUS, RELAY_HOST_ID: "host",
-             RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "",
-             ...(startProject ? { CLAUDE_PROJECT_DIR: join(w, startProject) } : {}) },
+      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"], env,
     });
     let so = ""; kid.stdout.on("data", d => (so += d));
     kid.on("close", () => { let o = {}; try { o = JSON.parse(so || "{}"); } catch {} resolve(o?.hookSpecificOutput?.additionalContext || ""); });

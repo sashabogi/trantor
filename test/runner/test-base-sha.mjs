@@ -59,7 +59,7 @@ const hub = http.createServer((req, res) => {
     if (P === "/task/update") { try { moves.push(JSON.parse(buf || "{}")); } catch {} return reply({ ok: true }); }
     if (P === "/poll") {
       if (served++ === 0 && queued.length) {
-        return reply({ messages: queued.map((m, i) => ({ id: i + 1, ts: Date.now(), to: u.searchParams.get("session"), from: "sasha@mac", ...m })), cursor: 1 });
+        return reply({ messages: queued.map((m, i) => ({ id: i + 1, ts: Date.now(), to: u.searchParams.get("session"), from: "owner@laptop", ...m })), cursor: 1 });
       }
       return setTimeout(() => reply({ messages: [], cursor: 1 }), 250);
     }
@@ -125,7 +125,7 @@ console.log("\n## an unresolvable base blocks the card");
   const blocked = r.moves.find(m => Number(m.id) === 7002 && m.status === "blocked");
   ok("#7002 is moved to blocked with the reason in the note", !!blocked && new RegExp(`^cannot resolve base ${GHOST}`).test(blocked.note || ""), JSON.stringify(r.moves));
   const report = r.sent.find(m => new RegExp(`^cannot resolve base ${GHOST}`).test(m.text || ""));
-  ok("the assigner is told on the bus, in those words", !!report && report.to === "sasha@mac", JSON.stringify(r.sent.map(m => ({ to: m.to, text: (m.text || "").slice(0, 80) }))));
+  ok("the assigner is told on the bus, in those words", !!report && report.to === "owner@laptop", JSON.stringify(r.sent.map(m => ({ to: m.to, text: (m.text || "").slice(0, 80) }))));
   ok("the wake is consumed — the seat does not re-block on every poll", r.moves.filter(m => m.status === "blocked").length === 1, `${r.moves.length} move(s)`);
 }
 

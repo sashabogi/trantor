@@ -64,7 +64,7 @@ describe("Settings Pair a phone", () => {
   });
 
   it("checks the public netcup address before minting on the configured hub", async () => {
-    const publicUrl = "https://netcup-qdrant.tail0f2afd.ts.net";
+    const publicUrl = "https://hub.example";
     const health = vi.spyOn(HubClient.prototype, "health").mockResolvedValue({ ok: true, authMode: "enforce", peers: 0, messages: 0, streams: 0, publicUrl });
     const mint = vi.spyOn(HubClient.prototype, "pairInvite").mockResolvedValue({ ok: true, token: "ab".repeat(32), expiresAt: Date.now() + 600000, scopes: [{ project: "*", role: "approver" }] });
     const invite = await pairInviteApi(HUB).mint("approver");
@@ -74,7 +74,7 @@ describe("Settings Pair a phone", () => {
   });
 
   it("accepts a Tailscale address and rejects wildcard and non-http addresses", () => {
-    expect(() => phoneHubAddress("http://100.79.242.104:4477")).not.toThrow();
+    expect(() => phoneHubAddress("http://100.64.0.10:4477")).not.toThrow();
     for (const hub of ["http://0.0.0.0:4477", "http://[::]:4477", "file://localhost"]) {
       expect(() => phoneHubAddress(hub)).toThrow("cannot reach");
     }
@@ -170,8 +170,8 @@ describe("Settings Pair a phone", () => {
 
   it("says the public link works without Tailscale (#12153)", async () => {
     const invite = inviteFor({
-      hub: "https://netcup-qdrant.tail0f2afd.ts.net",
-      link: `trantor://enroll?hub=${encodeURIComponent("https://netcup-qdrant.tail0f2afd.ts.net")}&token=${"ab".repeat(32)}`,
+      hub: "https://hub.example",
+      link: `trantor://enroll?hub=${encodeURIComponent("https://hub.example")}&token=${"ab".repeat(32)}`,
       hubPublic: true,
     });
     const api: PairPhoneApi = { mint: vi.fn(async () => invite) };

@@ -116,7 +116,7 @@ try {
 
   console.log("\n[5] RELAY_PUBLIC_URL set → the link hands out the public hub (#12153):");
   {
-    const pub = "https://netcup-qdrant.tail0f2afd.ts.net/";
+    const pub = "https://hub.example/";
     await HUB.stop();
     HUB = await startTestHub({ env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu", RELAY_PUBLIC_URL: pub } });
     const health = await fetch(HUB.base + "/health").then((r) => r.json());
@@ -152,13 +152,13 @@ try {
   {
     const operatorHome = join(tmp, "operator");
     process.env.AGENT_BUS_DIR = join(operatorHome, ".agent-bus");
-    const operator = loadOrCreate("sasha@mac", "human");
+    const operator = loadOrCreate("owner@laptop", "human");
     delete process.env.AGENT_BUS_DIR;
     const enrolled = await sFetch(operator, "POST", "/enroll", { name: operator.name, kind: "human" });
     ok("existing operator enrolled on netcup fixture", enrolled.status === 200);
     const r = runPair(["--json"], operatorHome, "");
     const result = JSON.parse(r.stdout);
-    ok("discovers sasha@mac with no identity override and keeps netcup link", r.status === 0 && result.hub === "https://netcup-qdrant.tail0f2afd.ts.net", r.stdout + r.stderr);
+    ok("discovers owner@laptop with no identity override and keeps netcup link", r.status === 0 && result.hub === "https://hub.example", r.stdout + r.stderr);
     const invite = spawnSync(process.execPath, [CLI, "invite", "--name", "phone", "--scope", "*:approver"], {
       cwd: ROOT, encoding: "utf8", timeout: 30000,
       env: drillEnv({ HOME: operatorHome, RELAY_URL: HUB.base, TRANTOR_IDENTITY: "", RELAY_OWNER_IDENTITY: "", TRANTOR_NO_KEYCHAIN: "1", TRANTOR_IDENTITY_KEYCHAIN: join(operatorHome, "isolated.keychain") }),

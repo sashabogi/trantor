@@ -85,7 +85,7 @@ describe("SeatTab", () => {
     // herdr names the orchestrator pane "orchestrator" — brandFor has no such brand, which
     // monogrammed the tab as "or". The caller passes the host session; the host-name rule
     // resolves it to Claude. Same input that made the Sessions rows right all along.
-    await render({ name: "orchestrator", brandName: "MacBook-Pro-M1:trantor", status: "working", active: true, onClick: () => {}, you: true });
+    await render({ name: "orchestrator", brandName: "MacBook-Example:trantor", status: "working", active: true, onClick: () => {}, you: true });
     expect(host.querySelector("[aria-label]")?.getAttribute("aria-label")).toBe("Claude");
     // no monogram fallback: the "or" tile the operator saw live is exactly this branch
     expect(html()).not.toContain("bg-white/[0.08]");
