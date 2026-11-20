@@ -19,7 +19,7 @@ import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
   verdictFor, substantiveOutput, stallVerdict, cutSignalFor,
   BILLING_RE, looksLikeBillingDeath, usageSaysNoWork, zeroUsageVerdict, noDeliveryVerdict,
-  permissionRejection, looksLikePermissionDeath,
+  permissionRejection, permissionTool, looksLikePermissionDeath,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
@@ -329,6 +329,7 @@ let consecFails = 0;
 // it every retry costs a turn for every live seat (monitoring doctrine: duration, not repetition).
 let announced = "";
 let lastErrText = "";
+let lastPermissionReject = null;
 // #5481: the turn exited 0 with a NULL/empty transcript — the Inception/Mercury trap. The provider
 // burned its whole max_tokens budget on internal reasoning and returned a null completion; the
 // runner used to read that silence as a clean turn while nothing was produced.
@@ -516,7 +517,7 @@ function saveWipLogged(why) {
   return sha;
 }
 
-async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = {}) {
+async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "", announce = true } = {}) {
   saveWipLogged(`parked: ${reason}`);
   // A seat that went QUIET printed no wall message to parse (#6131), so its own balance row is the
   // only place the reset time exists. Output first when there is any: it is this turn's evidence.
@@ -531,7 +532,7 @@ async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = 
   // The park is a STATE, and every reader of it is off the bus: `trantor seat-why`, the app, the
   // operator at a terminal an hour later. The message below is the event; this file is the state.
   try { writeFileSync(PARKF, JSON.stringify({ session: SESSION, persona: PERSONA, agent: AGENT, project: PROJ, ...parkState })); } catch {}
-  if (!parkAnnounced) {
+  if (announce && !parkAnnounced) {
     parkAnnounced = true;
     // #7752: a stalled park names the CLI and its model — the swap decision needs both, and this
     // line is the one place the room reads them together.
@@ -843,6 +844,7 @@ let lastEnvelope = "";
 async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   TURN++; banner(trigger);
   lastEnvelope = "";
+  lastPermissionReject = null;
   const t0 = Date.now();
   // A fresh session must not resume the old one's id: `first` is chosen by isFirst OR a missing
   // sid, so a stale sid would quietly resume the session this turn exists to leave behind.
@@ -1129,13 +1131,12 @@ exit $turn_exit`;
     effExit = 1;
     log(`\x1b[31mexit 0 but the turn output IS a provider billing rejection — treating as FAILED (exhausted, "${BILLING_RE.exec(ownOut)[0]}")\x1b[0m`);
   }
-  // #9919: the same trap in the sandbox family — the seat reached outside its worktree, opencode
-  // auto-rejected the permission and killed the turn at exit 0, and glm:ibkr sat 8h on an
-  // uncommitted #9859 under a "success" row. Judged on the output TAIL: the rejection prints where
-  // the turn ended, so a turn that only quotes the phrase mid-stream stays success.
-  if (realExit === 0 && effExit === 0 && looksLikePermissionDeath(ownOut, newCommit)) {
+  // #9919/#13945: a trailing denial is an incomplete turn even when an earlier step committed.
+  // Otherwise verdictFor names permission-rejected while the clean exit still produces "done".
+  if (realExit === 0 && effExit === 0 && looksLikePermissionDeath(ownOut)) {
     effExit = 1;
-    log(`\x1b[31mexit 0 but the turn output IS a sandbox permission rejection — treating as FAILED (permission-rejected, "${permissionRejection(ownOut)}")\x1b[0m`);
+    lastPermissionReject = { evidence: permissionRejection(ownOut), tool: permissionTool(ownOut) || "unknown" };
+    log(`\x1b[31mexit 0 but the turn output IS a sandbox permission rejection — treating as FAILED (permission-rejected, "${lastPermissionReject.evidence}")\x1b[0m`);
   }
   // #5481: exit 0 with an empty ERRF (the TOTAL capture, both streams) is the null-completion trap,
   // judged on echo-stripped text (#5868). #6969: on a state step ERRF is stderr only, so silence is normal.
@@ -1243,7 +1244,7 @@ exit $turn_exit`;
   // api-error, completed — and what it cost (0 means "not reported", never "free"). #7762: `card`
   // binds the row to the card the turn worked (0 = kickoff/pulse) so the seat record attributes
   // empty/stalled turns to the card that produced nothing. `cut` stays too: the drills read it.
-  const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : noDelivery ? "no-delivery" : lastEmptyTurn ? "empty" : "completed");
+  const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? (lastPermissionReject ? "rejected" : "api-error") : noDelivery ? "no-delivery" : lastEmptyTurn ? "empty" : "completed");
   const finalOutcome = askVerdict ? "asked" : blockedVerdict ? "blocked" : outcome;
   const telemetryRow = { ts: Date.now(), persona: PERSONA, agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (usage) telemetryRow.usage = usage;
@@ -2041,6 +2042,15 @@ async function resolveWakeCard(messages, { session }) {
       const ids = skippedNudges.flatMap(target => target.ids).map(id => `#${id}`).join(", ");
       log(`\x1b[31mduty turn skipped mandatory socket nudge(s) ${ids} — recorded failure; retrying in ${Math.round(wait / 1000)}s\x1b[0m`);
       if (handled > 0) log(`${handled} already-handled message(s) consumed instead of redelivered`);
+      lastTurnAt = Date.now();
+      return;
+    }
+    if (ec && lastPermissionReject && sessionCard > 0) {
+      const text = `⛔ permission rejected: ${lastPermissionReject.tool} on #${sessionCard} · ${lastPermissionReject.evidence} · card moved to blocked; wake stays owed`;
+      savePending(pendingWake, pendingBcast);
+      await api("/task/update", { id: sessionCard, status: "blocked", note: text, by: SESSION }).catch(() => {});
+      retryAt = await parkSeat("permission-rejected", pendingWake.length, 0, { announce: false });
+      await notifyAssigners(assigners, text);
       lastTurnAt = Date.now();
       return;
     }

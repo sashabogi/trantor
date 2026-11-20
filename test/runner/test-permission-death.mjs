@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  classifyFailure, verdictFor, looksLikePermissionDeath, permissionRejection,
+  classifyFailure, verdictFor, looksLikePermissionDeath, permissionRejection, permissionTool,
   PERMISSION_RE, PERMISSION_TAIL,
 } from "../../lib/classify-failure.mjs";
 import { PARKING_REASONS } from "../../lib/turn-policy.mjs";
@@ -40,9 +40,9 @@ console.log("\n## the real specimens classify permission-rejected, never success
     classifyFailure(1, IBKR).matched);
 }
 
-console.log("\n## the guard keeps the doctrine — real work stands, quoting the phrase is not dying");
+console.log("\n## a trailing rejection is incomplete even after a commit; a mid-stream quote is not dying");
 {
-  ok("a shipped commit is real work — never re-labelled", looksLikePermissionDeath(IBKR, true) === false);
+  ok("a shipped commit does not erase a trailing rejection", looksLikePermissionDeath(IBKR) === true);
   // The ibkr capture is 1.3KB of real work (git log, pytest) ABOVE the rejection — the billing
   // rule's whole-text answer floor (#9812) would miss it; the TAIL is the judged zone.
   ok("the ibkr capture is longer than the billing answer floor — the tail is what judges",
@@ -78,6 +78,7 @@ console.log("\n## the regex carries both contract phrases; the evidence names th
   ok("permissionRejection extracts the refused path",
     permissionRejection(IBKR) === "the sandbox auto-rejected permission for /tmp/w0-base/*",
     permissionRejection(IBKR));
+  ok("permissionTool names the denied permission", permissionTool(IBKR) === "external_directory", permissionTool(IBKR));
   ok("a bare tool-call error with no banner still yields evidence",
     /rejected permission to use this specific tool call/.test(permissionRejection("Error: The user rejected permission to use this specific tool call.")),
     permissionRejection("Error: The user rejected permission to use this specific tool call."));
