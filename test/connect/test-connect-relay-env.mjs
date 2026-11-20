@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// `trantor connect` relay-env drill (#7893, #7938). connect used to build the relay entry with `||=`, so an
+// `trantor connect` relay-env drill (#7893, #7938, #13916). connect used to build the relay entry with `||=`, so an
 // entry written by an older connect (kimi's was {RELAY_AGENT: kimi} only) was never refreshed — an MCP
 // spawned with a scrubbed env had nothing to resolve from. Every case runs in a temp HOME + temp bus
-// dir with stub CLIs on PATH; the kimi-code cases (#7938) run entirely inside that fake HOME too.
+// dir with stub CLIs on PATH; the kimi-code cases run entirely inside that fake HOME too.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -185,14 +185,14 @@ process.exit(result.status ?? 1);
   rmSync(t.work, { recursive: true, force: true });
 }
 
-// 7. detection is config-driven: no ~/.kimi-code/config.toml → its mcp.json is not ours to touch,
-// and the divergent hub it still carries is warned about, not silently ignored.
+// 7. Kimi Code's config directory is the install signal: current installs need no config.toml.
 {
   const t = setup(["kimi"], { ".kimi-code/mcp.json": { mcpServers: { relay: { env: { RELAY_URL: "http://127.0.0.1:9" } } } } });
   const r = t.run();
-  ok("without config.toml the kimi-code file is left untouched",
-    relayEnvOf(t.home, ".kimi-code/mcp.json")?.RELAY_URL === "http://127.0.0.1:9");
-  ok("the untouched file's divergent hub draws a warning", /WARN/.test(r.stdout) && /127\.0\.0\.1:9/.test(r.stdout), r.stdout);
+  ok("without config.toml the kimi-code file is still wired",
+    relayEnvOf(t.home, ".kimi-code/mcp.json")?.RELAY_URL === PIN, r.stdout);
+  ok("the legacy kimi file is wired alongside it",
+    relayEnvOf(t.home, ".kimi/mcp.json")?.RELAY_URL === PIN);
   rmSync(t.work, { recursive: true, force: true });
 }
 
@@ -208,6 +208,33 @@ process.exit(result.status ?? 1);
     relayEnvOf(t.home, ".kimi-code/mcp.json")?.RELAY_URL === PIN);
   ok("the orphaned ~/.kimi config is warned about, neither clobbered nor hidden",
     /WARN/.test(r.stdout) && /127\.0\.0\.1:4477/.test(r.stdout) && relayEnvOf(t.home, ".kimi/mcp.json")?.RELAY_URL === "http://127.0.0.1:4477", r.stdout);
+  rmSync(t.work, { recursive: true, force: true });
+}
+
+// 9. #13916: a Kimi Code install is preferred and both config generations are wired, even when
+// the install has created only its directory (no config.toml or mcp.json yet).
+{
+  const t = setup(["kimi"], {}, { ".kimi-code/region": "global\n" });
+  const r = t.run();
+  const code = relayEnvOf(t.home, ".kimi-code/mcp.json");
+  const legacy = relayEnvOf(t.home, ".kimi/mcp.json");
+  ok("a directory-only Kimi Code install gets its own relay config",
+    r.status === 0 && code?.RELAY_AGENT === "kimi" && code?.RELAY_URL === PIN, r.stderr || r.stdout);
+  ok("Kimi Code and legacy Kimi are both wired", code?.RELAY_URL === PIN && legacy?.RELAY_URL === PIN);
+  const codeReport = r.stdout.indexOf(".kimi-code/mcp.json");
+  const legacyReport = r.stdout.indexOf(".kimi/mcp.json");
+  ok("Kimi Code is the preferred install in the report",
+    codeReport >= 0 && legacyReport >= 0 && codeReport < legacyReport, r.stdout);
+  ok("an international region does not draw a mainland warning", !/WARN:.*mainland-cn/.test(r.stdout), r.stdout);
+  rmSync(t.work, { recursive: true, force: true });
+}
+
+// 10. #13916: Kimi Code's region file can select the China login flow on a non-China server.
+{
+  const t = setup(["kimi"], {}, { ".kimi-code/region": "mainland-cn\n" });
+  const r = t.run();
+  ok("mainland-cn draws a warning naming the region file and remedy",
+    /WARN:.*\.kimi-code\/region/.test(r.stdout) && /mainland-cn/.test(r.stdout) && /outside (mainland )?China/i.test(r.stdout), r.stdout);
   rmSync(t.work, { recursive: true, force: true });
 }
 
