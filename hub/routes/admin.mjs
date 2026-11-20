@@ -146,8 +146,9 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         // it comes back on load and overwrites the real row id.
         state.eventSeq = Math.max(Number(state.eventSeq || 0), Number(last?.id) || 0) + 1;
         const ev = { ...e, id: state.eventSeq, project: proj };
-        if (ev.taskId != null && remap.has(Number(ev.taskId))) ev.taskId = remap.get(Number(ev.taskId));
-        state.events.push(ev); added.events++;
+        const taskId = ev.taskId != null ? remap.get(Number(ev.taskId)) : undefined;
+        const importedEvent = taskId === undefined ? ev : { ...ev, taskId };
+        state.events.push(importedEvent); added.events++;
       }
       if (state.events.length > EVENT_CAP) state.events.splice(0, state.events.length - EVENT_CAP);
       for (const m of (Array.isArray(b.messages) ? b.messages : [])) {
@@ -305,9 +306,10 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
     }
     if (req.method === "POST" && P === "/overseer/narrate") {
       const b = await body(req);
-      const ev = state.events.find(e => e.id === Number(b.eventId) && e.type === "overseer.warn");
-      if (!ev) return json(res, 404, { error: "no such overseer.warn event" });
-      ev.narrated = true; ev.narration = String(b.text || "").slice(0, 300);
+      const index = state.events.findIndex(e => e.id === Number(b.eventId) && e.type === "overseer.warn");
+      if (index < 0) return json(res, 404, { error: "no such overseer.warn event" });
+      const ev = state.events[index];
+      state.events[index] = { ...ev, narrated: true, narration: String(b.text || "").slice(0, 300) };
       markDirty();
       return json(res, 200, { ok: true });
     }

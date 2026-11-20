@@ -3,6 +3,7 @@
 // writer's rows survive. Mock-pool checks always run; set RELAY_TEST_PG_URL to also run them live.
 import { PgStore } from "../../lib/store-pg.mjs";
 import { CHANGE_CHANNEL } from "../../lib/store-contract.mjs";
+import { routeAdmin } from "../../hub/routes/admin.mjs";
 
 let pass = 0, fail = 0;
 const ok = (cond, name) => {
@@ -76,6 +77,29 @@ console.log("saveDelta: unchanged append-only events keep shared rows without st
   const changed = await store.saveDelta("local", prev, next, { src: "test-hub" });
   ok(changed === 0, "unchanged event log produces no database writes");
   ok(serialized === 0, "unchanged event rows are not re-stringified on a dirty persist tick");
+}
+
+console.log("narrating an event copy-on-writes and persists the changed row");
+{
+  const { log, pool } = mockPool();
+  const store = new PgStore({ pool });
+  const original = event(81, { type: "overseer.warn" });
+  const previous = baseState({ events: [original] });
+  const next = baseState({ events: previous.events.slice() });
+  let response;
+  await routeAdmin({
+    req: { method: "POST" }, res: {}, q: {}, P: "/overseer/narrate", auth: null,
+    ctx: {
+      state: next, body: async () => ({ eventId: 81, text: "reviewed" }),
+      json: (_res, code, body) => { response = { code, body }; return true; },
+      markDirty: () => {}, overseer: {},
+    },
+  });
+  const persisted = await store.saveDelta("local", previous, next, { src: "test-hub" });
+  const updates = log.filter(entry => entry.sql.startsWith("UPDATE events SET"));
+  ok(response?.code === 200 && next.events[0] !== original, "narration replaces rather than mutates the shared event row");
+  ok(persisted > 0 && updates.length === 1 && updates[0].vals[0] === 81, "the narrated existing event is updated in Postgres");
+  ok(JSON.parse(updates[0]?.vals[7] || "{}").narration === "reviewed", "the event update carries the narration payload");
 }
 
 console.log("the append-only log actually appends (the 18-day silent death)");

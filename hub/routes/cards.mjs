@@ -491,7 +491,10 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       if (!from || !to || from === to) return json(res, 400, { error: "distinct from+to required" });
       let cards = 0, events = 0, peers = 0, msgs = 0;
       for (const t of state.tasks) if (t.project === from) { t.project = to; cards++; }
-      for (const e of state.events) if (e.project === from) { e.project = to; events++; }
+      for (let i = 0; i < state.events.length; i++) {
+        const e = state.events[i];
+        if (e.project === from) { state.events[i] = { ...e, project: to }; events++; }
+      }
       for (const v of Object.values(state.peers)) if (v.project === from) { v.project = to; peers++; }
       for (const m of state.messages) if ((m.project || "") === from) { m.project = to; msgs++; }
       if (state.projectMeta[from]) {
