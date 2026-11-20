@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAgentPeer, paneTargets } from "./paneTargets";
+import { isAgentPeer, liveGridSeats, paneTargets } from "./paneTargets";
 import type { Peer } from "../../shared/api/client";
 import type { HerdrSeat } from "./herdr";
 
@@ -39,6 +39,18 @@ describe("paneTargets", () => {
     const rows = paneTargets([codex], null, host, "trantor");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ key: "codex:trantor", agent: "codex", brand: "codex", isOrchestrator: false });
+  });
+
+  it("carries the optional machine label into seat targets", () => {
+    const [row] = paneTargets([{ ...codex, machine: "netcup" }], null, host, "trantor");
+    expect(row.machine).toBe("netcup");
+    expect(paneTargets([codex], null, host, "trantor")[0].machine).toBeUndefined();
+  });
+
+  it("omits offline seats from grid tiles without removing them from seat targets", () => {
+    const offline: Peer = { session: "kimi:trantor", online: false, status: "offline" };
+    expect(liveGridSeats([codex, offline]).map(peer => peer.session)).toEqual(["codex:trantor"]);
+    expect(paneTargets([codex, offline], null, host, "trantor").map(row => row.agent)).toEqual(["codex", "kimi"]);
   });
 
   it("#6068: the genesis tool is not a seat; a kindless peer (old hub) still is", () => {

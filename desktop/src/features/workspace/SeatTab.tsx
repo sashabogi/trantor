@@ -1,5 +1,6 @@
 import { brandFor } from "../../shared/Avatar";
 import { seatTabVisual } from "./seatTabVisual";
+import { MachineBadge } from "../../shared/MachineBadge";
 
 /** The bare mark with a monogram fallback, so an unknown agent still reads as a name, not a gap. */
 function Mark({ brandName }: { brandName: string }) {
@@ -17,9 +18,10 @@ function Mark({ brandName }: { brandName: string }) {
   );
 }
 
-export function SeatTab({ name, brandName, status, active, onClick, you, state, tooltip }: {
+export function SeatTab({ name, brandName, status, active, onClick, you, state, tooltip, machine }: {
   state?: "live" | "parked" | "down" | "unknown";
   tooltip?: string;
+  machine?: string;
   name: string;
   /** The identity the BRAND reads from — the agent name ("codex"), or the orchestrator's agent. */
   brandName: string;
@@ -44,6 +46,7 @@ export function SeatTab({ name, brandName, status, active, onClick, you, state, 
       {state && <span className={`tr-dot shrink-0 ${state === "down" || state === "unknown" ? "border border-tr-muted" : state === "parked" ? "bg-tr-muted/50" : `bg-tr-ok ${v.pulse ? "tr-dot-pulse" : ""}`}`} />}
       <span className={state === "parked" ? "opacity-50" : state ? undefined : v.amber ? "text-tr-warn" : v.down ? "text-tr-fail" : undefined}>{name}</span>
       {you && <span className="text-[11px] text-tr-muted/70">you</span>}
+      <MachineBadge machine={machine} />
     </button>
   );
 }

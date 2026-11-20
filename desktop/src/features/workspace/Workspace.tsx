@@ -8,8 +8,9 @@ import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
 import { orchestratorOf, type HerdrSeat } from "./herdr";
 import { BrandGlyph } from "../../shared/Avatar";
+import { MachineBadge, machineBadgesVisible } from "../../shared/MachineBadge";
 import { PaneBoundary } from "./PaneBoundary";
-import { paneTargets, seatName, isAgentPeer, type PaneTarget } from "./paneTargets";
+import { liveGridSeats, paneTargets, seatName, isAgentPeer, type PaneTarget } from "./paneTargets";
 import { handoffInProgress, HANDOFF_PROGRESS_EVENT, type HandoffProgress } from "./handoffProgress";
 import { listen } from "@tauri-apps/api/event";
 import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions } from "../chat/takeover";
@@ -120,6 +121,8 @@ export function Workspace({ client, project, lens, onLens }: {
   }, [client]);
 
   const seats = useMemo(() => seatsOf(peers, project), [peers, project]);
+  const gridSeats = useMemo(() => liveGridSeats(seats), [seats]);
+  const showMachineBadges = useMemo(() => machineBadgesVisible(seats), [seats]);
   const host = useMemo(() => hostOf(peers, project), [peers, project]);
 
   // Is this project's own session hosted as a pane? `trantor open` records it, and until it does
@@ -169,6 +172,7 @@ export function Workspace({ client, project, lens, onLens }: {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* seat tabs */}
           <CrewControls key={project} project={project} targets={targets} selected={selected?.key}
+            showMachineBadges={showMachineBadges}
             onSelect={t => { setSel(t.key); if (t.isOrchestrator) setViewPersisted("focus"); }} onChanged={refreshCrew}>
             {/* no hosted orchestrator pane yet: the host stays a quiet chip at the row's end */}
             {host && !orch && (
@@ -185,7 +189,7 @@ export function Workspace({ client, project, lens, onLens }: {
                     type="button"
                     onClick={() => setViewPersisted(v)}
                     data-on={view === v}
-                    title={v === "grid" ? "every seat at once" : "one seat, full size"}
+                    title={v === "grid" ? "every live seat at once" : "one seat, full size"}
                     className="rounded-[7px] px-2.5 py-[5px] text-[11.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
                   >
                     {v}
@@ -196,13 +200,12 @@ export function Workspace({ client, project, lens, onLens }: {
           </CrewControls>
 
           {view === "grid" ? (
-            /* GRID: the whole crew at once, read-only. The orchestrator is deliberately absent —
-               it is the operator, not a seat to supervise, and it gets its own surface. */
+            /* GRID: the live crew at once, read-only. Offline seats and the orchestrator are absent. */
             <div
               className="mt-2.5 grid min-h-0 flex-1 gap-2.5"
-              style={{ gridTemplateColumns: `repeat(${gridCols(seats.length)}, minmax(0, 1fr))` }}
+              style={{ gridTemplateColumns: `repeat(${gridCols(gridSeats.length)}, minmax(0, 1fr))` }}
             >
-              {seats.map(sp => (
+              {gridSeats.map(sp => (
                 <div key={sp.session} className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-2.5">
                   <button
                     type="button"
@@ -212,11 +215,12 @@ export function Workspace({ client, project, lens, onLens }: {
                   >
                     <SeatDot online={!!sp.online} />
                     <span className="tr-mono text-[11.5px] text-tr-text">{seatName(sp.session)}</span>
+                    {showMachineBadges && <MachineBadge machine={sp.machine} />}
                     {sp.status && <span className="truncate text-[11px] text-tr-muted">{sp.status}</span>}
                   </button>
                   <div className="flex min-h-0 flex-1 flex-col">
                     <PaneBoundary key={sp.session}>
-                      <TerminalPane project={project} agent={seatName(sp.session)} />
+                      <TerminalPane project={project} agent={seatName(sp.session)} peer={sp} />
                     </PaneBoundary>
                   </div>
                 </div>
@@ -228,20 +232,21 @@ export function Workspace({ client, project, lens, onLens }: {
             {selected && (
               <div className="tr-card mt-2.5 flex items-center gap-3 px-3.5 py-2">
                 <span className="tr-mono text-[12px] text-tr-muted">{selected.session}</span>
+                {showMachineBadges && <MachineBadge machine={selected.machine} />}
                 <span className="tr-chip">{selected.online ? "online" : selected.lastSeen ? `last seen ${when(selected.lastSeen)}` : "never seen"}</span>
                 {selected.status && <span className="max-w-[340px] truncate text-[12px] text-tr-muted">{selected.status}</span>}
               </div>
             )}
 
-            {/* terminal pane — the seat's live herdr pane when one exists (#5367); the stated
-                placeholder stays the no-surface fallback, word for word */}
+            {/* terminal pane — the seat's local herdr pane when one exists (#5367); otherwise
+                peer presence selects the remote-live or offline fallback. */}
             <div className="mt-2.5 flex min-h-0 flex-1 flex-col rounded-xl border border-tr-edge bg-[#101013] p-4">
               <div className="tr-mono text-[12px] leading-[1.75] text-tr-muted">
                 {selected ? `${selected.session} — live terminal` : "live terminal"}
               </div>
               {selected ? (
               <PaneBoundary key={selected.key}>
-                <TerminalPane project={project} agent={selected.agent} />
+                <TerminalPane project={project} agent={selected.agent} peer={selected} />
               </PaneBoundary>
             ) : (
               <div className="flex flex-1 items-center justify-center">
@@ -279,8 +284,11 @@ export function Workspace({ client, project, lens, onLens }: {
                 {seatCard.difficulty && <span className="tr-chip ml-auto">{seatCard.difficulty}</span>}
               </div>
               <div className="mt-2 text-[13.5px] font-medium leading-snug">{seatCard.title}</div>
-              <div className="mt-2.5 text-[11.5px] text-tr-muted">
-                {seatCard.assignee ?? "unassigned"}{seatCard.log?.length ? ` · ${seatCard.log.length} log notes` : ""}
+              <div className="mt-2.5 flex items-center gap-2 text-[11.5px] text-tr-muted">
+                <span className="min-w-0 flex-1 truncate">
+                  {seatCard.assignee ?? "unassigned"}{seatCard.log?.length ? ` · ${seatCard.log.length} log notes` : ""}
+                </span>
+                {showMachineBadges && <MachineBadge machine={seats.find(s => s.session === seatCard.assignee)?.machine} />}
               </div>
             </div>
           ) : (

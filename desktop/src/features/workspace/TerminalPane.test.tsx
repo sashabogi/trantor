@@ -176,6 +176,52 @@ describe("TerminalPane", () => {
     expect(host.textContent).toContain("trantor up codex");
     expect(empty.opened).toEqual([]);
   });
+
+  it("reports an online peer with no local pane as running on its machine", async () => {
+    const empty = makeTerminalDouble({ surface: null });
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" peer={{ online: true, status: "working", machine: "netcup" }} deps={empty.deps} />,
+    ));
+    await flush();
+
+    expect(host.textContent).toContain("codex is running on netcup");
+    expect(host.textContent).toContain("Live state: working");
+    expect(host.textContent).not.toContain("not running");
+    expect(host.textContent).not.toContain("trantor up");
+    expect(empty.attached).toEqual([]);
+  });
+
+  it("reports an online peer without a machine label as running on another machine", async () => {
+    const empty = makeTerminalDouble({ surface: null });
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" peer={{ online: true, status: "idle" }} deps={empty.deps} />,
+    ));
+    await flush();
+
+    expect(host.textContent).toContain("codex is running on another machine");
+    expect(host.textContent).toContain("Live state: idle");
+  });
+
+  it("keeps the start guidance when a peer without a local pane is offline", async () => {
+    const empty = makeTerminalDouble({ surface: null });
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" peer={{ online: false, status: "offline", machine: "netcup" }} deps={empty.deps} />,
+    ));
+    await flush();
+
+    expect(host.textContent).toContain("it is not running under this crew");
+    expect(host.textContent).toContain("trantor up codex");
+  });
+
+  it("attaches a local pane even when the peer also reports a machine", async () => {
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" peer={{ online: true, status: "working", machine: "netcup" }} deps={d.deps} />,
+    ));
+    await flush();
+
+    expect(d.attached).toEqual(["pane-1"]);
+    expect(host.textContent).not.toContain("running on netcup");
+  });
 });
 
 describe("TerminalPane drag-drop (#5949, leak fixed #5949-bounce)", () => {

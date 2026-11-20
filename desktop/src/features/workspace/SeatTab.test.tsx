@@ -6,6 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SeatTab } from "./SeatTab";
+import { machineBadgesVisible } from "../../shared/MachineBadge";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -96,5 +97,19 @@ describe("SeatTab", () => {
     await render({ name: "newbot", brandName: "newbot", status: "idle", active: false, onClick: () => {} });
     expect(host.textContent).toContain("ne");
     expect(host.querySelector("[aria-label]")?.getAttribute("aria-label")).toBe("newbot");
+  });
+
+  it("shows a small machine badge only when the caller supplies one", async () => {
+    await render({ name: "codex", brandName: "codex", status: "idle", active: false, onClick: () => {}, machine: "netcup" });
+    expect(host.querySelector('[title="Runs on netcup"]')?.textContent).toBe("netcup");
+    await render({ name: "codex", brandName: "codex", status: "idle", active: false, onClick: () => {} });
+    expect(host.querySelector('[title^="Runs on"]')).toBeNull();
+  });
+
+  it("hides machine badges for one shared machine or no labels, but shows mixed and partial labels", () => {
+    expect(machineBadgesVisible([{ machine: "Mac" }, { machine: "Mac" }])).toBe(false);
+    expect(machineBadgesVisible([{}, {}])).toBe(false);
+    expect(machineBadgesVisible([{ machine: "Mac" }, { machine: "netcup" }])).toBe(true);
+    expect(machineBadgesVisible([{ machine: "netcup" }, {}])).toBe(true);
   });
 });

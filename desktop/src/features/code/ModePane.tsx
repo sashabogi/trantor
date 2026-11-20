@@ -8,6 +8,7 @@ import { GRAPH_PATH } from "./codeTabs";
 import type { Card, HubClient, Peer } from "../../shared/api/client";
 import { localSessions } from "../../shared/api/client";
 import { BrandGlyph } from "../../shared/Avatar";
+import { MachineBadge, machineBadgesVisible } from "../../shared/MachineBadge";
 import { GitPanel } from "./GitPanel";
 import { Chat } from "../chat/Chat";
 import { folderSeats, mergeChanges, mergedCountFor, projectChanges, type ProjectChangeRow } from "./gitApi";
@@ -203,6 +204,13 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   // Changed-file count per seat, for the footer chips: the one-click answer to "which worktree
   // has edits". Absent = clean, never a zero.
   const seats = useMemo(() => scopeSeats(peers, project), [peers, project]);
+  const seatMachines = useMemo(() => new Map(
+    peers.filter(peer => peer.session.endsWith(`:${project}`)).map(peer => [peer.session.split(":")[0], peer.machine]),
+  ), [peers, project]);
+  const showMachineBadges = useMemo(
+    () => machineBadgesVisible(seats.map(name => ({ machine: seatMachines.get(name) }))),
+    [seats, seatMachines],
+  );
   const seatCount = (name: string) => changeRows.filter(r => r.seat === name).length;
 
   // The note composer refs the seat's in-flight card, so a note lands as "#id <note>" exactly
@@ -513,6 +521,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
             <span className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]">
               {seat ? `seat/${seat}` : "project"}
             </span>
+            {seat && showMachineBadges && <MachineBadge machine={seatMachines.get(seat)} />}
             {seat && seatCount(seat) > 0 && (
               <span className="tr-mono shrink-0 text-[10.5px] text-tr-doing">{seatCount(seat)} changed</span>
             )}
@@ -553,6 +562,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-tr-muted hover:bg-white/[0.05] hover:text-tr-text data-[on=true]:text-tr-text"
                   >
                     <span className="tr-mono flex-1">seat/{name}</span>
+                    {showMachineBadges && <MachineBadge machine={seatMachines.get(name)} />}
                     {n > 0
                       ? <span className="tr-mono text-[10.5px] text-tr-doing">{n} changed</span>
                       : <span className="text-[10.5px] text-tr-muted/70">clean</span>}

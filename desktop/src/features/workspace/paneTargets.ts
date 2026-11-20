@@ -16,10 +16,12 @@ export type PaneTarget = {
   online: boolean;
   lastSeen?: number;
   status?: string;
+  machine?: string;
   isOrchestrator: boolean;
 };
 
 export const seatName = (session: string) => session.split(":")[0];
+export const liveGridSeats = (seats: Peer[]): Peer[] => seats.filter(seat => !!seat.online);
 
 // #6068: a bus session of the project is not automatically a seat. The CLI's genesis identity
 // (kind "tool") exists to post the brief and must not render as a seat you could open a
@@ -40,6 +42,7 @@ export function paneTargets(seats: Peer[], orch: HerdrSeat | null, host: Peer | 
     online: !!s.online,
     lastSeen: s.lastSeen,
     status: s.status,
+    machine: s.machine,
     isOrchestrator: false,
   }));
   if (!orch) return rows;

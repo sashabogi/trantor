@@ -1,7 +1,7 @@
 // The seat's live terminal: a client pty attached to herdr, so xterm sees raw bytes and its
 // onData goes straight back to Rust.
-// HONESTY RULE: when the selected seat has no herdr surface, this component renders NOTHING and
-// the workspace keeps its stated-placeholder ghost, a fallback, never an imitation of a live pane.
+// HONESTY RULE: without a local herdr surface, an online hub peer gets a stated remote-live
+// fallback; an offline peer keeps the no-pane ghost, never an imitation of a live terminal.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -9,6 +9,7 @@ import { Terminal } from "@xterm/xterm";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
+import type { Peer } from "../../shared/api/client";
 import { describeHit, dropPointToCss } from "../../shared/dropPoint";
 import { quotePaths } from "./quotePaths";
 import {
@@ -147,8 +148,9 @@ const tracePaneDrop = (line: string) => { void invoke("app_log", { line: `drop #
 export function TerminalPane({
   project,
   agent,
+  peer,
   deps = DEFAULT_TERMINAL_DEPS,
-}: { project: string; agent: string; deps?: TerminalDeps }) {
+}: { project: string; agent: string; peer?: Pick<Peer, "online" | "status" | "machine">; deps?: TerminalDeps }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const subRef = useRef<number | null>(null);
   const lastInputAtRef = useRef<number | null>(null);
@@ -359,6 +361,17 @@ export function TerminalPane({
           <div className="mt-2 text-tr-muted">
             That usually means the seat&rsquo;s process exited. It comes back on the seat&rsquo;s next turn.
           </div>
+        </div>
+      </div>
+    );
+  }
+  if (surface === null && peer?.online && agent !== "orchestrator") {
+    const machine = peer.machine?.trim();
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+          <div>{agent} is running on {machine || "another machine"}.</div>
+          <div className="mt-2 text-tr-muted">Live state: {peer.status || "online"}.</div>
         </div>
       </div>
     );

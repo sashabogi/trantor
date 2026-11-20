@@ -43,9 +43,9 @@ function TabMenu({ anchor, label, close, children }: {
     }}>{children}</div>, document.body);
 }
 
-export function CrewControls({ project, targets, selected, onSelect, onChanged, children, api = crewApi }: {
+export function CrewControls({ project, targets, selected, onSelect, onChanged, children, api = crewApi, showMachineBadges = false }: {
   project: string; targets: PaneTarget[]; selected?: string; onSelect: (target: PaneTarget) => void;
-  onChanged: () => void; children?: ReactNode; api?: CrewApi;
+  onChanged: () => void; children?: ReactNode; api?: CrewApi; showMachineBadges?: boolean;
 }) {
   const [catalog, setCatalog] = useState<CrewCatalog | null>(null);
   const [added, setAdded] = useState<string[]>([]);
@@ -76,7 +76,7 @@ export function CrewControls({ project, targets, selected, onSelect, onChanged, 
       {[...targets, ...extra].map(t => t.isOrchestrator
         ? <SeatTab key={t.key} name={t.label} brandName={t.brand} status={t.status} active={selected === t.key} onClick={() => onSelect(t)} you />
         : <CrewSeatTab key={t.key} project={project} target={t} active={selected === t.key} onSelect={() => onSelect(t)}
-          catalog={catalog} api={api} onChanged={onChanged} report={report} actionPending={notice.busy} />)}
+          catalog={catalog} api={api} onChanged={onChanged} report={report} actionPending={notice.busy} showMachineBadges={showMachineBadges} />)}
       </div>
       <button ref={addAnchor} type="button" aria-label="Add seat" title="Add seat" aria-haspopup="menu" aria-expanded={adding}
         className="shrink-0 rounded-[9px] px-3 py-[7px] text-tr-muted hover:bg-tr-panel hover:text-tr-text"
@@ -95,9 +95,9 @@ export function CrewControls({ project, targets, selected, onSelect, onChanged, 
   </>;
 }
 
-function CrewSeatTab({ project, target, active, onSelect, catalog, api, onChanged, report, actionPending }: {
+function CrewSeatTab({ project, target, active, onSelect, catalog, api, onChanged, report, actionPending, showMachineBadges }: {
   project: string; target: PaneTarget; active: boolean; onSelect: () => void;
-  catalog: CrewCatalog | null; api: CrewApi; onChanged: () => void; report: Report; actionPending: boolean;
+  catalog: CrewCatalog | null; api: CrewApi; onChanged: () => void; report: Report; actionPending: boolean; showMachineBadges: boolean;
 }) {
   const seat = target.agent;
   const [why, setWhy] = useState<SeatWhy | null>(null);
@@ -155,6 +155,7 @@ function CrewSeatTab({ project, target, active, onSelect, catalog, api, onChange
   return <div ref={anchor} className="group flex shrink-0 items-center"
     onContextMenu={e => { e.preventDefault(); if (!busy && !actionPending && why) { setSwap(false); setMenu(true); } }}>
     <SeatTab name={target.label} brandName={target.brand} status={target.status} active={active} onClick={onSelect}
+      machine={showMachineBadges ? target.machine : undefined}
       state={state} tooltip={error ? `State unavailable: ${error}` : why?.state === "parked" ? `parked · ${parkReason(why)}` : undefined} />
     <button type="button" className="-ml-2 mr-1 rounded p-1 text-tr-muted opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 aria-expanded:opacity-100"
       disabled={busy || actionPending || !why} aria-label={`${seat} actions`} aria-haspopup="menu" aria-expanded={menu}

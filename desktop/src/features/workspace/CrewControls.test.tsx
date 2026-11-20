@@ -145,6 +145,15 @@ describe("Workspace crew controls", () => {
     expect(dot.className).toContain(name === "parked" ? "bg-tr-muted/50" : name === "live" ? "bg-tr-ok" : "border-tr-muted");
   });
 
+  it("passes machine badges to tabs only when the fleet visibility rule allows them", async () => {
+    const api = fakeApi();
+    const props = { project: "trantor", targets: [{ ...target("glm"), machine: "netcup" }], onSelect: vi.fn(), onChanged: vi.fn(), api };
+    await act(async () => root.render(<CrewControls {...props} />));
+    expect(host.querySelector('[title="Runs on netcup"]')).toBeNull();
+    await act(async () => root.render(<CrewControls {...props} showMachineBadges />));
+    expect(host.querySelector('[title="Runs on netcup"]')?.textContent).toBe("netcup");
+  });
+
   it("pulses only the working dot and uses the parked tooltip", async () => {
     const api = fakeApi();
     await act(async () => root.render(<CrewControls project="trantor" targets={[{ ...target("glm"), status: "working" }]} onSelect={vi.fn()} onChanged={vi.fn()} api={api} />));
