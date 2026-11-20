@@ -1,5 +1,5 @@
-// Brand avatars use real marks, not letters, via @lobehub/icons-static-svg bundled at build
-// time (CSP forbids remote assets); each SVG is viewBox 24 with currentColor fill so brand
+// Brand avatars use real marks, not letters, from SVGs bundled at build time (CSP forbids
+// remote assets); each SVG is viewBox 24 with currentColor fill so brand
 // color is CSS `color`. Resolution order: explicit `llm` prop, then the name's brand token,
 // then host-looking names resolve to Claude, else a deterministic monogram.
 import claudeSvg from "@lobehub/icons-static-svg/icons/claude.svg?raw";
@@ -9,7 +9,7 @@ import moonshotSvg from "@lobehub/icons-static-svg/icons/moonshot.svg?raw";
 import geminiSvg from "@lobehub/icons-static-svg/icons/gemini.svg?raw";
 import openrouterSvg from "@lobehub/icons-static-svg/icons/openrouter.svg?raw";
 import ollamaSvg from "@lobehub/icons-static-svg/icons/ollama.svg?raw";
-import codexSvg from "@lobehub/icons-static-svg/icons/codex.svg?raw";
+import codexSvg from "./codex.svg?raw";
 import opencodeSvg from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
 import openaiSvg from "@lobehub/icons-static-svg/icons/openai.svg?raw";
 import zaiSvg from "@lobehub/icons-static-svg/icons/zai.svg?raw";
