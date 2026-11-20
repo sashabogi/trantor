@@ -220,7 +220,7 @@ export function Workspace({ client, project, lens, onLens }: {
                   </button>
                   <div className="flex min-h-0 flex-1 flex-col">
                     <PaneBoundary key={sp.session}>
-                      <TerminalPane project={project} agent={seatName(sp.session)} peer={sp} />
+                      <TerminalPane project={project} agent={seatName(sp.session)} peer={sp} interactive={false} />
                     </PaneBoundary>
                   </div>
                 </div>

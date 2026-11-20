@@ -21,6 +21,7 @@ import {
   termResize,
   termWrite,
   type TerminalBytes,
+  type SurfaceLocation,
 } from "./herdr";
 
 const SEATS_POLL_MS = 12_000;
@@ -64,9 +65,9 @@ export type PaneSession = {
 
 export type TerminalDeps = {
   createSession(host: HTMLElement): PaneSession;
-  surfaceFor(project: string, agent: string): Promise<string | null>;
+  surfaceFor(project: string, agent: string, machine?: string): Promise<SurfaceLocation>;
   orchestratorOpen(project: string): Promise<string>;
-  termAttach(target: string, onBytes: (bytes: TerminalBytes) => void): Promise<number>;
+  termAttach(target: string, onBytes: (bytes: TerminalBytes) => void, machine?: string | null): Promise<number>;
   termWrite(sub: number, data: string): Promise<string>;
   termResize(sub: number, cols: number, rows: number): Promise<void>;
   termDetach(sub: number): Promise<void>;
@@ -149,12 +150,16 @@ export function TerminalPane({
   project,
   agent,
   peer,
+  interactive = true,
   deps = DEFAULT_TERMINAL_DEPS,
-}: { project: string; agent: string; peer?: Pick<Peer, "online" | "status" | "machine">; deps?: TerminalDeps }) {
+}: { project: string; agent: string; peer?: Pick<Peer, "online" | "status" | "machine">; interactive?: boolean; deps?: TerminalDeps }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const subRef = useRef<number | null>(null);
   const lastInputAtRef = useRef<number | null>(null);
   const [surface, setSurface] = useState<string | null | undefined>(undefined);
+  const [surfaceMachine, setSurfaceMachine] = useState<string | null>(null);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
+  const [remoteMissing, setRemoteMissing] = useState(false);
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
@@ -167,17 +172,31 @@ export function TerminalPane({
   useEffect(() => {
     let alive = true;
     setSurface(undefined);
+    setSurfaceMachine(null);
     setLatencyMs(null);
     setOpenError(null);
     setAttachError(null);
-    const lookup = () =>
-      deps.surfaceFor(project, agent)
-        .then(s => { if (alive) setSurface(s); })
-        .catch(() => { if (alive) setSurface(null); });
+    setRemoteError(null);
+    setRemoteMissing(false);
+    const lookup = () => deps.surfaceFor(project, agent, peer?.machine)
+      .then(location => {
+        if (!alive) return;
+        setSurface(location.surface);
+        setSurfaceMachine(location.machine);
+        setRemoteError(null);
+        setRemoteMissing(!!location.machine && !location.surface);
+      })
+      .catch(err => {
+        if (!alive) return;
+        setSurface(null);
+        setSurfaceMachine(peer?.machine ?? null);
+        setRemoteError(err instanceof Error ? err.message : String(err));
+        setRemoteMissing(false);
+      });
     lookup();
     const iv = setInterval(lookup, SEATS_POLL_MS);
     return () => { alive = false; clearInterval(iv); };
-  }, [project, agent, deps]);
+  }, [project, agent, peer?.machine, deps]);
 
   const attachOpenSession = useCallback(async () => {
     setOpening(true);
@@ -223,7 +242,7 @@ export function TerminalPane({
     const onData = session.onData(data => {
       lastInputAtRef.current = performance.now();
       const sub = subRef.current;
-      if (sub === null) return;
+      if (sub === null || !interactive) return;
       // A single keystroke, or ANY escape sequence (arrows, function keys, control codes all
       // start with ESC), goes straight through — never buffered, never bracket-wrapped.
       if (data.length === 1 || data.charCodeAt(0) === 0x1b) {
@@ -286,7 +305,7 @@ export function TerminalPane({
       }
     };
 
-    deps.termAttach(surface, onBytes)
+    deps.termAttach(surface, onBytes, surfaceMachine)
       .then(sub => {
         if (!alive) {
           void deps.termDetach(sub);
@@ -310,14 +329,14 @@ export function TerminalPane({
       if (sub !== null) void deps.termDetach(sub);
       session.dispose();
     };
-  }, [surface, deps]);
+  }, [surface, surfaceMachine, deps, interactive]);
 
   // Dropped files (#5949, leak fixed #5949-bounce): paths are written into the seat's terminal
   // shell-quoted and space-separated, through the same term_write path keystrokes use. "Over this
   // pane" is decided by the TOPMOST element under the cursor, not a rectangle test, since a
   // floating sheet can cover the pane's rect. No position means not ours, never a drop.
   useEffect(() => {
-    if (!surface) return;
+    if (!surface || !interactive) return;
     const hitAt = (position: { x: number; y: number } | undefined): { at: { x: number; y: number }; top: Element | null } | null => {
       if (!position) return null;
       const at = dropPointToCss(position);
@@ -351,7 +370,7 @@ export function TerminalPane({
       }
       setDragOver(true); // enter / over
     });
-  }, [surface, deps, agent]);
+  }, [surface, deps, agent, interactive]);
 
   if (attachError === "notAnAgent") {
     return (
@@ -361,6 +380,26 @@ export function TerminalPane({
           <div className="mt-2 text-tr-muted">
             That usually means the seat&rsquo;s process exited. It comes back on the seat&rsquo;s next turn.
           </div>
+        </div>
+      </div>
+    );
+  }
+  if (remoteError) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+          <div>SSH to {peer?.machine || "the remote machine"} is unavailable.</div>
+          <div className="mt-2 break-words text-tr-muted">{remoteError}</div>
+        </div>
+      </div>
+    );
+  }
+  if (remoteMissing) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+          <div>No herdr pane for {agent} was found on {peer?.machine}.</div>
+          <div className="mt-2 text-tr-muted">The seat may have stopped or its pane record may be stale.</div>
         </div>
       </div>
     );
@@ -417,6 +456,7 @@ export function TerminalPane({
       className={`relative min-h-0 flex-1 rounded-lg transition-shadow ${dragOver ? "ring-1 ring-tr-doing/50" : ""}`}
       data-pane={surface}
       data-drag-over={dragOver}
+      data-interactive={interactive}
     >
       <div ref={hostRef} className="h-full min-h-0" />
       {latencyMs !== null && (

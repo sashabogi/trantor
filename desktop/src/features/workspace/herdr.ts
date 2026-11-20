@@ -21,11 +21,18 @@ export async function herdrSeats(): Promise<HerdrSeat[]> {
 
 /** The herdr surface running `agent`'s seat on `project`, or null when none exists — null is
  * the caller's cue to keep the stated-placeholder ghost, not to error. */
-export async function surfaceFor(project: string, agent: string): Promise<string | null> {
+export type SurfaceLocation = { surface: string | null; machine: string | null };
+
+export async function surfaceFor(project: string, agent: string, machine?: string): Promise<SurfaceLocation> {
   const seats = await herdrSeats();
   // Last row per (project, agent) already wins Rust-side; take the last match defensively.
   const mine = seats.filter(s => s.project === project && s.agent === agent);
-  return mine.length ? (mine[mine.length - 1].surface ?? null) : null;
+  if (mine.length) return { surface: mine[mine.length - 1].surface ?? null, machine: null };
+  if (!machine?.trim()) return { surface: null, machine: null };
+  return {
+    surface: await invoke<string | null>("remote_herdr_surface", { machine: machine.trim(), project, agent }),
+    machine: machine.trim(),
+  };
 }
 
 export async function orchestratorOpen(project: string): Promise<string> {
@@ -43,9 +50,9 @@ export async function orchRestorables(): Promise<RestorableSession[]> {
   return invoke<RestorableSession[]>("orch_restorables");
 }
 
-export async function termAttach(target: string, onBytes: (bytes: TerminalBytes) => void): Promise<number> {
+export async function termAttach(target: string, onBytes: (bytes: TerminalBytes) => void, machine?: string | null): Promise<number> {
   const onBytesChannel = new Channel<TerminalBytes>(onBytes);
-  return invoke<number>("term_attach", { target, onBytes: onBytesChannel });
+  return invoke<number>("term_attach", { target, machine, onBytes: onBytesChannel });
 }
 
 /** Writes keystrokes/drops into the pty. Returns how many chunks Rust split the payload into —

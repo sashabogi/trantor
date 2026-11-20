@@ -24,6 +24,7 @@ mod provider_accounts;
 pub mod identity;
 mod sessions;
 mod terminal;
+mod remote_terminal;
 mod trantor_cli;
 mod hub;
 mod crew_controls;

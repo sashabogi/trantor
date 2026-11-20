@@ -62,6 +62,55 @@ describe("TerminalPane", () => {
     expect(d.disposed).toBe(true);
   });
 
+  it("keeps grid terminals read-only while still streaming their pane", async () => {
+    const grid = makeTerminalDouble();
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" interactive={false} deps={grid.deps} />,
+    ));
+    await flush();
+
+    expect(grid.attached).toEqual(["pane-1"]);
+    expect(grid.attachedMachines).toEqual([null]);
+    grid.emitData("x");
+    expect(grid.written).toEqual([]);
+    expect(host.querySelector("[data-interactive='false']")).not.toBeNull();
+  });
+
+  it("attaches remote seats through their resolved machine", async () => {
+    const remote = makeTerminalDouble({ surface: "w3:p2", surfaceMachine: "netcup" });
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" peer={{ online: true, status: "working", machine: "netcup" }} deps={remote.deps} />,
+    ));
+    await flush();
+
+    expect(remote.attached).toEqual(["w3:p2"]);
+    expect(remote.attachedMachines).toEqual(["netcup"]);
+    remote.emitData("x");
+    expect(remote.written).toEqual([{ sub: 42, data: "x" }]);
+  });
+
+  it("states when the remote pane record is missing", async () => {
+    const missing = makeTerminalDouble({ surface: null, surfaceMachine: "netcup" });
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" peer={{ online: true, status: "working", machine: "netcup" }} deps={missing.deps} />,
+    ));
+    await flush();
+
+    expect(host.textContent).toContain("No herdr pane for codex was found on netcup");
+    expect(missing.attached).toEqual([]);
+  });
+
+  it("states SSH lookup errors instead of showing an empty terminal", async () => {
+    const failed = makeTerminalDouble({ surface: null, surfaceError: "SSH to netcup failed: timed out" });
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="codex" peer={{ online: true, status: "working", machine: "netcup" }} deps={failed.deps} />,
+    ));
+    await flush();
+
+    expect(host.textContent).toContain("SSH to netcup is unavailable");
+    expect(host.textContent).toContain("timed out");
+  });
+
   it("coalesces a printable multi-char burst into ONE bracketed paste", async () => {
     await render(d);
     await flush();

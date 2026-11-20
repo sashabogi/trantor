@@ -275,6 +275,7 @@ pub fn run() {
             provider_accounts::provider_save_key,
             provider_accounts::provider_remove,
             terminal::term_attach,
+            remote_terminal::remote_herdr_surface,
             terminal::term_write,
             terminal::term_resize,
             terminal::term_detach

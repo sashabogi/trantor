@@ -393,6 +393,7 @@ fn attach_args(target: &str) -> [&str; 3] {
 #[tauri::command]
 pub async fn term_attach(
     target: String,
+    machine: Option<String>,
     on_bytes: Channel<Vec<u8>>,
     terminals: State<'_, TerminalManager>,
 ) -> Result<u64, String> {
@@ -400,11 +401,22 @@ pub async fn term_attach(
     if target.is_empty() {
         return Err("target is required".into());
     }
-    let mut cmd = CommandBuilder::new("herdr");
-    cmd.args(attach_args(&target));
+    let machine = machine.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    let registry_target = crate::remote_terminal::terminal_key(machine.as_deref(), &target);
+    let cmd = if let Some(machine) = machine.as_deref() {
+        let ssh_target = crate::remote_terminal::ssh_target(machine)?
+            .ok_or_else(|| format!("no SSH target configured for machine {machine}"))?;
+        let mut command = CommandBuilder::new("ssh");
+        command.args(crate::remote_terminal::ssh_attach_args(&ssh_target, &target)?);
+        command
+    } else {
+        let mut command = CommandBuilder::new("herdr");
+        command.args(attach_args(&target));
+        command
+    };
     terminals
         .attach_target(
-            &target,
+            &registry_target,
             cmd,
             Arc::new(move |bytes| {
                 let _ = on_bytes.send(bytes);

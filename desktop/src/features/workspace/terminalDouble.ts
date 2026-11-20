@@ -12,6 +12,7 @@ export type TerminalDouble = {
   /** lines the pane wrote itself (attach failures) */
   lines: string[];
   attached: string[];
+  attachedMachines: Array<string | null | undefined>;
   opened: string[];
   written: Array<{ sub: number; data: string }>;
   resized: Array<{ sub: number; cols: number; rows: number }>;
@@ -59,6 +60,8 @@ export function installResizeObserver(): void {
 
 export function makeTerminalDouble(opts: {
   surface?: string | null;
+  surfaceMachine?: string | null;
+  surfaceError?: string;
   opened?: string;
   sub?: number;
   cols?: number;
@@ -93,10 +96,14 @@ export function makeTerminalDouble(opts: {
         };
         return session;
       },
-      surfaceFor: async () => surface,
+      surfaceFor: async () => {
+        if (opts.surfaceError) throw new Error(opts.surfaceError);
+        return { surface, machine: opts.surfaceMachine ?? null };
+      },
       orchestratorOpen: async project => { d.opened.push(project); return openedPane; },
-      termAttach: async (target, onBytes) => {
+      termAttach: async (target, onBytes, machine) => {
         d.attached.push(target);
+        d.attachedMachines.push(machine);
         onBytesCb = onBytes;
         return sub;
       },
@@ -114,6 +121,7 @@ export function makeTerminalDouble(opts: {
     writes: [],
     lines: [],
     attached: [],
+    attachedMachines: [],
     opened: [],
     written: [],
     resized: [],
