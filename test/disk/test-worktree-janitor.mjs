@@ -238,8 +238,9 @@ try {
   const P = "p12268";
   const rowSeat = wt(P, "row-clean");   // dead, crew row, clean, old → whole worktree goes
   const dirtySeat = wt(P, "dirty-dead"); // dead, uncommitted → kept, output pruned
+  const oldDirtySeat = wt(P, "old-dirty"); // older than the worktree window, still dirty → output only
   const liveSeat = wt(P, "live-cwd");    // a process cwd inside → untouched
-  for (const w of [rowSeat, dirtySeat, liveSeat]) {
+  for (const w of [rowSeat, dirtySeat, oldDirtySeat, liveSeat]) {
     mkdirSync(join(w, "src", "build"), { recursive: true });
     writeFileSync(join(w, "src", "build", "hand.js"), "source");
     writeFileSync(join(w, "src", "a.js"), "source");
@@ -250,13 +251,23 @@ try {
     mkdirSync(join(w, "flutter", "bin", "build"), { recursive: true });
     ageTree(w, OLD7);
   }
-  writeFileSync(statePath, `${P}\therdr\trow-clean\tp1\n${P}\therdr\tdirty-dead\tp2\n`);
-  const fx = makeExec({ dirty: { [dirtySeat]: " M src/a.js" }, cwdDirs: [join(liveSeat, "src")] });
+  // Ensure this worktree crosses the whole-tree age threshold; its dirtiness must win.
+  ageTree(oldDirtySeat, OLD7);
+  writeFileSync(statePath, `${P}\therdr\trow-clean\tp1\n${P}\therdr\tdirty-dead\tp2\n${P}\therdr\told-dirty\tp3\n`);
+  const fx = makeExec({ dirty: { [dirtySeat]: " M src/a.js", [oldDirtySeat]: " M src/a.js" }, cwdDirs: [join(liveSeat, "src")] });
   const dep = { exec: fx.exec, cwds: () => [join(liveSeat, "src")], home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000, log: () => {} };
   const rep1 = buildDiskReport(dep);
   const rowItems = rep1.plan.filter((p) => String(p.path).startsWith(rowSeat));
   ok("a dead seat WITH a crew row is planned for whole-worktree removal",
     rowItems.length === 1 && rowItems[0].type === "seat-worktree", JSON.stringify(rowItems.map((p) => p.type)));
+  const oldDirtyItems = rep1.plan.filter((p) => String(p.path).startsWith(oldDirtySeat));
+  ok("an old dirty seat is KEPT whole and only its build/drill output is planned",
+    !oldDirtyItems.some((p) => p.type === "seat-worktree")
+    && oldDirtyItems.length > 0
+    && oldDirtyItems.every((p) => ["build-junk", "drill-output"].includes(p.type))
+    && rep1.kept.some((k) => k.path === oldDirtySeat && k.reason.includes("uncommitted changes")),
+    JSON.stringify({ plan: oldDirtyItems.map((p) => `${p.type}:${p.path.slice(oldDirtySeat.length + 1)}`),
+      kept: rep1.kept.filter((k) => k.path === oldDirtySeat) }));
   const dirtyTypes = rep1.plan.filter((p) => String(p.path).startsWith(dirtySeat)).map((p) => `${p.type}:${p.path.slice(dirtySeat.length + 1)}`).sort();
   ok("a dirty dead seat keeps its worktree but plans node_modules, target, .next, dist and .agent-bus-out",
     JSON.stringify(dirtyTypes) === JSON.stringify([
