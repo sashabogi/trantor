@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { SeatTab } from "./SeatTab";
-import type { PaneTarget } from "./paneTargets";
+import { isStaleOffline, type PaneTarget } from "./paneTargets";
 import { availableAgent, balanceFor, canStart, crewApi, parkReason, quotaLabel, type CrewAction, type CrewApi, type CrewCatalog, type SeatWhy } from "./crewControlApi";
 
 // each check is a node CLI spawn per seat tab; 3s across six tabs kept the machine busy
@@ -43,6 +43,53 @@ function TabMenu({ anchor, label, close, children }: {
     }}>{children}</div>, document.body);
 }
 
+function OfflineSeats({ project, targets, catalog, api, onSelect, onChanged, report, actionPending }: {
+  project: string; targets: PaneTarget[]; catalog: CrewCatalog | null; api: CrewApi;
+  onSelect: (target: PaneTarget) => void; onChanged: () => void; report: Report; actionPending: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [starting, setStarting] = useState<string | null>(null);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const mounted = useRef(true);
+  const close = useCallback(() => setOpen(false), []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const start = async (target: PaneTarget) => {
+    if (starting || actionPending) return;
+    const seat = target.agent;
+    setStarting(target.key);
+    setOpen(false);
+    report(`${seat} · Starting…`, false, true);
+    try {
+      const launch = catalog?.agents.find(a => a.id === seat)?.launch ?? seat;
+      const result = await api.action(project, "up", launch);
+      if (mounted.current) report(`${seat} · ${result.ok ? "Started" : result.reason ?? "Start failed"}`, !result.ok);
+    } catch (e) {
+      if (mounted.current) report(`${seat} · ${String(e)}`, true);
+    } finally {
+      if (mounted.current) { setStarting(null); onChanged(); }
+    }
+  };
+  return <>
+    <button ref={anchor} type="button" aria-label={`+${targets.length} offline`} aria-haspopup="menu" aria-expanded={open}
+      className="shrink-0 whitespace-nowrap rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted hover:bg-tr-panel hover:text-tr-text"
+      onClick={() => setOpen(!open)}>+{targets.length} offline</button>
+    {open && <TabMenu anchor={anchor.current} label="Offline seats" close={close}>
+      {targets.map(target => <div key={target.key} className="border-b border-tr-edge/60 last:border-0">
+        <div className="px-3 pb-1 pt-2 text-[12px] font-medium text-tr-text">{target.label}</div>
+        <div className="grid grid-cols-2 gap-1 px-1 pb-1">
+          <button type="button" role="menuitem" aria-label={`Start ${target.agent}`} className={menuItem}
+            disabled={starting !== null || actionPending} onClick={() => void start(target)}>Start</button>
+          <button type="button" role="menuitem" aria-label={`Open ${target.agent} record`} className={menuItem}
+            onClick={() => { onSelect(target); close(); }}>Open record</button>
+        </div>
+      </div>)}
+    </TabMenu>}
+  </>;
+}
+
 export function CrewControls({ project, targets, selected, onSelect, onChanged, children, api = crewApi, showMachineBadges = false }: {
   project: string; targets: PaneTarget[]; selected?: string; onSelect: (target: PaneTarget) => void;
   onChanged: () => void; children?: ReactNode; api?: CrewApi; showMachineBadges?: boolean;
@@ -70,13 +117,18 @@ export function CrewControls({ project, targets, selected, onSelect, onChanged, 
   const names = targets.filter(t => !t.isOrchestrator).map(t => t.agent);
   const extra: PaneTarget[] = added.filter(name => !names.includes(name)).map(name => ({ key: `${name}:${project}`, label: name,
     agent: name, brand: name, session: `${name}:${project}`, online: false, isOrchestrator: false }));
+  const now = Date.now();
+  const tabTargets = targets.filter(t => t.isOrchestrator || !isStaleOffline(t, now));
+  const offlineTargets = targets.filter(t => !t.isOrchestrator && isStaleOffline(t, now));
   return <>
     <div className="flex min-w-0 max-w-full items-center gap-1">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" aria-label="Seat tabs">
-      {[...targets, ...extra].map(t => t.isOrchestrator
+      {[...tabTargets, ...extra].map(t => t.isOrchestrator
         ? <SeatTab key={t.key} name={t.label} brandName={t.brand} status={t.status} active={selected === t.key} onClick={() => onSelect(t)} you />
         : <CrewSeatTab key={t.key} project={project} target={t} active={selected === t.key} onSelect={() => onSelect(t)}
           catalog={catalog} api={api} onChanged={onChanged} report={report} actionPending={notice.busy} showMachineBadges={showMachineBadges} />)}
+      {offlineTargets.length > 0 && <OfflineSeats project={project} targets={offlineTargets} catalog={catalog} api={api}
+        onSelect={onSelect} onChanged={onChanged} report={report} actionPending={notice.busy} />}
       </div>
       <button ref={addAnchor} type="button" aria-label="Add seat" title="Add seat" aria-haspopup="menu" aria-expanded={adding}
         className="shrink-0 rounded-[9px] px-3 py-[7px] text-tr-muted hover:bg-tr-panel hover:text-tr-text"

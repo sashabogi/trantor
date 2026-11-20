@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CrewControls, SEAT_WHY_POLL_MS } from "./CrewControls";
-import type { PaneTarget } from "./paneTargets";
+import { OFFLINE_FOLD_MS, type PaneTarget } from "./paneTargets";
 import { availableAgent, quotaLabel, createCrewApi, type CrewApi, type CrewCatalog, type CrewResult, type SeatWhy } from "./crewControlApi";
 
 // SAFETY: React reads this test-only flag from globalThis.
@@ -14,6 +14,7 @@ const catalog: CrewCatalog = {
   balances: [{ provider: "zai", ok: true, remainingPct: 60 }, { provider: "codex", ok: true, remainingPct: 80 }, { provider: "deepseek", ok: true, remaining: 0 }],
 };
 const target = (name: string): PaneTarget => ({ key: name, agent: name, label: name, brand: name, session: `${name}:trantor`, online: true, isOrchestrator: false });
+const staleTarget = (name: string): PaneTarget => ({ ...target(name), online: false, lastSeen: Date.now() - OFFLINE_FOLD_MS - 1 });
 const state = (name: string): SeatWhy => ({ state: name, why: "runner alive; PARKED (exhausted) holding 1 message", advice: "parked until 12:00 (in 2h) — it resumes itself" });
 function fakeApi(initial = "live"): CrewApi {
   return { catalog: vi.fn(async () => catalog), why: vi.fn(async () => state(initial)),
@@ -139,6 +140,40 @@ describe("Workspace crew controls", () => {
       expect(host.querySelector('[role="status"]')).toBeNull();
     } finally { vi.useRealTimers(); }
   });
+  it("folds four stale seats into one chip and opens a seat record from its menu", async () => {
+    const live = ["codex-7", "glm-5", "kimi-9"].map(target);
+    const offline = ["codex-3", "glm-2", "kimi-6", "qwen"].map(staleTarget);
+    const onSelect = vi.fn();
+    await act(async () => root.render(<CrewControls project="trantor" targets={[...live, ...offline]} onSelect={onSelect} onChanged={vi.fn()} api={fakeApi()} />));
+    const strip = host.querySelector('[aria-label="Seat tabs"]')!;
+    expect(strip.textContent).toContain("+4 offline");
+    for (const seat of live) expect(strip.textContent).toContain(seat.label);
+    for (const seat of offline) expect(strip.textContent).not.toContain(seat.label);
+    await click("+4 offline");
+    for (const seat of offline) expect(document.body.textContent).toContain(seat.label);
+    await click("Open codex-3 record");
+    expect(onSelect).toHaveBeenCalledWith(offline[0]);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("starts a folded seat with its catalog launch spec", async () => {
+    const api = fakeApi("no-runner");
+    const changed = vi.fn();
+    await act(async () => root.render(<CrewControls project="trantor" targets={[staleTarget("glm")]} onSelect={vi.fn()} onChanged={changed} api={api} />));
+    await click("+1 offline");
+    await click("Start glm");
+    expect(api.action).toHaveBeenCalledWith("trantor", "up", "glm:zai-coding-plan");
+    expect(host.textContent).toContain("glm · Started");
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a recently offline seat as a tab during the grace window", async () => {
+    const recent = { ...target("kimi-9"), online: false, lastSeen: Date.now() - OFFLINE_FOLD_MS + 10_000 };
+    await act(async () => root.render(<CrewControls project="trantor" targets={[recent]} onSelect={vi.fn()} onChanged={vi.fn()} api={fakeApi()} />));
+    expect(host.querySelector('[aria-label="Seat tabs"]')?.textContent).toContain("kimi-9");
+    expect(host.querySelector('[aria-label="Seat tabs"]')?.textContent).not.toContain("offline");
+  });
+
   it.each(["live", "parked", "no-runner"])("renders a %s dot on the tab", async name => {
     await mount(fakeApi(name));
     const dot = host.querySelector(".tr-dot")!;

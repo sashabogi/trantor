@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAgentPeer, liveGridSeats, paneTargets } from "./paneTargets";
+import { isAgentPeer, isStaleOffline, liveGridSeats, OFFLINE_FOLD_MS, paneTargets } from "./paneTargets";
 import type { Peer } from "../../shared/api/client";
 import type { HerdrSeat } from "./herdr";
 
@@ -51,6 +51,14 @@ describe("paneTargets", () => {
     const offline: Peer = { session: "kimi:trantor", online: false, status: "offline" };
     expect(liveGridSeats([codex, offline]).map(peer => peer.session)).toEqual(["codex:trantor"]);
     expect(paneTargets([codex, offline], null, host, "trantor").map(row => row.agent)).toEqual(["codex", "kimi"]);
+  });
+
+  it("folds only seats stale beyond the online window and grace", () => {
+    const now = 10_000_000;
+    expect(isStaleOffline({ online: true, lastSeen: now - OFFLINE_FOLD_MS - 1 }, now)).toBe(false);
+    expect(isStaleOffline({ online: false, lastSeen: now - OFFLINE_FOLD_MS }, now)).toBe(false);
+    expect(isStaleOffline({ online: false, lastSeen: now - OFFLINE_FOLD_MS - 1 }, now)).toBe(true);
+    expect(isStaleOffline({ online: false }, now)).toBe(true);
   });
 
   it("#6068: the genesis tool is not a seat; a kindless peer (old hub) still is", () => {
