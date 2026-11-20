@@ -44,9 +44,18 @@ git(REPO, ["commit", "-q", "-am", "c1 (integration, unpushed)"]);
 const C0 = git(REPO, ["rev-parse", "origin/main"]), C1 = git(REPO, ["rev-parse", "main"]);
 ok("setup: local main is ahead of origin/main", C0 !== C1 && git(REPO, ["rev-parse", "HEAD"]) === C1);
 const GHOST = "0123456789abcdef0123456789abcdef01234567";
+function advanceOrigin() {
+  const advance = join(W, "origin-advance");
+  git(REPO, ["clone", ORIGIN, advance]);
+  writeFileSync(join(advance, "remote-moved.txt"), "origin advanced after seat setup\n");
+  git(advance, ["add", "remote-moved.txt"]);
+  git(advance, ["commit", "-q", "-m", "origin moved after worktree setup"]);
+  git(advance, ["push", "-q", "origin", "main"]);
+  return git(advance, ["rev-parse", "HEAD"]);
+}
 
 // ---- the runner, against a mock hub -------------------------------------------------------------
-let queued = [], served = 0, sent = [], moves = [];
+let queued = [], served = 0, sent = [], moves = [], beforeFirstPoll = null;
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -59,6 +68,7 @@ const hub = http.createServer((req, res) => {
     if (P === "/task/update") { try { moves.push(JSON.parse(buf || "{}")); } catch {} return reply({ ok: true }); }
     if (P === "/poll") {
       if (served++ === 0 && queued.length) {
+        beforeFirstPoll?.();
         return reply({ messages: queued.map((m, i) => ({ id: i + 1, ts: Date.now(), to: u.searchParams.get("session"), from: "owner@laptop", ...m })), cursor: 1 });
       }
       return setTimeout(() => reply({ messages: [], cursor: 1 }), 250);
@@ -72,8 +82,8 @@ const PROJ = "tt-base";
 
 // The fake seat logs the prompt it was handed and resolves the prompt's base line from ITS cwd —
 // the seat worktree the runner made under HOME — exactly as a real seat would with git cat-file.
-async function drill(messages, { waitMs = 8000 } = {}) {
-  queued = messages; served = 0; sent = []; moves = [];
+async function drill(messages, { waitMs = 8000, onFirstPoll = null } = {}) {
+  queued = messages; served = 0; sent = []; moves = []; beforeFirstPoll = onFirstPoll;
   const HOME = join(W, `home-${Date.now()}`);
   mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
   const fakebin = join(HOME, "bin"); mkdirSync(fakebin, { recursive: true });
@@ -99,20 +109,22 @@ exit 0
   runner.kill("SIGKILL"); await sleep(150);
   const log = read(LOGF);
   const turns = log.split("===TURN===").filter(t => t.trim());
+  beforeFirstPoll = null;
   return { log, turns, wakeTurns: turns.filter(t => t.includes("NEW BUS MESSAGE")), sent, moves };
 }
 
-// ---- drill 1: a contract naming only a card gets the LOCAL main head, which origin lacks ----------
-console.log("\n## the contract carries local main, and the seat resolves it");
+// ---- drill 1: the fallback fetches origin/main after the seat worktree was initialized -------------
+console.log("\n## the contract fallback fetches the current origin/main");
 {
-  const r = await drill([{ text: "contract: card #7001, build the thing" }]);
+  let currentOrigin = "";
+  const r = await drill([{ text: "contract: card #7001, build the thing" }], { onFirstPoll: () => { currentOrigin = advanceOrigin(); } });
   ok("the contract buys one turn", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
   const t = r.wakeTurns[0] || "";
-  ok("the turn carries `base: <local main sha>`, not origin/main's", t.includes(`\nbase: ${C1}\n`) && !t.includes(C0), t.slice(0, 400));
-  ok("the fake seat resolved that sha from its own worktree", r.log.includes(`seat resolved base ${C1}: yes`), r.log.slice(-300));
-  ok("the seat worktree is a linked worktree of the same repo (the ref `main` is right there)",
+  ok("the turn carries the origin/main sha fetched after setup", t.includes(`\nbase: ${currentOrigin}\n`) && !t.includes(C1), t.slice(0, 400));
+  ok("the fake seat resolved that sha from its own worktree", r.log.includes(`seat resolved base ${currentOrigin}: yes`), r.log.slice(-300));
+  ok("the seat worktree is a linked worktree of the same repo",
     /cwd=.*\.agent-bus\/worktrees\/tt-base\/codex/.test(t), t.slice(0, 120));
-  ok("the rules tell the seat: start at the base sha, never at origin/main",
+  ok("the rules tell the seat to start at the contract base",
     t.includes("never at origin/main") && t.includes("verified at <sha>"), "rules text missing the #7754 lines");
   ok("nothing was moved to blocked", !r.moves.some(m => m.status === "blocked"), JSON.stringify(r.moves));
 }

@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ensureSeatWorktree, removeSeatWorktree } from "../../lib/seat-worktree.mjs";
+import { alignSeatWorktree, ensureSeatWorktree, removeSeatWorktree } from "../../lib/seat-worktree.mjs";
 import { down } from "../../bin/crew/state.mjs";
 
 let pass = 0, fail = 0;
@@ -104,6 +104,28 @@ try {
     const third = ensureSeatWorktree({ sourceDir: repo, project: "proj", agent: "codex", home, log: silent });
     ok("a fully harvested branch is re-created at main HEAD",
       third.created === true && git(["rev-parse", "HEAD"], third.dir) === mainSha);
+  }
+
+  console.log("\ncontract alignment refuses to reset over unharvested commits:");
+  {
+    const home = join(root, "home-align");
+    const receiptsRoot = join(root, "receipts");
+    const repo = makeRepo(root, "repo-align");
+    const wt = ensureSeatWorktree({ sourceDir: repo, project: "proj", agent: "codex", home, log: silent });
+    writeFileSync(join(wt.dir, "unharvested.txt"), "keep me\n");
+    git(["add", "unharvested.txt"], wt.dir);
+    git(["commit", "-q", "-m", "unharvested contract A"], wt.dir);
+    const seatSha = git(["rev-parse", "HEAD"], wt.dir);
+    writeFileSync(join(repo, "next-base.txt"), "contract B base\n");
+    git(["add", "next-base.txt"], repo);
+    git(["commit", "-q", "-m", "contract B base"], repo);
+    const nextBase = git(["rev-parse", "HEAD"], repo);
+
+    const aligned = alignSeatWorktree({ dir: wt.dir, project: "proj", agent: "codex", base: nextBase, receiptsRoot });
+    ok("alignment refuses and names the unharvested commit", !aligned.ok && aligned.reason.includes(seatSha.slice(0, 7)));
+    ok("the seat branch remains at its unharvested commit", git(["rev-parse", "HEAD"], wt.dir) === seatSha
+      && git(["rev-parse", "refs/heads/seat/codex"], wt.dir) === seatSha);
+    ok("the refused alignment leaves the next base untouched", git(["rev-parse", "HEAD"], wt.dir) !== nextBase);
   }
 
   // ---- down() removes worktrees via the seam ----

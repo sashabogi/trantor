@@ -14,7 +14,7 @@ import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 import { redactKeys } from "../lib/redact.mjs";
 import { writeTurnState } from "../lib/turnstate.mjs";
-import { applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWorktreeDeclaration } from "../lib/seat-worktree.mjs";
+import { alignSeatWorktree, applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWorktreeDeclaration } from "../lib/seat-worktree.mjs";
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
   verdictFor, substantiveOutput, stallVerdict, cutSignalFor,
@@ -118,9 +118,12 @@ function seatWorktree(sourceDir) {
 
 const TURN_DIR = seatWorktree(DIR);
 
-// #7754: the integration head is the orchestrator's LOCAL main, which this linked worktree already
-// holds as the ref `main`; origin/main trails it whenever integration commits are unpushed.
-const localMainHead = () => gitOut(["rev-parse", "--verify", "--quiet", "main^{commit}"], TURN_DIR);
+// #13921: an explicit contract base wins; without one, fetch the current origin/main instead of
+// trusting a cached local ref from when this seat worktree was created.
+const originMainHead = () => {
+  spawnSync("git", ["fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"], { cwd: TURN_DIR, stdio: "ignore", timeout: 20000 });
+  return gitOut(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/main^{commit}"], TURN_DIR);
+};
 const resolvesHere = (sha) =>
   spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { cwd: TURN_DIR, stdio: "ignore", timeout: 8000 }).status === 0;
 
@@ -1878,7 +1881,8 @@ async function resolveWakeCard(messages, { session }) {
     // served contract cites: #7763's rebinding covers confirmed message-card ids only, never a
     // card cited in the text, so the unresolvable-base branch blocks the cited card.
     const baseCard = card || servedContractCard(wakeForTurn, { session: SESSION });
-    const base = contractBase(wakeForTurn) || localMainHead();
+    const statedBase = contractBase(wakeForTurn);
+    const base = statedBase || originMainHead();
     if (base && baseCard && !resolvesHere(base)) {
       const text = `cannot resolve base ${base} in ${TURN_DIR} (git cat-file -e failed) — #${baseCard} moved to blocked; push or fetch that sha, or name one this worktree can reach`;
       log(text);
@@ -1889,6 +1893,21 @@ async function resolveWakeCard(messages, { session }) {
       pendingWake = [];
       savePending([], pendingBcast);
       return;
+    }
+    if (base && TURN_DIR !== DIR && card && gitOut(["rev-parse", "--abbrev-ref", "HEAD"], TURN_DIR) === `seat/${PERSONA}`) {
+      const aligned = alignSeatWorktree({ dir: TURN_DIR, project: PROJ, agent: PERSONA, base });
+      if (!aligned.ok) {
+        const text = `cannot align seat worktree for #${card}: ${aligned.reason}`;
+        log(text);
+        await api("/task/update", { id: card, status: "blocked", note: text, by: SESSION }).catch(() => {});
+        const owed = assigners.map(a => a.from).filter(f => f && f !== SESSION);
+        for (const to of (owed.length ? owed : ["all"]))
+          await api("/send", { from: SESSION, to, text, project: PROJ, kind: "alert" }).catch(() => {});
+        pendingWake = [];
+        savePending([], pendingBcast);
+        return;
+      }
+      if (aligned.parked) log(`preserved unharvested work at ${aligned.parked} before aligning to ${base}`);
     }
     const baseText = base ? `\n${baseLine(base)}\n` : "";
     // #6289: the session SHAPE (fresh vs resume) reads the served contract's raw citation — a wake
