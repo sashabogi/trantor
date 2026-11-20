@@ -171,7 +171,7 @@ fn status_and_session_from_agent_get(raw: &str) -> (Option<String>, Option<Strin
 /// Per-pane subscriptions are live-only, while the global pane.* types replay history on subscribe,
 /// which is why this subscribes per pane and re-seeds via `agent_status()`. Frames: docs/CONTRACT-desktop.md.
 pub struct StatusStream {
-    reader: BufReader<UnixStream>,
+    reader: Box<dyn BufRead + Send>,
 }
 
 pub fn subscribe_status(pane: &str, read_timeout: Duration) -> Result<StatusStream, String> {
@@ -198,7 +198,9 @@ pub fn subscribe_status(pane: &str, read_timeout: Duration) -> Result<StatusStre
     if !ack.contains("subscription_started") {
         return Err(format!("herdr refused the subscription: {}", ack.trim()));
     }
-    Ok(StatusStream { reader })
+    Ok(StatusStream {
+        reader: Box::new(reader),
+    })
 }
 
 impl StatusStream {
@@ -210,12 +212,26 @@ impl StatusStream {
         let mut buf = String::new();
         match self.reader.read_line(&mut buf) {
             Ok(0) => Err("herdr closed the event stream".into()),
+            Ok(_) if is_events_lost_error(&buf) => {
+                Err("herdr events_lost error; resubscribe and reseed status".into())
+            }
             Ok(_) => Ok(Some(buf)),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
                 || e.kind() == std::io::ErrorKind::TimedOut => Ok(None),
             Err(e) => Err(format!("herdr event stream read failed: {e}")),
         }
     }
+}
+
+/// herdr 0.9.5 reports an unrecoverable subscription gap as a JSON-RPC error frame. The caller
+/// treats stream errors as a reason to reconnect; its next pass seeds status with agent.get
+/// before opening a new subscription.
+fn is_events_lost_error(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw.trim())
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.get("code")).and_then(|c| c.as_str()).map(str::to_string))
+        .as_deref()
+        == Some("events_lost")
 }
 
 /// Pure frame decode: Some(status) when `raw` is an agent-status change for `pane`.
@@ -310,6 +326,16 @@ mod tests {
     // Code's startup trust dialog recognized as blocked.
     const STATUS_FRAME: &str = r#"{"data":{"agent":"claude","agent_status":"blocked","pane_id":"w2:p1B","workspace_id":"w2"},"event":"pane.agent_status_changed"}"#;
     const ACK_FRAME: &str = r#"{"id":"trantor:events.subscribe","result":{"type":"subscription_started"}}"#;
+    const EVENTS_LOST: &str = r#"{"id":"trantor:events.subscribe","error":{"code":"events_lost","message":"subscription event buffer overflowed"}}"#;
+
+    #[test]
+    fn events_lost_on_a_fake_stream_requests_resubscribe_and_reseed() {
+        let fake = std::io::Cursor::new(format!("{EVENTS_LOST}\n"));
+        let mut stream = StatusStream { reader: Box::new(fake) };
+        let error = stream.next_line().unwrap_err();
+        assert!(error.contains("events_lost"));
+        assert!(error.contains("resubscribe and reseed"));
+    }
 
     #[test]
     fn status_frames_decode_for_their_pane_and_nothing_else() {
