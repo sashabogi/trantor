@@ -113,6 +113,35 @@ ok(isLow(codexWin) === false, "isLow: 61%/25% used → not low");
 ok(isLow({ ok: true, kind: "windows", windows: [{ name: "5h", usedPct: 91 }] }) === true, "isLow: 91% used window (9% left < 15%) → low");
 
 // --- fetchBalances is scoped to the configured profile, NOT ambient env keys ---
+// Kimi Code OAuth is read-only: use its access token when no API key is configured.
+{
+  const home = mkdtempSync(join(tmpdir(), "trantor-kimi-oauth-"));
+  const credentials = join(home, ".kimi-code", "credentials");
+  mkdirSync(credentials, { recursive: true });
+  writeFileSync(join(credentials, "kimi-code.json"), JSON.stringify({ access_token: "kimi-oauth-token" }));
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  const resetTime = Date.now() + 60 * 60e3;
+  const api = http.createServer((req, res) => {
+    ok(req.headers.authorization === "Bearer kimi-oauth-token", "Kimi OAuth: usage request uses credentials access_token");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      totalQuota: { limit: 1000, remaining: 2 },
+      usage: { resetTime: Date.now() + 7 * 86400e3 },
+      limits: [{ window: { duration: 5, timeUnit: "hours" }, detail: { limit: 100, remaining: 25, resetTime } }],
+    }));
+  });
+  await new Promise((resolve) => api.listen(0, "127.0.0.1", resolve));
+  const rows = await fetchBalances({ KIMI_CODE_BASE_URL: `http://127.0.0.1:${api.address().port}` }, { only: ["kimi"] });
+  const kimi = rows.find((row) => row.provider === "kimi");
+  ok(kimi?.ok && kimi.via === "oauth", "Kimi OAuth: credentials file enables a row without KIMI_API_KEY");
+  ok(kimi?.kind === "quota" && kimi.remainingPct === 25, "Kimi OAuth: remainingPct comes from left/limit in the 5h window, not weekly quota");
+  ok(kimi?.resetTime === resetTime, "Kimi OAuth: row uses the 5h window resetTime");
+  await new Promise((resolve) => api.close(resolve));
+  if (previousHome === undefined) delete process.env.HOME;
+  else process.env.HOME = previousHome;
+}
+
 const noProfile = await fetchBalances({ OPENROUTER_API_KEY: "x", KIMI_API_KEY: "y" });
 ok(Array.isArray(noProfile) && noProfile.length === 0, "fetchBalances: no `only` (no profile) → empty even with keys present (no scraping, no network)");
 const notConfigured = await fetchBalances({ OPENROUTER_API_KEY: "x" }, { only: ["deepseek", "claude"] });
