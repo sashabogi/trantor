@@ -95,6 +95,12 @@ if (LIST) {
 const selected = ONLY ? suites.filter(s => s.rel.includes(ONLY)) : suites;
 if (!selected.length) { console.error(`no suite matches --only ${ONLY}`); process.exit(1); }
 
+const heavy = !ONLY || selected.some(s => s.rel === "desktop-vitest");
+if (heavy && process.env.TRANTOR_HEAVY_GATE_HELD !== "1") {
+  const gated = spawnSync(process.execPath, [join(ROOT, "bin", "heavy-gate.mjs"), "--", process.execPath, fileURLToPath(import.meta.url), ...argv], { stdio: "inherit" });
+  process.exit(gated.status ?? 1);
+}
+
 // ---- 3. run in parallel, per-suite timeout, process-group kill ----
 // Preserve failed assertion lines so retries do not hide the first failure.
 const failLines = (out) => out.split("\n").filter((l) => /✗|\bFAIL\b/.test(l));

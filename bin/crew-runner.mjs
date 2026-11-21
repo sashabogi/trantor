@@ -2,7 +2,7 @@
 // trantor crew runner — keeps a crew agent alive without burning tokens: it long-polls the bus
 // (zero tokens) and resumes the CLI with each message. Usage: node crew-runner.mjs <agent> [dir]
 import { execSync, spawnSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync, realpathSync, statSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
@@ -931,6 +931,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // ONE stall report, never a kill. #6206: floor 10 min, never derived from TRANTOR_TURN_MAX_MS.
   const WD_MS = Number(process.env.TRANTOR_TURN_WATCHDOG_MS) || 10 * 60 * 1000;
   const STAMPF = join(homedir(), ".agent-bus", `turnstamp-${PERSONA}-${PROJ}.json`);
+  const HEAVY_WAIT_DIR = join(homedir(), ".agent-bus", `heavy-gate-wait-${PERSONA}-${PROJ}`);
+  rmSync(HEAVY_WAIT_DIR, { recursive: true, force: true });
   // #6206: the CLI's transcript dir (a missing dir is a quiet channel), exported so a drill's fake
   // CLI can write lines the watchdog sees. CUTF is written by the shell's time box: cut, not crashed.
   const CUTF = join(homedir(), ".agent-bus", `turncut-${PERSONA}-${PROJ}`);
@@ -946,7 +948,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const EXTF = join(homedir(), ".agent-bus", `turnext-${PERSONA}-${PROJ}`);
   try { unlinkSync(DEADLINEF); } catch {}
   try { unlinkSync(EXTF); } catch {}
-  const boxPlan = TURN_EXTENSIONS_MAX ? {
+  const boxPlan = TURN_MAX_MS ? {
     maxMs: TURN_MAX_MS, extendMs: TURN_EXTEND_MS, ceilingMs: TURN_CEILING_MS, extensionsMax: TURN_EXTENSIONS_MAX,
     deadlineFile: DEADLINEF, extFile: EXTF, card: sessionCard || 0,
     assigners: (opts.assigners || []).map(a => ({ from: a.from, id: a.id })),
@@ -970,7 +972,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
       // end the turn, so the watchdog stays report-only (reporting is the whole job, boxless).
       TURN_MAX_MS ? STALLF : "",
       // #7749: the turn-state file the watchdog refreshes mid-turn (lastBytesAt/lastTranscriptAt).
-      join(homedir(), ".agent-bus", `turnstate-${PERSONA}-${PROJ}.json`)],
+      join(homedir(), ".agent-bus", `turnstate-${PERSONA}-${PROJ}.json`), HEAVY_WAIT_DIR],
       { detached: true, stdio: "ignore" });
     WD_CHILD = wd;
     wd.unref();
@@ -1032,6 +1034,8 @@ exit $turn_exit`;
     // A runner-managed seat must never hand itself a baton: the runner is its lifecycle manager,
     // so a handoff spawn would only leak an unmanaged interactive window.
     TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
+    TRANTOR_HEAVY_GATE_WAIT_DIR: HEAVY_WAIT_DIR,
+    PATH: `${join(import.meta.dirname, "heavy-gate-shim")}:${process.env.PATH || ""}`,
     // #6206: the seat's transcript dir — a real CLI ignores it, a drill's fake CLI writes
     // its transcript lines there so the watchdog sees the liveness a real claude shows.
     TRANTOR_TRANSCRIPT_DIR: TRANSCRIPT_DIR };
@@ -1041,16 +1045,12 @@ exit $turn_exit`;
   if (cli.pinned && OC_SEAT_CONFIG) spawnEnv.OPENCODE_CONFIG_CONTENT = OC_SEAT_CONFIG;
   spawnOpts.env = spawnEnv;
   spawnOpts.maxBuffer = 16 * 1024 * 1024;
-  // The timeout signals the shell to snapshot before sweeping, just like the normal box.
-  // Its 30s margin keeps it out of the normal cut path.
-  if (TURN_MAX_MS) { spawnOpts.timeout = (TURN_EXTENSIONS_MAX ? TURN_CEILING_MS : TURN_MAX_MS) + 30000; spawnOpts.killSignal = "SIGTERM"; }
   const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
-  // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
-  // cut, not merely failed. A stall marker (#7752) outranks the box marker: a turn silent for
-  // the whole window is a stall however the sweep found it.
+  // A stall marker (#7752) outranks the box marker: a turn silent for the whole window is a stall
+  // however the sweep found it. Heavy-gate waits move DEADLINEF instead of feeding a Node timeout.
   const boxed = existsSync(CUTF);
   const stallCut = existsSync(STALLF);
-  const cut = !!TURN_MAX_MS && (boxed || stallCut || r.error?.code === "ETIMEDOUT");
+  const cut = !!TURN_MAX_MS && (boxed || stallCut);
   // #7761: how far the watchdog moved the box, one EXTF row per extension. boxMs is the box the
   // turn actually had, so a ceiling cut reads as the ceiling, never as the 20-minute default.
   let extensions = 0;
@@ -1075,8 +1075,8 @@ exit $turn_exit`;
     try { unlinkSync(CUTF); } catch {}
     try { unlinkSync(STALLF); } catch {}
     if (stallCut) log(`\x1b[33mturn STALLED — no bytes on either stream and no transcript advance for ${Math.round(WD_MS / 60000)}m; ended at the stall window, not the ${Math.round(TURN_MAX_MS / 1000)}s box\x1b[0m`);
-    else if (extensions) log(`\x1b[33mturn cut at the ${Math.round(boxMs / 1000)}s box after ${extensions} liveness extension(s) (ceiling ${Math.round(TURN_CEILING_MS / 1000)}s) — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
-    else log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
+    else if (extensions) log(`\x1b[33mturn cut at the ${Math.round(boxMs / 1000)}s box after ${extensions} liveness extension(s) (ceiling ${Math.round(TURN_CEILING_MS / 1000)}s) — CLI and every descendant ended\x1b[0m`);
+    else log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI and every descendant ended\x1b[0m`);
   }
   lastTurnCut = cut;
   lastTurnStalled = cut && stallCut;

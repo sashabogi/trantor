@@ -521,6 +521,11 @@ npm test    # unit + 120+ protocol-level scenario drills + capability-routing, a
             # difficulty-aware model selection, deps validation, virgin-machine doctor, failure drills
 ```
 
+Heavy gates share one machine-wide semaphore: full suites, desktop Vitest, and Cargo test/build.
+The default is `max(1, floor(cores / 4))` slots; set `"heavyGateSlots": 4` in
+`~/.agent-bus/config.json` to override it. Crew runners wire Cargo and package-runner shims into
+each seat. For a heavy command outside a runner, use `node bin/heavy-gate.mjs -- <command> …`.
+
 ## License
 
 [MIT](./LICENSE) © 2026 Sasha Bogojevic · Built with [Claude Code](https://claude.com/claude-code) ·

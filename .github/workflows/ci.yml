@@ -36,4 +36,4 @@ jobs:
         run: pnpm -C desktop run build
 
       - name: Cargo test (desktop/src-tauri)
-        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
+        run: node bin/heavy-gate.mjs -- cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml

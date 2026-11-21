@@ -9,8 +9,9 @@ import { sessionActivityReader } from "../lib/session-liveness.mjs";
 import { hostId } from "../lib/project.mjs";
 import { signedPost } from "../hooks/lib/api.mjs";
 import { refreshTurnLiveness } from "../lib/turnstate.mjs";
+import { readHeavyGateWait } from "../lib/heavy-gate-wait.mjs";
 
-const [stampFile, errFile, windowMsRaw, session, project, hub, transcriptDir = "", workDir = "", stallFile = "", turnStateFile = ""] = process.argv.slice(2);
+const [stampFile, errFile, windowMsRaw, session, project, hub, transcriptDir = "", workDir = "", stallFile = "", turnStateFile = "", heavyWaitDir = ""] = process.argv.slice(2);
 // SAFETY: the 10-minute floor lives in crew-runner.mjs (the default when TRANTOR_TURN_WATCHDOG_MS
 // is unset); this fallback only covers a missing argument. Drills pass tiny windows on purpose.
 const windowMs = Number(windowMsRaw) || 10 * 60 * 1000;
@@ -30,7 +31,7 @@ function newestMtime(dir) {
     let rows = [];
     try { rows = readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of rows) {
-      if (++seen > SCAN_CAP || e.name === ".git" || e.name === "node_modules") continue;
+      if (++seen > SCAN_CAP || e.name === ".git" || e.name === "node_modules" || e.name === ".agent-bus") continue;
       const p = join(d, e.name);
       if (e.isDirectory()) walk(p);
       else { try { best = Math.max(best, statSync(p).mtimeMs); } catch {} }
@@ -98,9 +99,10 @@ function reportLiveness(now, tr) {
 
 // #7752 kill mode: poll liveness; a whole window silent on EVERY channel writes the stall marker
 // (the shell box sweeps on it), reports once, exits; stderr is measured ROLLING (bytes this window).
-// #7761: `armed.box` (step, ceiling, assigners) exists only when a ceiling above the box does; a
-// deadline one poll away on a turn that moved within the window is pushed out one step.
-const box = stallFile && armed.box && Number(armed.box.extensionsMax) > 0 ? armed.box : null;
+// #7761: `armed.box.extensionsMax` enables liveness extensions; heavy-gate waits move the deadline
+// in both modes, and a deadline one poll away on a moving turn is pushed out one step.
+const timeBox = stallFile && armed.box ? armed.box : null;
+const box = timeBox && Number(timeBox.extensionsMax) > 0 ? timeBox : null;
 const mins = (ms) => `${Math.max(1, Math.round(ms / 60000))}m`;
 const secsOrMins = (ms) => (ms >= 60000 ? mins(ms) : `${Math.round(ms / 1000)}s`);
 async function tellExtension(text) {
@@ -117,7 +119,7 @@ async function tellExtension(text) {
 if (stallFile) {
   const poll = Math.max(250, Math.min(windowMs / 4, 10000));
   let lastErrAt = armedAt;
-  let deadline = armedAt + (box ? Number(box.maxMs) : 0);
+  let deadline = armedAt + (timeBox ? Number(timeBox.maxMs) : 0);
   let extensions = 0;
   for (;;) {
     await sleep(poll);
@@ -125,6 +127,11 @@ if (stallFile) {
     if (!s || s.turn !== armed.turn || (armed.runner && s.runner !== armed.runner)) process.exit(0); // turn ended, or a NEWER runner owns the stamp now
     if (!runnerAlive()) process.exit(0);                       // our runner is gone — never speak for it
     const now = Date.now();
+    const heavyWait = readHeavyGateWait(heavyWaitDir, now);
+    if (timeBox) {
+      deadline = armedAt + Number(timeBox.maxMs) + heavyWait.totalMs + extensions * Number(timeBox.extendMs);
+      try { writeFileSync(timeBox.deadlineFile, String(Math.floor(deadline / 1000))); } catch {}
+    }
     const size = errSize();
     if (size > baseErr + 200) { baseErr = size; lastErrAt = now; }   // new bytes: alive
     const freshCut = Math.max(armedAt, now - windowMs - SLACK);
@@ -132,6 +139,7 @@ if (stallFile) {
     const cli = sessionActivity();
     const wk = workDir ? newestMtime(workDir) : 0;
     reportLiveness(now, Math.max(tr, cli));
+    if (heavyWait.waiting) { lastErrAt = now; continue; }
     if (tr > freshCut || cli > freshCut || wk > freshCut || now - lastErrAt < windowMs) {           // producing work: alive
       if (box && extensions < Number(box.extensionsMax) && now + poll + SLACK >= deadline) {
         extensions++;
@@ -168,6 +176,7 @@ for (;;) {
   const cli = sessionActivity();
   const wk = workDir ? newestMtime(workDir) : 0;
   reportLiveness(Date.now(), Math.max(tr, cli));
+  if (readHeavyGateWait(heavyWaitDir).waiting) continue;
   if (errSize() > baseErr + 200 || tr > freshCut || cli > freshCut || wk > freshCut) continue;   // producing work: alive, re-arm
   const mins = Math.round((Date.now() - armedAt) / 60000);
   const orch = `${hostId()}:${project}`;
