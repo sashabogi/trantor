@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { drillEnv } from "../drill-env.mjs";
@@ -15,6 +15,10 @@ function workspace(t, slots) {
   const dir = mkdtempSync(join(OUT, "heavy-gate-test-"));
   const bus = join(dir, "bus");
   mkdirSync(bus, { recursive: true });
+  const pathBin = join(dir, "path-bin");
+  mkdirSync(pathBin);
+  symlinkSync(process.execPath, join(pathBin, "node"));
+  symlinkSync("/usr/bin/dirname", join(pathBin, "dirname"));
   writeFileSync(join(bus, "config.json"), JSON.stringify({ heavyGateSlots: slots }));
   const fixture = join(dir, "fixture.mjs");
   writeFileSync(fixture, `import { writeFileSync } from "node:fs";
@@ -30,7 +34,7 @@ setTimeout(() => {
     }
     rmSync(dir, { recursive: true, force: true });
   });
-  const env = drillEnv({ AGENT_BUS_DIR: bus });
+  const env = drillEnv({ AGENT_BUS_DIR: bus, PATH: pathBin });
   delete env.TRANTOR_HEAVY_GATE_HELD;
   delete env.TRANTOR_HEAVY_GATE_WAIT_DIR;
   return { dir, bus, fixture, env };
@@ -80,12 +84,12 @@ test("two slots run three commands at most two at once and queue the third", asy
   assert.equal(results.filter(result => result.output.includes("waiting for a heavy-gate slot (2 in use)")).length, 1);
 });
 
-test("a SIGKILLed holder releases its kernel lock", async t => {
+test("a SIGKILLed holder's stale slot is reclaimed", async t => {
   const w = workspace(t, 1);
   const holder = gated(w, "holder", 30000);
   await waitFor(join(w.dir, "holder.start"));
-  const holderPid = timing(w.dir, "holder", "start").pid;
-  process.kill(holderPid, "SIGKILL");
+  process.kill(holder.child.pid, "SIGKILL");
+  process.kill(timing(w.dir, "holder", "start").pid, "SIGKILL");
   const stopped = await holder.done;
   assert.notEqual(stopped.code, 0);
   const next = gated(w, "next", 100);
