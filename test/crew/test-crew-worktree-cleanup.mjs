@@ -112,19 +112,33 @@ try {
     const receiptsRoot = join(root, "receipts");
     const repo = makeRepo(root, "repo-align");
     const wt = ensureSeatWorktree({ sourceDir: repo, project: "proj", agent: "codex", home, log: silent });
+    const base = git(["rev-parse", "HEAD"], wt.dir);
     writeFileSync(join(wt.dir, "unharvested.txt"), "keep me\n");
     git(["add", "unharvested.txt"], wt.dir);
     git(["commit", "-q", "-m", "unharvested contract A"], wt.dir);
     const seatSha = git(["rev-parse", "HEAD"], wt.dir);
+    const lines = [];
+    const continued = alignSeatWorktree({ dir: wt.dir, project: "proj", agent: "codex", base, receiptsRoot, log: line => lines.push(line) });
+    ok("an ancestor base continues at the seat's own commit", continued.ok && continued.to === seatSha, JSON.stringify(continued));
+    ok("the no-op alignment keeps the seat branch and its work", git(["rev-parse", "HEAD"], wt.dir) === seatSha
+      && git(["rev-parse", "refs/heads/seat/codex"], wt.dir) === seatSha
+      && existsSync(join(wt.dir, "unharvested.txt")));
+    ok("the no-op alignment is logged", lines.some(line => line.includes("branch already contains base")), lines.join(" | "));
+    writeFileSync(join(wt.dir, "continued.txt"), "next commit\n");
+    git(["add", "continued.txt"], wt.dir);
+    git(["commit", "-q", "-m", "continued after bounce"], wt.dir);
+    const continuedSha = git(["rev-parse", "HEAD"], wt.dir);
+    ok("the seat commits on top of its preserved work", git(["rev-parse", "HEAD^"], wt.dir) === seatSha);
+
     writeFileSync(join(repo, "next-base.txt"), "contract B base\n");
     git(["add", "next-base.txt"], repo);
     git(["commit", "-q", "-m", "contract B base"], repo);
     const nextBase = git(["rev-parse", "HEAD"], repo);
 
     const aligned = alignSeatWorktree({ dir: wt.dir, project: "proj", agent: "codex", base: nextBase, receiptsRoot });
-    ok("alignment refuses and names the unharvested commit", !aligned.ok && aligned.reason.includes(seatSha.slice(0, 7)));
-    ok("the seat branch remains at its unharvested commit", git(["rev-parse", "HEAD"], wt.dir) === seatSha
-      && git(["rev-parse", "refs/heads/seat/codex"], wt.dir) === seatSha);
+    ok("alignment refuses and names the unharvested commit", !aligned.ok && aligned.reason.includes(continuedSha.slice(0, 7)));
+    ok("the seat branch remains at its unharvested commit", git(["rev-parse", "HEAD"], wt.dir) === continuedSha
+      && git(["rev-parse", "refs/heads/seat/codex"], wt.dir) === continuedSha);
     ok("the refused alignment leaves the next base untouched", git(["rev-parse", "HEAD"], wt.dir) !== nextBase);
   }
 
