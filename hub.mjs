@@ -87,13 +87,13 @@ if (process.argv.includes("--smoke")) {
 const reaper = createReaper({
   state: store.state, markDirty: store.markDirty, canon: authRuntime.canon,
   now: events.now, appendCardEvent: events.appendCardEvent, appendEvent: events.appendEvent,
-  appendTaskLog: store.appendTaskLog, sweepPresence: events.sweepPresence, ONLINE_MS, PEER_TTL_MS, PEER_FORGET_MS,
+  appendTaskLog: store.appendTaskLog, copyTask: store.copyTask, sweepPresence: events.sweepPresence, ONLINE_MS, PEER_TTL_MS, PEER_FORGET_MS,
   FOCUS_OFFLINE_MS, FOCUS_IDLE_MS, REAP_GRACE_MS, TODO_STALE_MS, REAP_INTERVAL_MS,
   CONTRACT_ABANDON_MS, CONTRACT_WINDOW_MS,
 });
 const duty = createDuty({
   state: store.state, now: events.now, appendEvent: events.appendEvent,
-  appendTaskLog: store.appendTaskLog, canon: authRuntime.canon,
+  appendTaskLog: store.appendTaskLog, copyTask: store.copyTask, canon: authRuntime.canon,
   markDirty: store.markDirty, pushToStreams: events.pushToStreams, OVERSEER_TICK_MS,
 });
 const overseer = createOverseer({

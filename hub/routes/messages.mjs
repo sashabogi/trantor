@@ -5,7 +5,7 @@ import { setTimeout, setInterval, clearInterval } from "node:timers";
 export async function routeMessages({ req, res, q, P, auth, ctx }) {
   if (await routeContractTransfer({ req, res, q, P, auth, ctx })) return true;
   const {
-    state, body, json, stripNulText, crossProjectGuard, touch, pushToStreams,
+    state, body, json, stripNulText, copyTask, crossProjectGuard, touch, pushToStreams,
     appendEvent, appendCardEvent, appendTaskLog, markDelivered, contractsFor, canUseInboxSession, inboxWindow,
     deliverable, inboxReadable, inboxResponse, filterReadable, canRead, streams, UI,
     AUTH_MODE, persistHealth, duty, now, markDirty, assertNoSecrets, PEER_TTL_MS,
@@ -44,8 +44,9 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       // #7756: the ask primitive's board half — a kind:ask blocks the card it cites (the question is
       // the note, so the board reads why nothing moves); the answer (re = the ask's id) unblocks it.
       const askCardMove = (cardId, to, noteText) => {
-        const t = cardId && state.tasks.find(x => x.id === cardId && x.project === msg.project);
-        if (!t || t.status === to || (to === "doing" && t.status !== "blocked")) return;
+        const found = cardId && state.tasks.find(x => x.id === cardId && x.project === msg.project);
+        if (!found || found.status === to || (to === "doing" && found.status !== "blocked")) return;
+        const t = copyTask(found);
         const from = t.status;
         (t.history ||= []).push({ from, to, by: msg.from, ts: now() });
         if (t.history.length > 40) t.history.splice(0, 10);

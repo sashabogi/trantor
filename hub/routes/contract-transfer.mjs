@@ -32,21 +32,33 @@ export async function routeContractTransfer({ req, res, q, P, auth, ctx }) {
     return ctx.json(res, 409, { error: "replacement has not registered on this project's bus" });
   }
   // IDs and original senders survive the move, so replies settle the assigner's original ledger.
-  for (const message of messages) message.to = to;
+  for (let i = 0; i < messages.length; i++) {
+    const message = ctx.copyMessage(messages[i]);
+    messages[i] = message;
+    message.to = to;
+  }
   const ids = new Set(messages.map(m => m.id));
-  for (const message of ctx.state.messages) {
+  for (const [index, original] of ctx.state.messages.entries()) {
+    let message = original;
     if (message.project !== project) continue;
+    const mutate = () => { message = ctx.copyMessage(message); ctx.state.messages[index] = message; };
     if (message.kind === "ask" && message.from === from && (ids.has(message.re) || message.id === b.heldAsk)) {
+      mutate();
       message.from = to;
       for (const answer of ctx.state.messages) {
         if (answer.re !== message.id || answer.to !== from) continue;
-        answer.to = to;
-        if (!ids.has(answer.id)) { messages.push(answer); ids.add(answer.id); }
+        const answerIndex = ctx.state.messages.indexOf(answer);
+        const copy = ctx.copyMessage(answer);
+        ctx.state.messages[answerIndex] = copy;
+        copy.to = to;
+        if (!ids.has(copy.id)) { messages.push(copy); ids.add(copy.id); }
       }
     }
   }
-  for (const card of ctx.state.tasks) {
+  for (const original of ctx.state.tasks) {
+    let card = original;
     if (card.project !== project || card.assignee !== from || !["todo", "doing", "testing", "blocked", "failed"].includes(card.status)) continue;
+    card = ctx.copyTask(card);
     card.assignee = to;
     card.updated = ctx.now();
     ctx.appendTaskLog(card, signer || from, `swap reassigned ${from} → ${to}`);

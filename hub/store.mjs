@@ -44,6 +44,21 @@ function appendTaskNote(t, b, ts = Date.now()) {
   if (!b || typeof b.note !== "string") return false;
   return appendTaskLog(t, b.by || "", b.note, ts);
 }
+function copyTask(task) {
+  const index = state.tasks.indexOf(task);
+  if (index < 0) return task;
+  const copy = JSON.parse(JSON.stringify(task));
+  state.tasks[index] = copy;
+  return copy;
+}
+function copyMessage(message) {
+  const index = state.messages.indexOf(message);
+  if (index < 0) return message;
+  const copy = { ...message };
+  if (Array.isArray(message.refs)) copy.refs = message.refs.slice();
+  state.messages[index] = copy;
+  return copy;
+}
 // #6452: a card's drill line (build doctrine rule 1) — the `drill` field, a checklist item or a log
 // note starting "Drill:", or the move's own note; that note also counts when it names the gate
 // command it ran (the orchestrator closes with "verified at <sha>" + the gate). The command shapes
@@ -178,9 +193,13 @@ const persistHealth = createPersistHealth({
 const snapshotState = () => {
   const events = state.events.slice();
   const cardEvents = events.filter(e => ["created", "moved", "updated"].includes(e?.type));
-  const snapshot = JSON.parse(JSON.stringify({ ...state, events: [], cardEvents: [] }));
+  const messages = state.messages.slice();
+  const tasks = state.tasks.slice();
+  const snapshot = JSON.parse(JSON.stringify({ ...state, events: [], cardEvents: [], messages: [], tasks: [] }));
   snapshot.events = events;
   snapshot.cardEvents = cardEvents;
+  snapshot.messages = messages;
+  snapshot.tasks = tasks;
   return snapshot;
 };
 // This hub's writer id: saveDelta stamps it into every NOTIFY so we can tell our own change
@@ -189,8 +208,8 @@ const HUB_SRC = `hub-${process.pid}-${randomBytes(4).toString("hex")}`;
 // What the DB currently holds, as of our last successful persist. saveDelta diffs against this and
 // writes ONLY the difference — it never deletes rows it has not seen, so a second writer's rows
 // survive our persist ticks (the old saveSnapshot wholesale delete+rewrite destroyed them).
-let lastPersisted = durableStore ? snapshotState() : null;
 if (runTaskBootMigrations()) dirty = true;
+let lastPersisted = durableStore ? snapshotState() : null;
 const recordPersistFailure = (kind, error) => {
   dirty = true;
   const failure = persistHealth.failed(error);
@@ -272,7 +291,7 @@ setInterval(persist, persistTickMs).unref?.();
   };
 
   return {
-    state, durableStore, persist, persistHealth, markDirty, reload, startChangeSubscription,
+    state, durableStore, persist, persistHealth, markDirty, copyTask, copyMessage, reload, startChangeSubscription,
     HUB_SRC, appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, stripNulText,
   };
 }

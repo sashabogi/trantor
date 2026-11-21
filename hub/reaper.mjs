@@ -1,11 +1,12 @@
 export function createReaper({
-  state, now, canon, appendCardEvent, appendEvent, appendTaskLog, markDirty, sweepPresence,
+  state, now, canon, appendCardEvent, appendEvent, appendTaskLog, copyTask, markDirty, sweepPresence,
   ONLINE_MS, PEER_TTL_MS, PEER_FORGET_MS, FOCUS_OFFLINE_MS, FOCUS_IDLE_MS,
   REAP_GRACE_MS, TODO_STALE_MS, REAP_INTERVAL_MS,
   CONTRACT_ABANDON_MS, CONTRACT_WINDOW_MS,
 }) {
 function closeFocusCard(t, by) {
   if (!t || t.status === "done") return false;
+  t = copyTask(t);
   (t.history ||= []).push({ from: t.status, to: "done", by, ts: now() });
   if (t.history.length > 60) t.history.splice(0, 20);
   appendCardEvent("moved", t, by, t.status, "done");
@@ -17,7 +18,8 @@ function closeFocusCard(t, by) {
 // old single-card `find` left the rest sitting in `doing` forever.
 function closeFocus(session) {
   let closed = false;
-  for (const t of state.tasks) {
+  for (const original of state.tasks) {
+    let t = original;
     if (t.source === "session" && t.assignee === session && t.status !== "done") closed = closeFocusCard(t, session) || closed;
   }
   return closed;
@@ -36,8 +38,9 @@ function linkCommitToFocus(commitCard, by) {
   const open = state.tasks
     .filter(x => x.source === "session" && x.status !== "done" && x.assignee === owner && canon(x.project) === proj)
     .sort((a, b2) => (b2.updated || 0) - (a.updated || 0));
-  const focus = open[0];
-  if (!focus) return false;
+  const found = open[0];
+  if (!found) return false;
+  const focus = copyTask(found);
   focus.commitCard = commitCard.id;                 // the two halves point at each other, so the
   commitCard.focusCard = focus.id;                  // card drawer can walk either way
   (focus.history ||= []).push({ from: focus.status, to: "done", by: owner, ts: now(), note: `closed by commit — ${String(commitCard.title || "").slice(0, 80)}` });
@@ -106,10 +109,12 @@ function reapStaleCards() {
   const idleCut = now() - FOCUS_IDLE_MS;
   const graceCut = now() - REAP_GRACE_MS;
   let changed = false;
-  for (const t of state.tasks) {
+  for (const original of state.tasks) {
+    let t = original;
     if (t.status === "done" || t.status === "stale") continue;
     if (t.status === "testing") continue;
     if (t.status === "todo" && (t.updated || t.ts || 0) < now() - TODO_STALE_MS) {
+      t = copyTask(t);
       const from = t.status;
       const untouchedAt = t.updated || t.ts || 0;
       const agedDays = Math.floor((now() - untouchedAt) / 86400000);
@@ -133,6 +138,7 @@ function reapStaleCards() {
     if (t.status === "doing"                                      // (b) offline-owner work cards → stale
         && (t.updated || t.ts || 0) < graceCut
         && !cardOwnerOnline(t, onCut)) {
+      t = copyTask(t);
       const reapedAt = now();
       (t.history ||= []).push({ from: t.status, to: "stale", by: "reaper", ts: reapedAt });
       if (t.history.length > 60) t.history.splice(0, 20);

@@ -1,4 +1,4 @@
-export function createDuty({ state, now, appendEvent, appendTaskLog, canon, markDirty, pushToStreams, OVERSEER_TICK_MS }) {
+export function createDuty({ state, now, appendEvent, appendTaskLog, copyTask, canon, markDirty, pushToStreams, OVERSEER_TICK_MS }) {
 let DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || state.dutySession || "");
 // Escalate after two minutes so idle recipients can be woken before collaboration stalls.
 const DUTY_UNDELIVERED_MS = Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 2 * 60 * 1000);
@@ -61,8 +61,9 @@ function recordFailure({ project, recipient, kind, detail }) {
     .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0))[0] || null;
   const ts = now();
   if (focus) {
-    appendTaskLog(focus, DUTY_SESSION || "hub:duty", text, ts);
-    focus.updated = ts;
+    const updated = copyTask(focus);
+    appendTaskLog(updated, DUTY_SESSION || "hub:duty", text, ts);
+    updated.updated = ts;
   }
   const meta = state.projectMeta[target] || {};
   meta.dutyFailure = { ts, project: target, recipient: String(recipient || "").slice(0, 120), kind: String(kind || "skipped-nudge"), text, focusCard: focus?.id || null };

@@ -35,7 +35,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, crossProjectGuard, touch, canon, filterReadable,
     appendEvent, appendCardEvent, now, markDirty, stripNulText,
-    appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, linkCommitToFocus,
+    appendTaskLog, appendTaskNote, copyTask, copyMessage, cleanChecklist, cleanDrill, hasDrillLine, linkCommitToFocus,
     derivePhases, PROPOSAL_CAP, propFp, healthOf, REAP_GRACE_MS, subFp,
     prunePeers, canRead, HUB_VERSION, cmpSemver, isCardEvent, fmtAge, hubSend,
     ONLINE_MS, PEER_TTL_MS, AUTH_MODE, scopeAllows,
@@ -75,10 +75,11 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
           if (!agentId) return json(res, 200, { ok: true, ignored: "enrich-without-agentId" });
           const already = state.tasks.find(x => x.source === "cc-subagent" && x.project === proj0 && x._aid === agentId);
           if (already) return json(res, 200, { ok: true, task: already, deduped: true, enriched: true });
-          const cand = state.tasks
+          let cand = state.tasks
             .filter(x => x.source === "cc-subagent" && x.project === proj0 && !x._aid && x.status === "doing" && (atype ? x._atype === atype : true))
             .sort((a, c) => (c.ts || 0) - (a.ts || 0))[0];
           if (cand) {
+            cand = copyTask(cand);
             cand._aid = agentId; if (parent && !cand.parent) cand.parent = parent; cand.updated = ts0;
             appendTaskNote(cand, b, ts0);
             markDirty(); return json(res, 200, { ok: true, task: cand, deduped: true, enriched: true });
@@ -100,9 +101,10 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
         const fp = subFp(b.title);
         // Pair by agent_id first (robust — survives title differences between start & stop); fall back to the
         // title fingerprint for legacy clients / the PreToolUse-only path that predates agent_id.
-        const ex = (agentId && state.tasks.find(x => x.source === "cc-subagent" && x.project === proj0 && x._aid === agentId))
+        let ex = (agentId && state.tasks.find(x => x.source === "cc-subagent" && x.project === proj0 && x._aid === agentId))
           || state.tasks.find(x => x.source === "cc-subagent" && x.project === proj0 && x._fp === fp);
         if (ex) {
+          ex = copyTask(ex);
           if (parent && !ex.parent) ex.parent = parent;
           if (agentId && !ex._aid) ex._aid = agentId;
           if (isStart) {
@@ -146,8 +148,9 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
         }
         const nt = String(b.notificationType || "").slice(0, 40);
         const target = nt === "agent_completed" ? "done" : (nt === "agent_needs_input" ? "blocked" : "doing");
-        const ex = bgId && state.tasks.find(x => x.source === "cc-bg-agent" && x.project === proj0 && x._aid === bgId);
+        let ex = bgId && state.tasks.find(x => x.source === "cc-bg-agent" && x.project === proj0 && x._aid === bgId);
         if (ex) {
+          ex = copyTask(ex);
           const from = ex.status; ex.status = target; ex.ts = ts0; ex.updated = ts0;
           if (b.parent && !ex.parent) ex.parent = String(b.parent).slice(0, 120);
           if (b.title && b.title.length > (ex.title || "").length) ex.title = String(b.title).slice(0, 200);
@@ -199,7 +202,8 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       markDirty(); return json(res, 200, { ok: true, task: t });
     }
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
-      const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
+      const b = await body(req); const found = state.tasks.find(x => x.id === Number(b.id));
+      const t = found && copyTask(found);
       if (!t) return json(res, 404, { error: "no such task" });
       const cpg = crossProjectGuard(auth, P, b);
       if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
@@ -271,7 +275,8 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
     // #5624: toggle ONE acceptance item. Index-addressed against the card's current checklist —
     // a stale index 400s instead of silently toggling the wrong item.
     if (req.method === "POST" && P === "/task/checklist-toggle") {
-      const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
+      const b = await body(req); const found = state.tasks.find(x => x.id === Number(b.id));
+      const t = found && copyTask(found);
       if (!t) return json(res, 404, { error: "no such task" });
       const i = Number(b.index);
       if (!Array.isArray(t.checklist) || !Number.isInteger(i) || i < 0 || i >= t.checklist.length) {
@@ -296,10 +301,11 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
         status: t.status, source: t.source || "", ageMs: now() - (t.updated || t.ts || 0) }));
       if (b.dryRun) return json(res, 200, { ok: true, dryRun: true, count: view.length, candidates: view });
       for (const t of cand) {
-        (t.history ||= []).push({ from: t.status, to: "stale", by: b.by || "sweep", ts: now() });
-        if (t.history.length > 60) t.history.splice(0, 20);
-        appendCardEvent("moved", t, b.by || "sweep", t.status, "stale");
-        t.status = "stale"; t.updated = now(); t._reaped = true;
+        const copy = copyTask(t);
+        (copy.history ||= []).push({ from: copy.status, to: "stale", by: b.by || "sweep", ts: now() });
+        if (copy.history.length > 60) copy.history.splice(0, 20);
+        appendCardEvent("moved", copy, b.by || "sweep", copy.status, "stale");
+        copy.status = "stale"; copy.updated = now(); copy._reaped = true;
       }
       if (cand.length) markDirty();
       return json(res, 200, { ok: true, swept: view.length, candidates: view });
@@ -330,6 +336,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
             history: [{ to: want, by: session, ts: now() }] };
           state.tasks.push(t); appendCardEvent("created", t, session, null, want); markDirty();
         } else if (t.status !== want) {
+          t = copyTask(t);
           (t.history ||= []).push({ from: t.status, to: want, by: session, ts: now() });
           if (t.history.length > 40) t.history.splice(0, 10);
           appendCardEvent("moved", t, session, t.status, want); t.status = want; t.updated = now(); markDirty();
@@ -365,6 +372,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
           || state.tasks.find(x => x.source === "session" && !x.cc && x.assignee === session && canon(x.project) === project && x.status !== "done")
         : state.tasks.find(x => x.source === "session" && x.assignee === session && canon(x.project) === project && x.status !== "done");
       if (t) {
+        t = copyTask(t);
         if (t.title !== title) {            // refocus: re-title in place + record the shift (keeps the trail)
           (t.history ||= []).push({ from: t.status, to: t.status, by: session, ts: now(), note: title.slice(0, 90) });
           if (t.history.length > 60) t.history.splice(0, 20);
@@ -490,13 +498,13 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       const from = String(b.from || "").slice(0, 80), to = String(b.to || "").slice(0, 80);
       if (!from || !to || from === to) return json(res, 400, { error: "distinct from+to required" });
       let cards = 0, events = 0, peers = 0, msgs = 0;
-      for (const t of state.tasks) if (t.project === from) { t.project = to; cards++; }
+      for (const t of state.tasks) if (t.project === from) { const copy = copyTask(t); copy.project = to; cards++; }
       for (let i = 0; i < state.events.length; i++) {
         const e = state.events[i];
         if (e.project === from) { state.events[i] = { ...e, project: to }; events++; }
       }
       for (const v of Object.values(state.peers)) if (v.project === from) { v.project = to; peers++; }
-      for (const m of state.messages) if ((m.project || "") === from) { m.project = to; msgs++; }
+      for (const m of state.messages) if ((m.project || "") === from) { const copy = copyMessage(m); copy.project = to; msgs++; }
       if (state.projectMeta[from]) {
         if (!state.projectMeta[to]) state.projectMeta[to] = state.projectMeta[from];
         else if (!state.projectMeta[to].brief && state.projectMeta[from].brief) state.projectMeta[to].brief = state.projectMeta[from].brief;
