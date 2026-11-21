@@ -509,6 +509,21 @@ let parkAnnounced = false;
 // #7914: the park this seat is currently sitting in, or null. Read by the poll loop, which ends a
 // bounded one the moment somebody sends a direct message, and cleared by any turn that lands.
 let parkState = null;
+// #13949: unpark already told the room the episode ended, so the next reportHealthy must not echo
+// a second "recovered" for the same landing. Consumed on every reportHealthy call, used or not.
+let parkRecovered = false;
+// #13949: is this park call the START of an episode or a retry inside a live one? A window-lift
+// retry that parks AGAIN for the same reason never left the episode, and the room already holds
+// its one notice — re-sending it every window is how one park became 10 identical DMs (#13949).
+// Read BEFORE parkSeat, which overwrites parkState.
+const sameParkEpisode = (reason) => !!(parkState && parkState.reason === reason);
+// #13949: a park notice owes its reader the END of the wait, not only its cause — a bounded park
+// names the resume clock (and the shortcut), a wall says it holds. Read after parkSeat sets it.
+function parkLifts() {
+  return parkState?.bounded
+    ? ` · resumes ${new Date(parkState.until).toLocaleTimeString()} (a direct message ends it now)`
+    : " — not retrying";
+}
 // #13474: uncommitted work in the seat worktree is saved on the seat branch when a turn is cut or
 // the seat parks, so the next seat starts from it. One log line, only when something was saved.
 function saveWipLogged(why) {
@@ -518,6 +533,7 @@ function saveWipLogged(why) {
 }
 
 async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "", announce = true } = {}) {
+  const renewed = sameParkEpisode(reason);   // #13949: a retry re-parking inside a live episode
   saveWipLogged(`parked: ${reason}`);
   // A seat that went QUIET printed no wall message to parse (#6131), so its own balance row is the
   // only place the reset time exists. Output first when there is any: it is this turn's evidence.
@@ -547,8 +563,9 @@ async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "", ann
   }
   log(`\x1b[31mparked (${reason})${when ? ` — retrying after ${when}` : " — no reset time in the output; waiting for a restart"}${evidence ? `\n  evidence: ${evidence}` : ""}\x1b[0m`);
   // The alarm for "the bus is stuck" cannot itself be a bus message, so a park also rings a bell
-  // the operator can hear out of band, once per park.
-  notifyOperator(`Trantor: ${SESSION} PARKED (${reason})`,
+  // the operator can hear out of band — once per EPISODE (#13949): a window-lift retry that
+  // re-parks is the same silence continuing, not a new one starting.
+  if (!renewed) notifyOperator(`Trantor: ${SESSION} PARKED (${reason})`,
     `${undelivered} message(s) held${when ? ` — retrying after ${when}` : ` — needs \`trantor up ${AGENT}\``}`);
   // #7749: parked is a first-class phase — the file and the peer row both say so, so an
   // orchestrator stops confusing a quota-held seat with a working or a dead one.
@@ -562,12 +579,21 @@ async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "", ann
 // #7914: the park is over — because a direct message asked for a turn now, or because one landed.
 // The record goes with it, and the announce latch reopens so the NEXT park is heard too (a latch
 // that never reopens turns a repeating park into one message and then silence).
-function unpark(why) {
+// #13949: the END is an event too, once — one "recovered" each to the room and the orchestrator.
+async function unpark(why) {
   if (!parkState) return;
-  log(`\x1b[33mpark ended (${parkState.reason}) — ${why}\x1b[0m`);
+  const { reason, ts } = parkState;
+  log(`\x1b[33mpark ended (${reason}) — ${why}\x1b[0m`);
   parkState = null;
   parkAnnounced = false;
   try { unlinkSync(PARKF); } catch {}
+  const durMs = Date.now() - (Number(ts) || Date.now());
+  const dur = durMs >= 120_000 ? `${Math.round(durMs / 60_000)}m` : `${Math.max(1, Math.round(durMs / 1000))}s`;
+  const text = `✅ ${SESSION} recovered — ${reason} park over after ${dur} (${why})`;
+  await api("/send", { from: SESSION, to: "all", text, project: PROJ, kind: "status" }).catch(() => {});
+  const orch = `${hostId()}:${PROJ}`;
+  if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
+  parkRecovered = true;
 }
 
 /**
@@ -672,13 +698,17 @@ async function busActivitySince(seq) {
 }
 
 async function reportHealthy() {
+  const saidParkRecovered = parkRecovered;
+  parkRecovered = false;             // #13949: consumed whether used or not — never a stale skip
   if (consecFails === 0) return;        // already healthy — don't spam
   consecFails = 0;
   // Recovery is a change too, so the next failure is news again — a park included.
   announced = "";
   parkAnnounced = false;
   await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
-  await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ, kind: "status" }).catch(() => {});
+  // #13949: a landing that ended a park already said "recovered" once, with the reason and the
+  // duration — the ladder's echo would be the second recovery message for one event.
+  if (!saidParkRecovered) await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ, kind: "status" }).catch(() => {});
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
 
@@ -1739,12 +1769,12 @@ async function resolveWakeCard(messages, { session }) {
     // #10197: no-delivery owes the old contract, but its retry delay must not batch away
     // fresh contracts. Only actual CLI failures impose backoff on a new wake.
     if (noDeliveryRetry) {
-      unpark("new wake after no-delivery");
+      await unpark("new wake after no-delivery");
       retryAt = 0; deliveryFails = 0; noDeliveryRetry = false;
     }
     if (parkState && directWake.length) {
       if (isBoundedPark(parkState.reason)) {
-        unpark(`direct message from ${directWake[0].from || "?"}`);
+        await unpark(`direct message from ${directWake[0].from || "?"}`);
         retryAt = 0; deliveryFails = 0; cutChain = [];
       } else {
         log(`\x1b[33mparked (${parkState.reason}) — a direct message cannot clear this park; it holds until the reset or \`trantor up ${AGENT}\`\x1b[0m`);
@@ -2049,8 +2079,9 @@ async function resolveWakeCard(messages, { session }) {
       const text = `⛔ permission rejected: ${lastPermissionReject.tool} on #${sessionCard} · ${lastPermissionReject.evidence} · card moved to blocked; wake stays owed`;
       savePending(pendingWake, pendingBcast);
       await api("/task/update", { id: sessionCard, status: "blocked", note: text, by: SESSION }).catch(() => {});
+      const renewed = sameParkEpisode("permission-rejected");   // #13949: once per episode
       retryAt = await parkSeat("permission-rejected", pendingWake.length, 0, { announce: false });
-      await notifyAssigners(assigners, text);
+      if (!renewed) await notifyAssigners(assigners, text);
       lastTurnAt = Date.now();
       return;
     }
@@ -2084,6 +2115,7 @@ async function resolveWakeCard(messages, { session }) {
       const stallWhy = reason === "stalled" ? ` · probable cause: ${stallCause({ text: lastErrText })}` : "";
       const evidence = cutChain.length >= CUT_CHAIN_PARK_MIN ? cutChainEvidence(cutChain) : "";
       if (PARKING_REASONS.has(reason) || deliveryFails >= 2) {
+        const renewed = sameParkEpisode(parkReason);   // #13949: a window-lift retry re-parking
         retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset, { evidence });
         // RUNNER_PARK_MAX_MS is set only by `trantor duty up` (launchd keepalive): past the ceiling,
         // exit so the supervisor restarts clean. Unsupervised seats stay parked; exiting would kill them.
@@ -2098,15 +2130,16 @@ async function resolveWakeCard(messages, { session }) {
         }
         // #7914: what the park is, when it lifts, and the evidence it rests on — in the message
         // that reaches the one who is actually blocked, not only in the card log they never read.
-        const lifts = parkState?.bounded
-          ? ` · resumes ${new Date(parkState.until).toLocaleTimeString()} (a direct message ends it now)`
-          : " — not retrying";
-        // The lift time goes BEFORE the evidence: the transport caps the line, and what the reader
-        // has to act on must never be the part that gets eaten.
-        await notifyAssigners(assigners,
-          reason === "stalled"
-            ? `⛔ your contract is PARKED on ${SESSION} (stalled: two turns silent for the whole watchdog window)${lifts}${stallWhy} · asked: "${asked}"`
-            : `⛔ your contract is PARKED on ${SESSION} (${parkReason})${lifts}${evidence ? ` · ${evidence}` : ""} · asked: "${asked}"`);
+        // #13949: once per episode — the retries inside it are state, not events.
+        const lifts = parkLifts();
+        if (!renewed) {
+          // The lift time goes BEFORE the evidence: the transport caps the line, and what the reader
+          // has to act on must never be the part that gets eaten.
+          await notifyAssigners(assigners,
+            reason === "stalled"
+              ? `⛔ your contract is PARKED on ${SESSION} (stalled: two turns silent for the whole watchdog window)${lifts}${stallWhy} · asked: "${asked}"`
+              : `⛔ your contract is PARKED on ${SESSION} (${parkReason})${lifts}${evidence ? ` · ${evidence}` : ""} · asked: "${asked}"`);
+        }
         lastTurnAt = Date.now();
         return;
       }
@@ -2137,9 +2170,12 @@ async function resolveWakeCard(messages, { session }) {
       savePending(pendingWake, pendingBcast);
       const still = lastNoDeliveryStatus || "unresolved";
       if (deliveryFails >= 2) {
+        // #13949: every window-lift retry inside the episode re-parks HERE. The one notice went
+        // out when the episode started; these retries are state, never another DM.
+        const renewed = sameParkEpisode("no-delivery");
         retryAt = await parkSeat("no-delivery", pendingWake.length);
-        await notifyAssigners(assigners,
-          `⛔ your contract is PARKED on ${SESSION} (no-delivery: two exit-0 turns with no commit and card #${sessionCard} unmoved) · asked: "${asked}"`);
+        if (!renewed) await notifyAssigners(assigners,
+          `⛔ your contract is PARKED on ${SESSION} (no-delivery: two exit-0 turns with no commit and card #${sessionCard} unmoved)${parkLifts()} · asked: "${asked}"`);
         lastTurnAt = Date.now();
         return;
       }
@@ -2155,9 +2191,10 @@ async function resolveWakeCard(messages, { session }) {
       deliveryFails++;
       savePending(pendingWake, pendingBcast);
       if (deliveryFails >= 2) {
+        const renewed = sameParkEpisode("empty-turn");   // #13949: retries inside the episode stay quiet
         retryAt = await parkSeat("empty-turn", pendingWake.length);
-        await notifyAssigners(assigners,
-          `⛔ your contract is PARKED on ${SESSION} (empty-turn: two exit-0 turns with no worktree change, substantive output or bus activity) · asked: "${asked}"`);
+        if (!renewed) await notifyAssigners(assigners,
+          `⛔ your contract is PARKED on ${SESSION} (empty-turn: two exit-0 turns with no worktree change, substantive output or bus activity)${parkLifts()} · asked: "${asked}"`);
         lastTurnAt = Date.now();
         return;
       }
@@ -2168,7 +2205,7 @@ async function resolveWakeCard(messages, { session }) {
         `🫥 EMPTY turn on ${SESSION} (exit 0, ${secs}s — no worktree change, no substantive output, no bus activity) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
-      unpark("a turn landed");   // #7914: the seat is working again — the park record must not outlive it
+      await unpark("a turn landed");   // #7914: the seat is working again — the park record must not outlive it
       // #7778: reconcile BEFORE the write below so the persisted snapshot carries the seen-set.
       await reconcileSessionReads(cursor);
       savePending([], []);
