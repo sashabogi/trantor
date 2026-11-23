@@ -5,7 +5,7 @@ import { codexRelayFlags } from "../../bin/crew/codex-relay.mjs";
 
 const runner = readFileSync(new URL("../../bin/crew-runner.mjs", import.meta.url), "utf8");
 const templates = [...runner.matchAll(/`(codex exec[^`]+)`/g)].map(match => match[1]);
-assert.equal(templates.length, 2);
+assert.equal(templates.length, 3);
 assert.match(runner, /codexRelayFlags\(\{ persona: PERSONA, session: SESSION, project: PROJ, hub: HUB \}\)/);
 let checks = 0;
 for (const persona of ["codex", "codex-4", "codex-5", "reviewer-2"]) {
