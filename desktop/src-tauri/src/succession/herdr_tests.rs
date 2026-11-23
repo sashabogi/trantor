@@ -252,6 +252,17 @@ fn process_info_prefers_the_foreground_process_group_id() {
     assert_eq!(foreground_pid_from_process_info(&raw), Some(23311));
 }
 
+#[test]
+fn process_info_distinguishes_a_readable_bare_pane_from_a_restored_ghost() {
+    let bare_shell = serde_json::json!({
+        "result": { "process_info": { "shell_pid": 80368, "foreground_processes": [] } }
+    }).to_string();
+    assert!(pane_process_info_readable(&bare_shell));
+    for ghost in ["", "not json", r#"{"error":"pane_not_found"}"#, r#"{"result":{}}"#] {
+        assert!(!pane_process_info_readable(ghost), "{ghost}");
+    }
+}
+
 // #6668: the pane's claude had exited and the foreground process group WAS the pane's zsh.
 // The shell is never the process to end, by shell_pid or by name; a shell-only foreground answers None.
 #[test]

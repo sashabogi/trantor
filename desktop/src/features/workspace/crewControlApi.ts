@@ -38,6 +38,9 @@ export function startFailureReason(seat: string, reason: string | undefined, why
     return seat === "kimi" ? "kimi isn't signed in: run kimi login" : `${seat} isn't signed in: check its provider login`;
   }
   if (why?.state === "dead-quota") return `${seat} has no usable provider quota: swap it or restore its quota`;
+  if (/crew incomplete|failed; see stderr/i.test(reason ?? "") && ["no-runner", "stopped", "dead-crash"].includes(why?.state ?? "")) {
+    return `${seat} did not start: no runner is running; see app-trace.log for the command and error`;
+  }
   return reason?.trim() || `${seat} did not start and the CLI gave no reason`;
 }
 export function balanceFor(agent: AgentStatus, balances: Balance[]) {

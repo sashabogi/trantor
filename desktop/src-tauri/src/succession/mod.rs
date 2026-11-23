@@ -62,6 +62,13 @@ pub(crate) fn pid_field(v: &serde_json::Value, key: &str) -> Option<u32> {
         .filter(|p| *p > 0)
 }
 
+pub(crate) fn pane_process_info_readable(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw.trim())
+        .ok()
+        .and_then(|value| value.get("result")?.get("process_info").cloned())
+        .is_some_and(|info| info.is_object())
+}
+
 /// The pid the graceful end targets, from herdr's `pane process-info` reply (parity with
 /// bin/baton-pane.mjs foregroundPid). The shell is never a candidate (#6668): with only the shell
 /// in the foreground there is nothing to end, and the answer is None.

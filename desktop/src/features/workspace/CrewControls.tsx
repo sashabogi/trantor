@@ -123,9 +123,8 @@ export function CrewControls({ project, targets, selected, onSelect, onChanged, 
   const names = targets.filter(t => !t.isOrchestrator).map(t => t.agent);
   const extra: PaneTarget[] = added.filter(name => !names.includes(name)).map(name => ({ key: `${name}:${project}`, label: name,
     agent: name, brand: name, session: `${name}:${project}`, online: false, isOrchestrator: false }));
-  const now = Date.now();
-  const tabTargets = targets.filter(t => t.isOrchestrator || !isStaleOffline(t, now));
-  const offlineTargets = targets.filter(t => !t.isOrchestrator && isStaleOffline(t, now));
+  const tabTargets = targets.filter(t => t.isOrchestrator || !isStaleOffline(t));
+  const offlineTargets = targets.filter(t => !t.isOrchestrator && isStaleOffline(t));
   return <>
     <div className="flex min-w-0 max-w-full items-center gap-1">
       <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" aria-label="Seat tabs">

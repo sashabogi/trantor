@@ -3,7 +3,6 @@
 // Two identities on every row must not be conflated (the 0.3.99 regression did): `agent` is the
 // herdr pane name surfaceFor resolves the terminal by; `brand` is the tab's mark (#5890).
 import type { Peer } from "../../shared/api/client";
-import { ONLINE_MS } from "../../shared/presence";
 import type { HerdrSeat } from "./herdr";
 
 export type PaneTarget = {
@@ -23,10 +22,7 @@ export type PaneTarget = {
 
 export const seatName = (session: string) => session.split(":")[0];
 export const liveGridSeats = (seats: Peer[]): Peer[] => seats.filter(seat => !!seat.online);
-export const OFFLINE_GRACE_MS = 60_000;
-export const OFFLINE_FOLD_MS = ONLINE_MS + OFFLINE_GRACE_MS;
-export const isStaleOffline = (target: Pick<PaneTarget, "online" | "lastSeen">, now = Date.now()) =>
-  !target.online && now - (target.lastSeen ?? 0) > OFFLINE_FOLD_MS;
+export const isStaleOffline = (target: Pick<PaneTarget, "online">) => !target.online;
 
 // #6068: a bus session of the project is not automatically a seat. The CLI's genesis identity
 // (kind "tool") exists to post the brief and must not render as a seat you could open a

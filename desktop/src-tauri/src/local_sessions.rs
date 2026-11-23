@@ -205,13 +205,13 @@ pub(crate) fn pane_in_flight(
     sid: &str,
     now_ms: u64,
     status: Option<&str>,
+    process_info: &str,
 ) -> Option<u32> {
     if is_busy_status(status) {
         return None;
     }
     let tdir = project_dir(project).map(|d| transcript_dir_for_project_dir(&d))?;
-    let info = shell_stdout("herdr", &["pane", "process-info", "--pane", pane]);
-    let pid = foreground_pid_from_process_info(&info)?;
+    let pid = foreground_pid_from_process_info(process_info)?;
     let etime = shell_stdout("/bin/ps", &["-p", &pid.to_string(), "-o", "etime="]);
     pane_in_flight_with(
         &tdir,
@@ -219,7 +219,7 @@ pub(crate) fn pane_in_flight(
         sid,
         now_ms,
         status,
-        &info,
+        process_info,
         &etime,
         &|sid, since| {
             trantor_cli::command()
@@ -329,10 +329,10 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
     out.sort();
     out.dedup();
 
-    // herdr truth: every orch pane herdr can still resolve an agent for, regardless of where the
-    // pane's process actually lives. One agent.get per pane carries status AND session id; the
-    // #10007 count rides it (cheap skips first), memoized per pane on the transcript stamp and
-    // skipped entirely for working panes (#10048).
+    // herdr truth: a tracked orch pane counts only while process-info can read it; a restored
+    // layout row whose agent.get still says idle is a ghost, not a running session. One agent.get
+    // per readable pane carries status AND session id; the #10007 count rides it (cheap skips
+    // first), memoized per pane on the transcript stamp and skipped entirely for working panes.
     let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let orch_rows =
         std::fs::read_to_string(desktop_bus_dir().join("orch-sessions.txt")).unwrap_or_default();
@@ -346,12 +346,16 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
     for (project, pane) in orch_projects_from_rows(&rows) {
         if !herdr_pane_alive(&pane) { continue; }
         live_panes.push(pane.clone());
+        let process_info = shell_stdout("herdr", &["pane", "process-info", "--pane", &pane]);
+        if !pane_process_info_readable(&process_info) {
+            continue;
+        }
         let (status, sid) = herdr::agent_status_and_session(&pane);
         let sid = sid.or_else(|| orch_session_id_from_rows(&orch_rows, &project));
         if let (Some(sid), Some(status)) = (sid, status) {
             // herdr said working: the row is working either way, so the pane pays no
             // transcript-cache check and no `trantor agents` spawn (#10048).
-            if let Some(n) = pane_in_flight(&project, &pane, &sid, now_ms, Some(&status)) {
+            if let Some(n) = pane_in_flight(&project, &pane, &sid, now_ms, Some(&status), &process_info) {
                 in_flight_of.insert(project.clone(), n);
             }
             herdr_open.push((project, status));

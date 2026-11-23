@@ -4,8 +4,9 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    desktop_bus_dir, herdr, kickoff_after_reopen, kickoff_outcome_label, orch_pane_from_rows,
-    project_dir, run_command_output, terminal_path, KickoffPhase, KickoffReport,
+    desktop_bus_dir, kickoff_after_reopen, kickoff_outcome_label, orch_pane_from_rows,
+    pane_process_info_readable, project_dir, run_command_output, terminal_path, KickoffPhase,
+    KickoffReport,
 };
 
 /// The wake chain's progress event (#6201) — the mirror of lib.rs's handoff-progress (#6081).
@@ -176,6 +177,13 @@ fn pane_agent_state(raw: &str, pane: &str) -> PaneAgentState {
             _ => PaneAgentState::NoAgent,
         })
         .unwrap_or(PaneAgentState::NoAgent)
+}
+
+fn live_pane_agent_state(agents: &str, process_info: &str, pane: &str) -> PaneAgentState {
+    if !pane_process_info_readable(process_info) {
+        return PaneAgentState::NoAgent;
+    }
+    pane_agent_state(agents, pane)
 }
 
 fn pane_project_dir(raw: &str, pane: &str, expected: &Path) -> Result<(), String> {
@@ -383,10 +391,22 @@ async fn project_wake_run(
         let (pane_rows, _) = run_command_output(panes, "herdr pane list").await?;
         pane_project_dir(&pane_rows, &pane, &dir)?;
 
+        let mut process = crate::identity_env::async_command("herdr");
+        process
+            .args(["pane", "process-info", "--pane", &pane])
+            .env("PATH", terminal_path());
+        let process_info = match run_command_output(process, "herdr pane process-info").await {
+            Ok((raw, _)) => raw,
+            Err(error) => {
+                wake_trace(&project, &format!("pane {pane} is a restored ghost: {error}; reopening"));
+                String::new()
+            }
+        };
+
         let mut list = crate::identity_env::async_command("herdr");
         list.args(["agent", "list"]).env("PATH", terminal_path());
         let (agents, _) = run_command_output(list, "herdr agent list").await?;
-        let state = pane_agent_state(&agents, &pane);
+        let state = live_pane_agent_state(&agents, &process_info, &pane);
         wake_trace(&project, &format!("pane {pane} agent state {}", match state {
             PaneAgentState::Idle => "idle",
             PaneAgentState::Working => "working",
@@ -582,6 +602,16 @@ mod tests {
         // agents a wake acts on; done or absent is nobody.
         assert!(matches!(pane_agent_state(rows, "pane-live"), PaneAgentState::Idle));
         assert!(matches!(pane_agent_state(rows, "pane-other"), PaneAgentState::NoAgent));
+    }
+
+    #[test]
+    fn an_idle_agent_row_is_live_only_when_process_info_can_read_the_pane() {
+        let agents = r#"{"result":{"agents":[{"pane_id":"pane-live","agent_status":"idle"}]}}"#;
+        let readable = r#"{"result":{"process_info":{"shell_pid":42,"foreground_processes":[]}}}"#;
+        assert!(matches!(live_pane_agent_state(agents, readable, "pane-live"), PaneAgentState::Idle));
+        for ghost in ["", "not json", r#"{"error":"pane_not_found"}"#] {
+            assert!(matches!(live_pane_agent_state(agents, ghost, "pane-live"), PaneAgentState::NoAgent));
+        }
     }
 
     #[test]

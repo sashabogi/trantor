@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CrewControls, SEAT_WHY_POLL_MS } from "./CrewControls";
-import { OFFLINE_FOLD_MS, type PaneTarget } from "./paneTargets";
+import { type PaneTarget } from "./paneTargets";
 import { availableAgent, quotaLabel, createCrewApi, startFailureReason, type CrewApi, type CrewCatalog, type CrewResult, type SeatWhy } from "./crewControlApi";
 
 // SAFETY: React reads this test-only flag from globalThis.
@@ -14,7 +14,7 @@ const catalog: CrewCatalog = {
   balances: [{ provider: "zai", ok: true, remainingPct: 60 }, { provider: "codex", ok: true, remainingPct: 80 }, { provider: "deepseek", ok: true, remaining: 0 }],
 };
 const target = (name: string): PaneTarget => ({ key: name, agent: name, label: name, brand: name, session: `${name}:trantor`, online: true, isOrchestrator: false });
-const staleTarget = (name: string): PaneTarget => ({ ...target(name), online: false, lastSeen: Date.now() - OFFLINE_FOLD_MS - 1 });
+const staleTarget = (name: string): PaneTarget => ({ ...target(name), online: false });
 const state = (name: string): SeatWhy => ({ state: name, why: "runner alive; PARKED (exhausted) holding 1 message", advice: "parked until 12:00 (in 2h) — it resumes itself" });
 function fakeApi(initial = "live"): CrewApi {
   return { catalog: vi.fn(async () => catalog), why: vi.fn(async () => state(initial)),
@@ -126,6 +126,7 @@ describe("Workspace crew controls", () => {
   });
   it("keeps non-auth CLI reasons and supplies one when the CLI is silent", () => {
     expect(startFailureReason("glm", "herdr workspace is unavailable", state("no-runner"))).toBe("herdr workspace is unavailable");
+    expect(startFailureReason("kimi", "✗✗ CREW INCOMPLETE — these agents are NOT on the bus", state("stopped"))).toBe("kimi did not start: no runner is running; see app-trace.log for the command and error");
     expect(startFailureReason("glm", "", state("no-runner"))).toBe("glm did not start and the CLI gave no reason");
   });
   it("offers a seat when the crew is empty without starting it until Start is clicked", async () => {
@@ -191,11 +192,12 @@ describe("Workspace crew controls", () => {
     expect(changed).toHaveBeenCalledOnce();
   });
 
-  it("keeps a recently offline seat as a tab during the grace window", async () => {
-    const recent = { ...target("kimi-9"), online: false, lastSeen: Date.now() - OFFLINE_FOLD_MS + 10_000 };
+  it("folds a recently offline seat into the offline menu on the current poll", async () => {
+    const recent = { ...target("kimi-9"), online: false, lastSeen: Date.now() };
     await act(async () => root.render(<CrewControls project="trantor" targets={[recent]} onSelect={vi.fn()} onChanged={vi.fn()} api={fakeApi()} />));
-    expect(host.querySelector('[aria-label="Seat tabs"]')?.textContent).toContain("kimi-9");
-    expect(host.querySelector('[aria-label="Seat tabs"]')?.textContent).not.toContain("offline");
+    const strip = host.querySelector('[aria-label="Seat tabs"]');
+    expect(strip?.textContent).not.toContain("kimi-9");
+    expect(strip?.textContent).toContain("+1 offline");
   });
 
   it.each(["live", "parked", "no-runner"])("renders a %s dot on the tab", async name => {
