@@ -1,38 +1,42 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HubClient } from "./api/client";
 import { refreshTasks, subscribeTasks } from "./tasks";
-import { invoke } from "@tauri-apps/api/core";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
+afterEach(() => { vi.useRealTimers(); });
 
-afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
+function clientWithTransport() {
+  const calls: { method: string; path: string }[] = [];
+  const client = new HubClient("http://hub", async ({ method, path }) => {
+    calls.push({ method, path });
+    return { status: 200, body: JSON.stringify({ tasks: [] }) };
+  });
+  return { client, calls };
+}
 
 describe("slim task reads", () => {
   it("tasks() requests the slim projection", async () => {
-    vi.mocked(invoke).mockResolvedValue({ status: 200, body: JSON.stringify({ tasks: [] }) });
-    await new HubClient("http://hub").tasks("trantor");
-    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ path: "/tasks?project=trantor&fields=slim" });
+    const { client, calls } = clientWithTransport();
+    await client.tasks("trantor");
+    expect(calls[0]).toEqual({ method: "GET", path: "/tasks?project=trantor&fields=slim" });
   });
 
   it("full card hydration uses card=<id> on a slim request", async () => {
-    vi.mocked(invoke).mockResolvedValue({ status: 200, body: JSON.stringify({ tasks: [] }) });
-    await new HubClient("http://hub").cards([42]);
-    expect(vi.mocked(invoke).mock.calls[0][1]).toMatchObject({ path: "/tasks?fields=slim&card=42" });
+    const { client, calls } = clientWithTransport();
+    await client.cards([42]);
+    expect(calls[0]).toEqual({ method: "GET", path: "/tasks?fields=slim&card=42" });
   });
 
   it("two subscribers share one request per poll tick", async () => {
     vi.useFakeTimers();
-    vi.mocked(invoke).mockResolvedValue({ status: 200, body: JSON.stringify({ tasks: [] }) });
-    const client = new HubClient("http://hub");
+    const { client, calls } = clientWithTransport();
     const stopA = subscribeTasks(client, "trantor", () => {});
     const stopB = subscribeTasks(client, "trantor", () => {});
     await Promise.resolve(); await Promise.resolve();
-    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(12_000);
-    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(calls).toHaveLength(2);
     stopA(); stopB();
     await refreshTasks(client, "trantor");
-    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(calls).toHaveLength(3);
   });
 });

@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 export type Scope = { project: string; role: "read" | "write" | "owner" };
+type HubRequest = (args: { base: string; method: string; path: string; body: string | null }) => Promise<{ status: number; body: string }>;
 
 export type Card = {
   id: number; project: string; title: string; status: string;
@@ -149,7 +150,7 @@ export type PairInviteResponse = {
 };
 
 export class HubClient {
-  constructor(readonly baseUrl: string) {}
+  constructor(readonly baseUrl: string, private readonly transport: HubRequest = args => invoke("hub_request", args)) {}
 
   /** path MUST include the query string: it is part of what gets signed. */
   // Goes through RUST, not fetch(): macOS App Transport Security blocks cleartext HTTP from the
@@ -159,7 +160,7 @@ export class HubClient {
     const body = payload === undefined ? undefined : JSON.stringify(payload);
     let res: { status: number; body: string };
     try {
-      res = await invoke<{ status: number; body: string }>("hub_request", {
+      res = await this.transport({
         base: this.baseUrl, method, path, body: body ?? null,
       });
     } catch (e) {
@@ -184,7 +185,7 @@ export class HubClient {
   }
   /** Full rows for cards currently opened in a detail view. */
   cards(ids: number[]) {
-    if (!ids.length) return Promise.resolve([] as Card[]);
+    if (!ids.length) return Promise.resolve<Card[]>([]);
     const q = new URLSearchParams({ fields: "slim", card: ids.join(",") });
     return this.request<{ tasks: Card[] }>("GET", `/tasks?${q.toString()}`).then(r => r.tasks ?? []);
   }
