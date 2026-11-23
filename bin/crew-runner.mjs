@@ -7,6 +7,7 @@ import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
 import { machineLabel } from "../lib/machine-label.mjs";
+import { healthPayload, defaultOs, HEALTH_BEAT_MS } from "../lib/machine-health.mjs";
 import { resolveSecrets, shadowEnv, withSecretExports } from "../lib/secrets.mjs";
 import { seatBuildCacheEnv } from "../lib/seat-cache.mjs";
 import { runnerPersona } from "../lib/persona.mjs";
@@ -1659,6 +1660,17 @@ async function resolveWakeCard(messages, { session }) {
   }
   if (PULSE_MS) log(`pulse armed — mission re-read every ${Math.round(PULSE_MS / 1000)}s (${MISSION_FILE})`);
   log(`parked — long-polling the bus as ${SESSION} (free; this poll is also the heartbeat)`);
+
+  // #13920: machine health heartbeat — opt-in via config.json healthHeartbeat:true (plus a valid
+  // machineLabel, read at boot). One small signed POST every HEALTH_BEAT_MS; failures stay silent
+  // by the monitoring doctrine (state not event — a machine that stops beating reads stale on the
+  // hub, which IS the honest "unreachable" signal, not an error to alert on).
+  if (machineConfig.healthHeartbeat === true && MACHINE_LABEL) {
+    const beat = () => api("/machines/health", { ...healthPayload(defaultOs, MACHINE_LABEL), project: PROJ }).catch(() => {});
+    beat();
+    setInterval(beat, HEALTH_BEAT_MS).unref?.();
+    log(`machine health heartbeat armed as ${MACHINE_LABEL} every ${Math.round(HEALTH_BEAT_MS / 1000)}s`);
+  }
 
   while (true) {
     restartForRelease();
