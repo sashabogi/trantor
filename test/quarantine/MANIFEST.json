@@ -1,19 +1,4 @@
 {
   "contract": "Timing drills whose red is REPORTED but does not fail the gate (#6447). Each entry carries the card tracking its fix and a one-week expiry: an expired entry un-quarantines — its red gates again, and green gets flagged for promotion back into the gate.",
-  "entries": [
-    {
-      "suite": "quarantine/crew/test-crew-activity.mjs",
-      "card": 6588,
-      "reason": "Asserts the crew-runner's status SEQUENCE (crew member booting | working · kickoff | idle) through a real spawned runner turn — the ordering races real process scheduling and goes red on CI runners and loaded machines, green elsewhere. #7227: the move into quarantine/crew/ left the import at ../drill-env.mjs, one level too shallow, so both drills crashed on load and could not even show their real red; that import is fixed and the underlying environment race above is what remains.",
-      "quarantined": "2026-09-07",
-      "expires": "2026-09-22"
-    },
-    {
-      "suite": "quarantine/crew/test-spawn-root.mjs",
-      "card": 6588,
-      "reason": "Spawns the REAL opencode CLI and asserts its recorded argv pins --dir to the seat worktree; where opencode is absent or shaped differently (CI runner) the spawn list differs and the drill crashes on a missing argv element. #7227: the move into quarantine/crew/ left the import at ../drill-env.mjs, one level too shallow, so both drills crashed on load and could not even show their real red; that import is fixed and the underlying environment race above is what remains.",
-      "quarantined": "2026-09-07",
-      "expires": "2026-09-22"
-    }
-  ]
+  "entries": []
 }

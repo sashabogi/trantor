@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { drillEnv } from "../../drill-env.mjs";
+import { drillEnv } from "../drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : ` — ${extra}`}`); cond ? pass++ : fail++; };
@@ -68,6 +68,9 @@ async function drill(agent, script, opts = {}) {
     cwd: process.cwd(),
     env: { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
            RELAY_URL: HUB, RELAY_AGENT: agent, RELAY_PROJECT: PROJ,
+           // HERMETIC: a suite run from inside a crew seat inherits that seat's CREW_MODEL and
+           // the #13474 label guard can refuse the labeled turns under a foreign model.
+           CREW_MODEL: "",
            CREW_KICKOFF: "say hi and end your turn" },
     stdio: "ignore",
   });

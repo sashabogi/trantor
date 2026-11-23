@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { drillEnv } from "../../drill-env.mjs";
+import { drillEnv } from "../drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : ` — ${extra}`}`); cond ? pass++ : fail++; };
@@ -114,6 +114,9 @@ for (const stmt of process.argv[2].split(";")) {
 
   const env = { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
                 RELAY_URL: HUB, RELAY_AGENT: agent, RELAY_PROJECT: PROJ,
+                // HERMETIC: a suite run from inside a crew seat inherits that seat's CREW_MODEL and
+                // the #13474 label guard refuses the deepseek-labeled turns under a foreign model.
+                CREW_MODEL: "",
                 OC_LOG, OC_ARGS, OC_CNT,
                 CREW_KICKOFF: "say hi and end your turn" };
   if (opts.noDb) env.OC_NODB = "1";
