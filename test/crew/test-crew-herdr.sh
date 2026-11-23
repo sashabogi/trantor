@@ -79,6 +79,9 @@ case "\$1" in
             elif [ -f "$TMP/herdr.agents" ] && grep -qx "\$4" "$TMP/herdr.agents"; then
               printf '{"result":{"process_info":{"foreground_processes":[{"name":"claude","pid":123}]}}}'
             else printf '{"result":{"process_info":{"foreground_processes":[{"name":"zsh","pid":456}]}}}'; fi ;;
+    read)   # #13970: liveness is a readable pane; a ghost (listed, no terminal) or dead id can't be read.
+            case ",\${HERDR_GHOST:-},P-DEAD," in *",\$3,"*) printf '{"error":{"code":"pane_not_found","message":"pane %s not found"},"id":"cli:pane:read"}' "\$3"; exit 1 ;; esac
+            printf 'ok\n' ;;
     report-agent) echo "\$3" >> "$TMP/herdr.agents" ;;   # a pane herdr now considers an agent
   esac ;;
   # Only panes that were REPORTED are agents. That is the real asymmetry: a pane can answer rename
