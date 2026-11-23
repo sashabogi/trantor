@@ -5,9 +5,13 @@
 
 # The osascript stub CATS STDIN — every crew.sh invocation here carries </dev/null (#5345 hung-suite lesson).
 set -u
-# Same as test-crew.sh (#6228 bounce, 8c82e8e): the suite must not inherit the RUNNER's own identity
-# badge, or every dry spawn for testproj is refused by the cross-project guard as a badge mismatch.
-unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
+# Same as test-crew.sh (#6228 bounce, 8c82e8e): scrub the RUNNER's identity badge or every dry
+# spawn for testproj is refused as a badge mismatch. #13922: capture the REAL herdr socket FIRST
+# (fail-closed reference), then scrub the herdr binding so drill envs resolve herdr under $TMP only.
+REAL_SOCK="${TRANTOR_TEST_HERDR_REAL_SOCK:-${HERDR_SOCKET_PATH:-}}"
+[ -n "$REAL_SOCK" ] || REAL_SOCK="$(command -v herdr >/dev/null 2>&1 && herdr status 2>/dev/null | sed -n 's/^ *socket: *//p' | head -1)"
+[ -n "$REAL_SOCK" ] || REAL_SOCK="$HOME/.config/herdr/herdr.sock"
+unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID HERDR_SOCKET_PATH HERDR_WORKSPACE_ID HERDR_TAB_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CREW=("$(command -v node)" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
@@ -102,7 +106,29 @@ rows(){ [ -f "$STATE" ] && wc -l < "$STATE" | tr -d ' ' || echo 0; }
 has_row(){ [ -f "$STATE" ] && grep -qF "$1" "$STATE"; }
 nolog(){ [ ! -f "$TMP/herdr.log" ] || ! grep -q . "$TMP/herdr.log"; }
 
+# #13922 fail closed: resolve the socket a drill env WOULD use (the herdr CLI's own order —
+# HERDR_SOCKET_PATH, then $HOME/.config/herdr/herdr.sock) and refuse to run the suite at all if it
+# is the box's REAL socket, by string or symlink alias. This aborts BEFORE any herdr call.
+sock_resolves_to_real(){ # $1 = drill env HOME, $2 = drill env HERDR_SOCKET_PATH ("" = unset)
+  local resolved="$2"
+  [ -n "$resolved" ] || resolved="$1/.config/herdr/herdr.sock"
+  [ "$resolved" = "$REAL_SOCK" ] && return 0
+  [ -e "$resolved" ] && [ -e "$REAL_SOCK" ] && [ "$(readlink -f "$resolved" 2>/dev/null)" = "$(readlink -f "$REAL_SOCK" 2>/dev/null)" ]
+}
+if sock_resolves_to_real "$TMP" ""; then
+  echo "FAIL CLOSED: the crew-herdr drill env (HOME=$TMP) resolves herdr to the REAL socket $REAL_SOCK — aborting before any herdr call" >&2
+  exit 1
+fi
+
 echo "# herdr mux tests (CREW_MUX=herdr explicit opt-in)"
+
+ok "fail-closed guard trips when an env would resolve the REAL socket" 'sock_resolves_to_real "$TMP" "$REAL_SOCK"'
+if [ -e "$REAL_SOCK" ]; then
+  ln -s "$REAL_SOCK" "$TMP/alias.sock"
+  ok "fail-closed guard trips through a symlink alias of the real socket" 'sock_resolves_to_real "$TMP" "$TMP/alias.sock"'
+  rm -f "$TMP/alias.sock"
+fi
+ok "the herdr these drills invoke is the STUB binary, not the box's" '[ -x "$TMP/fakebin/herdr" ] && [ "$(PATH="$TMP/fakebin:$PATH" command -v herdr)" = "$TMP/fakebin/herdr" ]'
 
 # 1. opting in WITHOUT the binary → hard error + install hint; nothing spawned, nothing recorded
 if (cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=testproj CREW_MUX=herdr "${CREW[@]}" up codex </dev/null >/dev/null 2>&1); then rc=0; else rc=1; fi

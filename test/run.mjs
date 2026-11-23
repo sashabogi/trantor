@@ -6,6 +6,7 @@ import { join } from "node:path";import { fileURLToPath } from "node:url";
 import { testIdentityFiles } from "./lib/identity-files.mjs";
 import { userInfo } from "node:os";
 import { DRILL_IDENTITY_VARS } from "./drill-env.mjs";
+import { realHerdrSocket } from "./lib/herdr-stub.mjs";
 
 const realKeys = join(userInfo().homedir, ".agent-bus", "keys");
 const keysBefore = testIdentityFiles(realKeys);
@@ -14,6 +15,10 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(ROOT);
 
 // ---- 1. the runner must not lend its own identity to any suite ----
+// #13922: stamp the box's LIVE herdr socket BEFORE the scrub — a suite child's temp HOME can no
+// longer discover it, but the fail-closed gate (test/lib/herdr-stub.mjs) needs the reference to
+// abort any test env that would still resolve herdr to the real server.
+process.env.TRANTOR_TEST_HERDR_REAL_SOCK = realHerdrSocket();
 for (const k of DRILL_IDENTITY_VARS) delete process.env[k];
 
 const argv = process.argv.slice(2);

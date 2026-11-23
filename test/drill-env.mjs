@@ -6,6 +6,10 @@ import { join } from "node:path";
 // identity vars and applies only the caller's deliberate overrides (pattern from #6074).
 export const DRILL_IDENTITY_VARS = [
   "HERDR_ENV", "HERDR_PANE_ID", "TRANTOR_ORCH", "TRANTOR_SEAT",
+  // The live herdr binding is identity too (#13922): a spawn inheriting the RUNNER's
+  // HERDR_SOCKET_PATH resolves the REAL server even under a temp HOME — one workspace close from
+  // a suite child killed every netcup seat pane. The workspace/tab ids name the same home.
+  "HERDR_SOCKET_PATH", "HERDR_WORKSPACE_ID", "HERDR_TAB_ID",
   "RELAY_PROJECT", "TRANTOR_PROJECT", "RELAY_SESSION", "RELAY_AGENT",
   // The hub binding is identity too (#7893): a spawn inheriting the RUNNER's RELAY_URL resolves
   // "via env" and can never exercise pin/path resolution.
