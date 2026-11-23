@@ -417,7 +417,7 @@ rate, not work rate.
 ```
 trantor setup | doctor | connect | profile | provider | models
         | new <name> | up <agents…> | swap <old> <new> | down | seat-why <agent> | ui | advise | hub | watch
-        | adopt <project> | reconcile | duty | orchestrate | patrol | app | backfill | init-hooks | pair
+        | adopt <project> | reconcile | duty | orchestrate | patrol | app | backfill | init-hooks | pair | sim
 ```
 
 - **`trantor pair`** pairs the iPhone and iPad companion app (`ios/`, an operator console for
@@ -426,6 +426,15 @@ trantor setup | doctor | connect | profile | provider | models
   `trantor://enroll` link. `--sim` opens it in the booted simulator, `--json` prints it for
   scripts, and `--role owner` widens the scope. The desktop app's Settings shows the same invite
   as a QR code. It signs as the operator's owner identity (`TRANTOR_IDENTITY`, default `owner@laptop`).
+
+- **`trantor sim`** drives the iOS Simulator on a Mac for agents, through
+  [AXe](https://github.com/cameroncooke/AXe) (pinned v2.1.1, installed with
+  `bash bin/install-axe.sh`, which checks its SHA-256): `boot <device>`, `install <app>`,
+  `launch <bundle>`, `screen` (screenshot plus the accessibility tree in point coordinates),
+  `tap --label | --id | --xy`, `swipe`, `type`, `shutdown`. Every verb prints JSON. It refuses to
+  boot over another session's simulator and shuts down only its own. The `sim` skill gives agents
+  the drill loop; the XCTest drills in `ios/` stay the regression gate. `trantor doctor` reports
+  the AXe pin.
 
 - **`trantor new <name>`** — project genesis in one command: makes the dir under your dev root
   (`TRANTOR_DEV_ROOT` or `~/development`), git on main (or `--from <git-url>`, or `--adopt` an
