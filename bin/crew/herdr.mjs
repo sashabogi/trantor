@@ -8,7 +8,7 @@ export function herdrCall(ctx, args) {
 
 function requireHerdr(ctx, args, execute = herdrCall) {
   const result = execute(ctx, args);
-  if (!result.ok) {
+  if (result.ok === false) {
     const detail = result.stderr || result.stdout || "no error output";
     throw new Error(`${formatCommand("herdr", args)} exited ${result.status}: ${detail}`);
   }
