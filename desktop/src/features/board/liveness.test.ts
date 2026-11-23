@@ -40,6 +40,8 @@ describe("cardPace", () => {
   const now = 1_000_000_000_000;
   it("reads the freshest of updated / ts / last log note", () => {
     expect(cardPace({ updated: now - 30_000, log: [{ ts: now - 5_000 }] }, now)).toBe("last activity 5s ago · 1 note");
+    // #13965: a slim board row has no log, only logCount; the count must still show.
+    expect(cardPace({ updated: now - 30_000, logCount: 3 }, now)).toBe("last activity 30s ago · 3 notes");
     expect(cardPace({ updated: now - 120_000, log: [] }, now)).toBe("last activity 2m ago");
     expect(cardPace({ ts: now - 7_200_000, log: [{ ts: now - 7_200_000 }, { ts: now - 3_600_000 }] }, now)).toBe("last activity 1h ago · 2 notes");
   });

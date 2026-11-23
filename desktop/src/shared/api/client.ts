@@ -183,12 +183,6 @@ export class HubClient {
     q.set("fields", "slim");
     return this.request<{ tasks: Card[] }>("GET", `/tasks?${q.toString()}`).then(r => r.tasks ?? []);
   }
-  /** Full rows for cards currently opened in a detail view. */
-  cards(ids: number[]) {
-    if (!ids.length) return Promise.resolve<Card[]>([]);
-    const q = new URLSearchParams({ fields: "slim", card: ids.join(",") });
-    return this.request<{ tasks: Card[] }>("GET", `/tasks?${q.toString()}`).then(r => r.tasks ?? []);
-  }
   peers()   { return this.request<{ peers: Peer[] }>("GET", "/peers").then(r => r.peers ?? []); }
   health() { return this.request<HubHealth>("GET", "/health"); }
   events(opts: { project?: string; type?: string; since?: number; limit?: number } = {}) {

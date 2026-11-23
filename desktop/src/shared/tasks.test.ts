@@ -20,10 +20,10 @@ describe("slim task reads", () => {
     expect(calls[0]).toEqual({ method: "GET", path: "/tasks?project=trantor&fields=slim" });
   });
 
-  it("full card hydration uses card=<id> on a slim request", async () => {
+  it("an opened card reads /card only, never a cross-project /tasks", async () => {
     const { client, calls } = clientWithTransport();
-    await client.cards([42]);
-    expect(calls[0]).toEqual({ method: "GET", path: "/tasks?fields=slim&card=42" });
+    await client.card(42).catch(() => {});
+    expect(calls).toEqual([{ method: "GET", path: "/card?id=42" }]);
   });
 
   it("two subscribers share one request per poll tick", async () => {

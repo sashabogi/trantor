@@ -89,14 +89,16 @@ function splitLane(cards: Card[], query: string, assignee: string, nesting: Nest
  *  mid-turn; a dead assignee shows on doing, and a quiet testing card reads "awaiting verdict". */
 /** #5609 follow-up: the card's pace, from `updated` (last touch) and `log.length` (story depth).
  *  Deliberately not a percentage: open-ended agent work has no denominator for progress. */
-export function cardPace(card: { updated?: number; ts?: number; log?: { ts: number }[] }, now = Date.now()): string | null {
+export function cardPace(card: { updated?: number; ts?: number; log?: { ts: number }[]; logCount?: number }, now = Date.now()): string | null {
   const logs = card.log ?? [];
   const lastLog = logs.length ? logs[logs.length - 1].ts : 0;
+  // #13965: board rows are slim (no log), so the note count comes from logCount.
+  const noteCount = card.logCount ?? logs.length;
   const touched = Math.max(card.updated ?? 0, card.ts ?? 0, lastLog);
   if (!touched) return null;
   const s = Math.max(0, Math.round((now - touched) / 1000));
   const agoTxt = s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : s < 172800 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
-  const notes = logs.length ? ` · ${logs.length} note${logs.length === 1 ? "" : "s"}` : "";
+  const notes = noteCount ? ` · ${noteCount} note${noteCount === 1 ? "" : "s"}` : "";
   return `last activity ${agoTxt} ago${notes}`;
 }
 
