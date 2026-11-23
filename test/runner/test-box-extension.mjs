@@ -53,7 +53,7 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 // The fake CLI writes into $PWD (the seat's worktree, the watchdog's worktree channel) and says
 // nothing on stdout while it works — the extension must come from the files, not from bytes.
 // `writeFor` seconds of writing, then `after` (a shell fragment) decides how the turn ends.
-async function drill(name, { writeFor, after, waitMs, waitForSend }) {
+async function drill(name, { writeFor, after, waitMs, waitForSends }) {
   sends.length = 0; eventSeq = 0; handed = 0;
   const root = mkdtempSync(join(tmpdir(), "tt-ext-"));
   const HOME = join(root, "home");
@@ -88,19 +88,32 @@ ${after}
   // Wait for the contract turn's own ledger row (the first direct-message row), bounded.
   const rowsNow = () => read(JSONL).split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return {}; } });
   while (!rowsNow().some(x => x.trigger === "direct message") && Date.now() - start < waitMs) await sleep(200);
-  while (waitForSend && !sends.some(waitForSend) && Date.now() - start < waitMs) await sleep(50);
-  if (!waitForSend) await sleep(600);   // let the post-turn notices land on the mock hub
+  while (waitForSends && !waitForSends(sends, rowsNow()) && Date.now() - start < waitMs) await sleep(50);
   runner.kill("SIGKILL"); await sleep(150);
   const rows = rowsNow();
   const row = rows.find(x => x.trigger === "direct message");
   const extended = sends.filter(s => /turn extended/.test(s.text || ""));
-  return { rows, row, sends: [...sends], extended };
+  return { rows, row, sends: [...sends], extended, sendWaitSatisfied: !waitForSends || waitForSends(sends, rows) };
 }
+
+const extensionNotices = (messages, to) => messages.filter(s => s.to === to && /turn extended/.test(s.text || ""));
+const describeMessages = messages => JSON.stringify(messages.map(s => ({ to: s.to, text: s.text })));
 
 // ---- drill 1: a CLI that keeps writing files past the box is extended and completes -----------
 console.log("\n## a turn that keeps moving is extended and completes");
 {
-  const r = await drill("writer", { writeFor: 10, after: 'echo "build green: 22 tests passed, committed"; exit 0', waitMs: 30000 });
+  const r = await drill("writer", {
+    writeFor: 10,
+    after: 'echo "build green: 22 tests passed, committed"; exit 0',
+    waitMs: 30000,
+    waitForSends: (messages, rows) => {
+      const row = rows.find(x => x.trigger === "direct message");
+      return extensionNotices(messages, "owner@laptop").length >= (row?.extensions || Infinity)
+        && messages.some(s => s.to === "owner@laptop" && /✅ done on/.test(s.text || ""));
+    },
+  });
+  ok("#7761: all expected sends arrived before the runner was stopped",
+    r.sendWaitSatisfied, describeMessages(r.sends));
   ok("#7761: the contract turn COMPLETED, outcome completed, never cut",
     r.row && r.row.outcome === "completed" && !r.row.cut,
     JSON.stringify(r.row && { outcome: r.row.outcome, cut: r.row.cut, duration: r.row.duration_ms }));
@@ -112,12 +125,13 @@ console.log("\n## a turn that keeps moving is extended and completes");
   ok("#7761: the assigner heard each extension, as context (wake:false), never as a turn",
     r.extended.some(s => s.to === "owner@laptop" && s.wake === false && s.kind === "status")
     && r.extended.filter(s => s.to === "owner@laptop").length === r.row?.extensions,
-    `${r.extended.filter(s => s.to === "owner@laptop").length} notice(s) vs ${r.row?.extensions} extension(s)`);
+    `${r.extended.filter(s => s.to === "owner@laptop").length} notice(s) vs ${r.row?.extensions} extension(s); ${describeMessages(r.sends)}`);
   ok("#7761: the notice names what was alive and the box against the ceiling",
     r.extended.some(s => /alive: worktree/.test(s.text || "") && /of a 20s ceiling/.test(s.text || "")),
     r.extended[0] && r.extended[0].text);
   ok("#7761: the foreman heard it too",
-    r.extended.some(s => s.to === "drillhost:tt-ext-writer"));
+    r.extended.some(s => s.to === "drillhost:tt-ext-writer"),
+    `${r.extended.filter(s => s.to === "drillhost:tt-ext-writer").length} notice(s); ${describeMessages(r.sends)}`);
   ok("#7761: no notice ever carries `re` — an extension is not the contract's answer",
     r.extended.every(s => s.re === undefined));
   ok("#7761: the assigner heard done, never a cut or a stall",
@@ -132,8 +146,14 @@ console.log("\n## a turn that goes silent still ends at the stall window");
     writeFor: 5,
     after: "/bin/sleep 30",
     waitMs: 30000,
-    waitForSend: s => s.to === "drillhost:tt-ext-quiet" && /turn STALLED/.test(s.text || ""),
+    waitForSends: (messages, rows) => {
+      const row = rows.find(x => x.trigger === "direct message");
+      return extensionNotices(messages, "owner@laptop").length >= (row?.extensions ?? Infinity)
+        && messages.some(s => s.to === "drillhost:tt-ext-quiet" && /turn STALLED/.test(s.text || ""));
+    },
   });
+  ok("#7761: all expected sends arrived before the runner was stopped",
+    r.sendWaitSatisfied, describeMessages(r.sends));
   ok("#7761: the turn is ledgered STALLED (#7752), never completed and never a plain cut",
     r.row && r.row.outcome === "stalled" && r.row.stalled === true,
     JSON.stringify(r.row && { outcome: r.row.outcome, stalled: r.row.stalled, duration: r.row.duration_ms }));
@@ -141,15 +161,27 @@ console.log("\n## a turn that goes silent still ends at the stall window");
     r.row && r.row.extensions === 1 && r.row.duration_ms < BOX_MS + STEP_MS,
     JSON.stringify(r.row && { extensions: r.row.extensions, duration: r.row.duration_ms }));
   ok("#7761: exactly one extension notice reached the assigner",
-    r.extended.filter(s => s.to === "owner@laptop").length === 1);
+    r.extended.filter(s => s.to === "owner@laptop").length === 1,
+    `${r.extended.filter(s => s.to === "owner@laptop").length} notice(s); ${describeMessages(r.sends)}`);
   ok("#7761: the stall report still went to the foreman",
-    r.sends.some(s => s.to === "drillhost:tt-ext-quiet" && /turn STALLED/.test(s.text || "")));
+    r.sends.some(s => s.to === "drillhost:tt-ext-quiet" && /turn STALLED/.test(s.text || "")),
+    `${r.sends.filter(s => s.to === "drillhost:tt-ext-quiet" && /turn STALLED/.test(s.text || "")).length} STALLED report(s); ${describeMessages(r.sends)}`);
 }
 
 // ---- drill 3: a turn that never stops is cut at the ceiling, extensions == max ------------------
 console.log("\n## the ceiling is respected");
 {
-  const r = await drill("forever", { writeFor: 120, after: "exit 0", waitMs: 45000 });
+  const r = await drill("forever", {
+    writeFor: 120,
+    after: "exit 0",
+    waitMs: 45000,
+    waitForSends: (messages, rows) => {
+      const row = rows.find(x => x.trigger === "direct message");
+      return extensionNotices(messages, "owner@laptop").length >= (row?.extensions ?? EXT_MAX);
+    },
+  });
+  ok("#7761: all expected extension sends arrived before the runner was stopped",
+    r.sendWaitSatisfied, describeMessages(r.sends));
   ok("#7761: the turn is CUT (outcome cut, never stalled) — it was alive the whole way",
     r.row && r.row.outcome === "cut" && r.row.cut === true && !r.row.stalled,
     JSON.stringify(r.row && { outcome: r.row.outcome, stalled: r.row.stalled }));
@@ -162,7 +194,7 @@ console.log("\n## the ceiling is respected");
   ok(`#7761: the assigner heard exactly ${EXT_MAX} extension notices, the last one saying ${EXT_MAX}/${EXT_MAX}`,
     r.extended.filter(s => s.to === "owner@laptop").length === EXT_MAX
     && r.extended.some(s => new RegExp(`\\(${EXT_MAX}/${EXT_MAX}\\)`).test(s.text || "")),
-    r.extended.map(s => s.text?.slice(0, 60)).join(" | "));
+    `${r.extended.filter(s => s.to === "owner@laptop").length} notice(s); ${describeMessages(r.sends)}`);
   ok("#7099: the ceiling cut's exit is the sweep's own signal, ledgered as cutSignal",
     r.row && !!r.row.cutSignal, JSON.stringify(r.row && { exit: r.row.exit, cutSignal: r.row.cutSignal }));
 }
