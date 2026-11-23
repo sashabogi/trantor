@@ -123,6 +123,7 @@ pub fn run() {
         .manage(genesis::WakeChains::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_window_state::Builder::new().build())
         .setup(|app| {
             // #6094 acceptance drill: TRANTOR_ASK_DRILL=<project> mounts Chat headlessly on that
             // project's orch pane and drives the real blocked path (src/features/chat/askDrill.ts).
