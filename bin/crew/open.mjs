@@ -72,7 +72,7 @@ function humanPromptAfter(transcriptPath, afterSecs) {
     const at = Date.parse(e.timestamp || "") / 1000;
     if (!(at >= afterSecs)) continue;
     const c = e.message?.content;
-    const body = typeof c === "string" ? c : Array.isArray(c) ? c.map(x => x?.text || "").join("") : "";
+    const body = Array.isArray(c) ? c.map(x => x?.text || "").join("") : String(c || "");
     if (body.startsWith("You have just taken over via handoff")) continue;
     return at;
   }
@@ -118,6 +118,13 @@ function orchestratorCommand(ctx, id) {
   return `${env} claude${harnessFlag(ctx)} ${action}`;
 }
 
+function reportOrchestrator(ctx, pane, id) {
+  const resumeArgv = ["env", ...STRIP.flatMap(name => ["-u", name]), `TRANTOR_ORCH=${ctx.project}`, "claude"];
+  if (harnessFlag(ctx).trim()) resumeArgv.push("--dangerously-skip-permissions");
+  resumeArgv.push("--resume", id);
+  reportAgent(ctx, pane, "claude", { sessionId: id, resumeArgv });
+}
+
 export function paneHasAgent(ctx, pane) {
   const result = herdrCall(ctx, ["pane", "process-info", "--pane", pane]);
   const info = parseJsonOutput(result.stdout)?.result?.process_info;
@@ -160,7 +167,7 @@ function reattach(ctx, workspace, pane, id) {
   if (!paneHasAgent(ctx, pane)) {
     const started = herdrCall(ctx, ["pane", "run", pane, orchestratorCommand(ctx, id)]);
     if (!started.ok) throw new Error(`trantor open: could not start the orchestrator in pane ${pane}`);
-    reportAgent(ctx, pane, "claude");
+    reportOrchestrator(ctx, pane, id);
     console.error(`— orchestrator pane was empty: resumed session ${id} in herdr:${workspace || "?"}/${pane} —`);
   } else console.error(`— orchestrator already hosted: reattached to herdr:${workspace || "?"}/${pane} —`);
   console.log(`herdr:${workspace || "?"}/${pane}`);
@@ -200,7 +207,7 @@ function hostPane(ctx, chosen, id) {
   if (!pane) throw new Error("trantor open: could not create the orchestrator pane");
   herdrCall(ctx, ["pane", "rename", pane, `orchestrator · ${ctx.project}`]);
   herdrCall(ctx, ["pane", "run", pane, orchestratorCommand(ctx, id)]);
-  reportAgent(ctx, pane, "claude");
+  reportOrchestrator(ctx, pane, id);
   return pane;
 }
 

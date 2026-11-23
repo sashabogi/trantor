@@ -441,6 +441,7 @@ ok "…and so is the socket that would steal another session's baton" 'grep -q "
 ok "the id is recorded against the project" 'grep -q "^testproj	" "$TMP/.agent-bus/orch-sessions.txt" 2>/dev/null'
 SID19="$(cut -f2 < "$TMP/.agent-bus/orch-sessions.txt" 2>/dev/null | head -1)"
 ok "the recorded id is the one claude was given" 'grep -q "claude --session-id $SID19" "$TMP/herdr.log"'
+ok "the orchestrator reports its own exact resume command" 'grep -q "pane report-agent P-1 --source crew --agent claude --state working --agent-session-id $SID19 -- env .* claude .*--resume $SID19" "$TMP/herdr.log"'
 
 # the pane outlives its claude: herdr still answers rename, but process-info shows only its shell
 rm -f "$TMP/herdr.log" "$TMP/herdr.agents"

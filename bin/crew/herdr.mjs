@@ -1,4 +1,5 @@
-import { call, gridColumns, parseJsonOutput, runnerCommand } from "./core.mjs";
+import { call, formatCommand, gridColumns, parseJsonOutput, runnerCommand } from "./core.mjs";
+import { herdrReportArgs } from "../../lib/herdr-integration.mjs";
 import { dropState, readRows, recordState } from "./state.mjs";
 
 export function herdrCall(ctx, args) {
@@ -91,13 +92,14 @@ export function closePane(ctx, id) {
   return herdrCall(ctx, ["pane", "close", id]).ok;
 }
 
-export function reportAgent(ctx, pane, agent) {
+export function reportAgent(ctx, pane, agent, { sessionId = "", resumeArgv = [] } = {}) {
   if (!pane) return;
+  const args = herdrReportArgs({ pane, agent, state: "working", sessionId, resumeArgv });
   if (ctx.dry) {
-    console.log(`[dry] herdr pane report-agent ${pane} --source crew --agent ${agent} --state working`);
+    console.log(`[dry] ${formatCommand("herdr", args)}`);
     return;
   }
-  herdrCall(ctx, ["pane", "report-agent", pane, "--source", "crew", "--agent", agent, "--state", "working"]);
+  herdrCall(ctx, args);
 }
 
 function runSeat(ctx, pane, agent, command) {

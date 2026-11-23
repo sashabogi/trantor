@@ -2,6 +2,7 @@
 // trantor crew runner — keeps a crew agent alive without burning tokens: it long-polls the bus
 // (zero tokens) and resumes the CLI with each message. Usage: node crew-runner.mjs <agent> [dir]
 import { execSync, spawnSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync, realpathSync, statSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
@@ -57,6 +58,13 @@ import { resolveStateFlags, stateFeatureOn } from "../lib/state/flags.mjs";
 
 import { awaitSwapRelease } from "./crew/stage.mjs";
 import { codexRelayFlags } from "./crew/codex-relay.mjs";
+import { codexSessionId, geminiSessionId, herdrReportArgs, runnerResumeArgv } from "../lib/herdr-integration.mjs";
+
+const RUNNER_ARGV = process.argv.slice(2);
+const runnerOption = (name, fallback = "") => {
+  const at = RUNNER_ARGV.indexOf(`--${name}`);
+  return at >= 0 ? (RUNNER_ARGV[at + 1] || fallback) : fallback;
+};
 
 const releaseState = process.env.CREW_RELEASE_STATE ? JSON.parse(process.env.CREW_RELEASE_STATE) : null;
 delete process.env.CREW_RELEASE_STATE;
@@ -87,14 +95,14 @@ function newerVersion(next, previous) {
   return false;
 }
 if (!releaseState) await awaitSwapRelease();
-const AGENT = process.env.CREW_SWAP_AGENT || process.env.CREW_AGENT || process.argv[2];
-const PERSONA = runnerPersona(process.env, AGENT);
-const DIR = process.argv[3] || process.cwd();
+const AGENT = process.env.CREW_SWAP_AGENT || process.env.CREW_AGENT || runnerOption("agent") || RUNNER_ARGV[0];
+const PERSONA = runnerPersona({ ...process.env, CREW_PERSONA: process.env.CREW_PERSONA || runnerOption("persona") }, AGENT);
+const DIR = RUNNER_ARGV[1] || process.cwd();
 // Crew agents MUST share the orchestrator's project key (one repo = one lane).
 // RELAY_PROJECT is inherited from crew.mjs (the host's resolved key); else fall
 // back to the git-repo-root basename — never a loose dir basename that could
 // fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
-const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
+const PROJ = process.env.RELAY_PROJECT || runnerOption("project") || resolveProject(DIR);
 let machineConfig = {};
 try { machineConfig = JSON.parse(readFileSync(join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "config.json"), "utf8")); } catch {}
 const MACHINE_LABEL = machineLabel(machineConfig);
@@ -160,6 +168,8 @@ if (!AGENT) { console.error("usage: crew-runner.mjs <agent> [project-dir]"); pro
 // talked to the remote one — the crew would look alive and record onto a different board entirely.
 function hubUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
+  const argHub = runnerOption("hub");
+  if (argHub) return argHub;
   try { return resolveHub(PROJ); } catch {}
   return "http://127.0.0.1:4477";
 }
@@ -249,8 +259,11 @@ function herdrAgent(state) {
       .filter(c => c.length >= 4 && c[0] === PROJ && c[1] === "herdr" && c[2] === PERSONA)
       .pop();
     if (!row || !row[3]) return;
-    spawnSync("herdr", ["pane", "report-agent", row[3], "--source", "crew", "--agent", AGENT, "--state", state],
-      { stdio: "ignore", timeout: 1500 });
+    const resumeArgv = runnerResumeArgv({ agent: AGENT, driver: DRIVER, persona: PERSONA, dir: DIR,
+      runnerPath: join(import.meta.dirname, "crew-runner.mjs"), model: MODEL, effort: EFFORT,
+      project: PROJ, hub: HUB, sessionId: sid });
+    const args = herdrReportArgs({ pane: row[3], agent: AGENT, state, sessionId: sid, resumeArgv });
+    spawnSync("herdr", args, { stdio: "ignore", timeout: 1500 });
   } catch { /* no herdr, or no row for this seat: the cmux/tmux paths do not need it */ }
 }
 
@@ -261,7 +274,7 @@ function cmuxLog(message, level = "info") {
 
 // ---- per-CLI invocation (first turn vs resume turn). {P} = prompt file path ----
 // CREW_MODEL env pins the model: each CLI gets its own flag via {M} (empty when unset).
-let MODEL = process.env.CREW_MODEL || "";
+let MODEL = process.env.CREW_MODEL || runnerOption("model");
 // opencode expects provider/model. A BARE id for the `deepseek` agent qualifies to its
 // own provider; `opencode` ids must already be provider-qualified (e.g.
 // `zai-coding-plan/glm-5.1`) — never assume `deepseek/` for opencode (that mangled
@@ -269,9 +282,11 @@ let MODEL = process.env.CREW_MODEL || "";
 if (MODEL && !MODEL.includes("/") && AGENT === "deepseek") MODEL = `deepseek/${MODEL}`;
 const CLI = {
   codex:    { first: `codex exec{M}{R} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`,
-              next:  `codex exec resume --last{M}{R} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`, mflag: " -m " },
+              next:  `codex exec resume --last{M}{R} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`,
+              nextById: `codex exec resume {SID}{M}{R} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`, mflag: " -m " },
   gemini:   { first: `gemini --yolo{M} -p "$(cat {P})"`,
-              next:  `gemini --yolo{M} -r latest -p "$(cat {P})"`, mflag: " -m " },
+              next:  `gemini --yolo{M} -r latest -p "$(cat {P})"`,
+              nextById: `gemini --yolo{M} -r {SID} -p "$(cat {P})"`, mflag: " -m " },
   // kimi-code (successor to kimi-cli) has no --print (-p alone is non-interactive), REJECTS
   // --yolo in prompt mode (prompt mode auto-approves tools), and emits session_-prefixed ids.
   kimi:     { first: `kimi{M} -p "$(cat {P})" < /dev/null`,
@@ -291,7 +306,9 @@ const CLI = {
   openrouter: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
               next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
   claude:   { first: `claude{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`,
+              firstById: `claude{M} --session-id {SID} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`,
               next:  `claude -c{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`,
+              nextById: `claude --resume {SID}{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`,
               // TDD §4.6: a state step is a fresh `claude -p` (no `-c`) carrying the assembled prefix, held
               // to the TurnResult grammar by --json-schema; test/state/test-runner-state.mjs pins the strings.
               stateNext: `claude{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions --output-format json --json-schema "$(cat {S})"`,
@@ -315,7 +332,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 // it as CREW_EFFORT (JSON from bin/crew/core.mjs runnerCommand). The runner applies the
 // parameters the CLI can carry (codex -c model_reasoning_effort / claude --effort / opencode
 // --variant) and logs ONE line saying what it set — or that the model is uncatalogued.
-const EFFORT = (() => { try { return JSON.parse(process.env.CREW_EFFORT || "null"); } catch { return null; } })();
+const EFFORT = (() => { try { return JSON.parse(process.env.CREW_EFFORT || runnerOption("effort") || "null"); } catch { return null; } })();
 const EFFORT_FLAG = EFFORT ? cliEffortFlag(DRIVER, EFFORT) : { flag: "", text: "" };
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
@@ -866,7 +883,7 @@ const OC_COMPACTION = ocCompactionContent(process.env, OC_COMPACTION_WINDOW);
 // #11854: plus every non-relay MCP server of the user's opencode config switched off for the seat.
 const OC_SEAT_CONFIG = seatConfigContent(OC_COMPACTION, seatMcpOverlay(readOpencodeUserConfig()));
 
-let sid = releaseState?.sid || "";
+let sid = releaseState?.sid || runnerOption("resume");
 // #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
 // sleeping toward a false alarm against whatever runner comes next.
 // Every exit path therefore kills it, and the stamp carries this runner's instance id so any
@@ -887,7 +904,11 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // A fresh session must not resume the old one's id: `first` is chosen by isFirst OR a missing
   // sid, so a stale sid would quietly resume the session this turn exists to leave behind.
   // #11855: the min-steps guard counts from the last fresh start; a state step never resets it.
-  if (isFirst) { sid = ""; if (!opts.state) capFreshTurn = TURN; }
+  if (isFirst) {
+    sid = "";
+    if (DRIVER === "claude" && !opts.state) sid = randomUUID();
+    if (!opts.state) capFreshTurn = TURN;
+  }
   // #5965 — TURN START. The hub peer row is where the app reads activity from, and the runner is
   // the only one who knows a turn is starting, so say so before the CLI spawn (awaited: the spawn
   // below blocks the loop, an unawaited fetch would not leave the machine until the turn ended).
@@ -925,7 +946,9 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const busSeqBefore = await latestBusEventId();
   // #6154: a pinned seat with no sid yet resumes as FRESH — the guard below fails open, because
   // a resume without an id must fall back to a new session, never to `next`'s bare resume shape.
-  let cmd = (isFirst || ((cli.sid || cli.pinned) && !sid)) ? cli.first : cli.next;
+  let cmd = isFirst || ((cli.sid || cli.pinned) && !sid)
+    ? (sid && cli.firstById ? cli.firstById : cli.first)
+    : (sid && cli.nextById ? cli.nextById : cli.next);
   // The flagged row (TDD §4.6). `{S}` exists only in `stateNext`, so the replaceAll below is a
   // no-op on every other path — which is what "flag off = byte-identical" has to mean.
   if (opts.state && cli.stateNext) cmd = cli.stateNext;
@@ -1150,6 +1173,14 @@ exit $turn_exit`;
   // keyed by the worktree the session was created in. Fail-open: nothing found leaves sid empty,
   // and the next turn starts fresh rather than resuming whatever other project ran last.
   if (cli.pinned) { const found = ocSid(TURN_DIR); if (found) sid = found; }
+  if (DRIVER === "codex") {
+    const found = codexSessionId(join(homedir(), ".codex", "sessions"), TURN_DIR, t0);
+    if (found) sid = found;
+  }
+  if (DRIVER === "gemini") {
+    const found = geminiSessionId(join(homedir(), ".gemini"), TURN_DIR, t0);
+    if (found) sid = found;
+  }
   const realExit = r.status;
   // A zero exit is not proof the turn ran (#5405): an exit-0 auth turn is FAILED when the CLI's own
   // output is short enough to be just the error (#5868). Telemetry keeps the real exit.
@@ -1623,7 +1654,7 @@ async function resolveWakeCard(messages, { session }) {
   // construction and now says so, in the same breath as the line that armed the mode.
   if (!releaseState) {
     stateSkip("kickoff");
-    const ec0 = await runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
+    const ec0 = await runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), !runnerOption("resume"), runnerOption("resume") ? "reboot resume" : "kickoff");
     if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
     // #7778: the kickoff is a turn like any other — a message that landed mid-kickoff and was read
     // through the session's own inbox is consumed by a successful kickoff, and the first poll must
