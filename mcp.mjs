@@ -15,7 +15,7 @@ import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { formatInboxPage, fmtMessage } from "./hooks/lib/inbox-page.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
-import { isMessageCardTitle, OPEN_CARD_STATUSES } from "./lib/turn-policy.mjs";
+import { isMessageCardTitle, OPEN_CARD_STATUSES, ownCardForInstance, contractedCardIds } from "./lib/turn-policy.mjs";
 import { markDoing, hollowVerdict, blastRadius, blastLine } from "./hooks/lib/hollow-move.mjs";
 
 import { dep } from "./lib/dep.mjs";
@@ -44,6 +44,11 @@ let cursor = 0;
 // BOOT, never to the first call — a "now" seed swallowed #7282. PEEK only: the hooks own the
 // delivery ledger; a non-peek seed here marked unseen messages delivered.
 const BOOT_TS = Date.now();
+// #13923: when the SEAT INSTANCE (the runner) started, stamped into the turn shell's env. A seat
+// name is reused across instances, so "cards assigned to my name" must not cross this line: an
+// assignment made before it belongs to a predecessor that happened to wear the same name. 0 = no
+// runner over us (a solo session, or an old runner) — the fence fails open.
+const SEAT_BOOT_TS = Number(process.env.TRANTOR_SEAT_BOOT_TS) || 0;
 let cursorSeeded = false;
 async function seedCursor() {
   if (cursorSeeded) return;
@@ -393,11 +398,28 @@ server.tool("relay_board", "Show a project's Kanban board (cards, status, assign
     const own = (slim.tasks || [])
       .filter(t => t.assignee === SESSION && OPEN_CARD_STATUSES.includes(t.status) && !isMessageCardTitle(t.title))
       .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0));
-    if (!own.length) return { content: [{ type: "text", text: `${proj}: no cards assigned to ${SESSION} in doing/testing/todo` }] };
+    // #13923: the instance fence. Cards whose assignment predates this seat instance's start are
+    // passed over (they stay on the board, untouched) unless a direct post-start message contracted
+    // them. This is the kickoff's first call, so it is exactly where a reused name used to inherit
+    // its predecessor's cards (#12138). Only spend the inbox peek when there is something to fence.
+    let list = own, ignored = 0;
+    if (SEAT_BOOT_TS > 0 && own.some(t => (Number(t.ts) || 0) < SEAT_BOOT_TS)) {
+      let contracted = new Set();
+      try {
+        const r = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=0&peek=1`);
+        contracted = contractedCardIds(r?.messages, { session: SESSION, bootTs: SEAT_BOOT_TS });
+      } catch { /* inbox unreadable: the fence holds — an explicit contract still wakes the seat */ }
+      list = own.filter(t => ownCardForInstance(t, { bootTs: SEAT_BOOT_TS, contractedIds: contracted }));
+      ignored = own.length - list.length;
+    }
+    // Say what was passed over in BOTH shapes: the seat that sees nothing must know there is
+    // nothing to fetch, and the seat holding a fresh card must not sweep the board for the rest.
+    const ignoredNote = ignored ? ` (${ignored} assignment(s) made before this seat instance started — old assignments stay on the board until a contract cites them)` : "";
+    if (!list.length) return { content: [{ type: "text", text: `${proj}: no cards assigned to ${SESSION} in doing/testing/todo${ignoredNote}` }] };
     // Re-attach the full card for each id in ONE request (hub honors a comma-separated card= list;
     // an older hub returns everything slim, which cardView still renders — notes just stay folded).
-    const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim&card=${encodeURIComponent(own.map(t => t.id).join(","))}`);
-    return { content: [{ type: "text", text: own.map(t => cardView(tasks || [], t.id, proj)).join("\n\n") }] };
+    const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim&card=${encodeURIComponent(list.map(t => t.id).join(","))}`);
+    return { content: [{ type: "text", text: list.map(t => cardView(tasks || [], t.id, proj)).join("\n\n") + ignoredNote }] };
   }
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim${card ? `&card=${encodeURIComponent(card)}` : ""}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
