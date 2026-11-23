@@ -1698,7 +1698,12 @@ async function resolveWakeCard(messages, { session }) {
   // by the monitoring doctrine (state not event — a machine that stops beating reads stale on the
   // hub, which IS the honest "unreachable" signal, not an error to alert on).
   if (machineConfig.healthHeartbeat === true && MACHINE_LABEL) {
-    const beat = () => api("/machines/health", { ...healthPayload(defaultOs, MACHINE_LABEL), project: PROJ }).catch(() => {});
+    // A throw while building the payload must never reach the process: an unhandled rejection
+    // here took a seat runner down on 0.18.131.
+    const beat = () => {
+      try { return api("/machines/health", { ...healthPayload(defaultOs, MACHINE_LABEL), project: PROJ }).catch(() => {}); }
+      catch { return Promise.resolve(); }
+    };
     beat();
     setInterval(beat, HEALTH_BEAT_MS).unref?.();
     log(`machine health heartbeat armed as ${MACHINE_LABEL} every ${Math.round(HEALTH_BEAT_MS / 1000)}s`);

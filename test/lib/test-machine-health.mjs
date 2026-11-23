@@ -1,6 +1,6 @@
 // #13920: the heartbeat payload from a fake os — pure arithmetic, no /proc, no shell-outs.
 import assert from "node:assert/strict";
-import { healthPayload, HEALTH_BEAT_MS, HEALTH_STALE_MS } from "../../lib/machine-health.mjs";
+import { healthPayload, defaultOs, HEALTH_BEAT_MS, HEALTH_STALE_MS } from "../../lib/machine-health.mjs";
 
 // netcup's shape per the operator: 16 cores, 62 GB. loadavg 5.5 over 16 cores = 34%.
 const GiB = 2 ** 30;
@@ -29,6 +29,13 @@ const blind = healthPayload({ cpus: () => [], loadavg: () => [NaN], totalmem: ()
 assert.equal(blind.cpuPct, null);
 assert.equal(blind.memUsed, null);
 assert.equal(blind.memTotal, null);
+
+// The runner calls it with no clock argument; that default path took a seat runner down on
+// 0.18.131 ("now is not a function"). The real os module and the default clock must work.
+const before = Date.now();
+const live = healthPayload(defaultOs, "netcup");
+assert.ok(live.ts >= before && live.ts <= Date.now(), "default clock stamps the current time");
+assert.ok(live.memTotal > 0 && Number.isFinite(live.cpuPct), "real os numbers come through");
 
 // The cadence contract: three beats fit inside the stale window, so one lost beat never reads stale.
 assert.ok(HEALTH_BEAT_MS * 3 <= HEALTH_STALE_MS && HEALTH_STALE_MS > HEALTH_BEAT_MS,
