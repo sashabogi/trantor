@@ -45,6 +45,7 @@ else if (args[0] === "describe-ui") process.stdout.write(JSON.stringify([{ role:
   { role: "Group", frame: { x: 0, y: 0, width: 390, height: 844 } },
   { role: "Group", frame: { x: 12, y: 22, width: 0, height: 0 } },
   { role: "Slider", role_description: "scroll bar", frame: { x: 380, y: 0, width: 10, height: 844 } },
+  { type: "Slider", role_description: "slider", AXLabel: "Vertical scroll bar, 1 page", frame: { x: 350, y: 116, width: 30, height: 633 } },
   { role: "Group", frame: { x: 8, y: 60, width: 100, height: 30 } },
   { AXLabel: "Full screen labeled row", role: "Group", frame: { x: 0, y: 0, width: 390, height: 844 } },
   { AXUniqueId: "empty-but-addressable", role: "Group", frame: { x: 12, y: 22, width: 0, height: 0 } },

@@ -100,7 +100,7 @@ function parseTree(raw) {
           if (role) element.role = String(role);
           elements.push({ ...element, _hasLabelOrId: Boolean(label || id), _scrollBarSlider:
             /slider/i.test(String(node.role ?? node.type ?? node.AXRole ?? ""))
-            && /scroll.?bar/i.test(String(node.role_description ?? node.roleDescription ?? node.AXLabel ?? node.label ?? "")) });
+            && /scroll.?bar/i.test([node.role_description, node.roleDescription, node.AXLabel, node.label].filter(Boolean).join(" ")) });
         }
       }
     }
