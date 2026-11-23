@@ -22,6 +22,11 @@ describe("BalanceStrip hub failures", () => {
     mockIPC((command, args) => {
       if (command === "machine_id") return "MacBook-Test";
       expect(command).toBe("hub_request");
+      // #13920: the footer also polls machine health on its own cadence — answer it here so the
+      // balances assertions below still see exactly their own calls.
+      // SAFETY: the footer's invokes only ever carry hub_request with a string path.
+      const { path } = args as { path: string };
+      if (path === "/machines/health") return { status: 200, body: JSON.stringify({ machines: [], staleAfterMs: 90_000 }) };
       expect(args).toMatchObject({ base: "http://127.0.0.1:4477", method: "GET", path: "/balances?machine=MacBook-Test" });
       return transport();
     });
@@ -104,10 +109,13 @@ describe("BalanceStrip remote hub", () => {
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.restoreAllMocks(); });
   const mount = () => act(async () => { root.render(<BalanceStrip client={new HubClient("https://hub.example.test")} />); });
+  // #13920: the machine-health poll rides the same transports; the balances assertions below
+  // assert ordering over THEIR OWN calls only.
+  const balanceCalls = () => calls.filter(c => c.path.startsWith("/balances"));
 
   it("reads only the app's own remote hub, with this machine's id", async () => {
     await mount();
-    expect(calls).toEqual([{ base: "https://hub.example.test", path: "/balances?machine=MacBook-Test" }]);
+    expect(balanceCalls()).toEqual([{ base: "https://hub.example.test", path: "/balances?machine=MacBook-Test" }]);
     expect(host.textContent).toContain("$12.3");
   });
 
@@ -115,7 +123,7 @@ describe("BalanceStrip remote hub", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     failBase.add("https://hub.example.test");
     await mount();
-    expect(calls).toEqual([
+    expect(balanceCalls()).toEqual([
       { base: "https://hub.example.test", path: "/balances?machine=MacBook-Test" },
       { base: "http://127.0.0.1:4477", path: "/balances?machine=MacBook-Test" },
     ]);

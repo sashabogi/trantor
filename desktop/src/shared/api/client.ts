@@ -281,6 +281,11 @@ export class HubClient {
     return this.request<BalancesReport>("GET", `/balances${q}`);
   }
 
+  /** #13920 — live CPU/memory per seat-hosting machine that opted into the health heartbeat. */
+  machinesHealth() {
+    return this.request<MachinesHealthReport>("GET", "/machines/health");
+  }
+
   /**
    * Messages addressed to `session`. peek=1 reads without advancing the delivery ledger: the app
    * is a viewer, and marking delivered on a glance would hide the message from the session's hooks.
@@ -390,6 +395,17 @@ export type BalanceEntry = {
   detail?: string;
 };
 export type BalancesReport = { ts: number; entries: BalanceEntry[]; lowCount: number; stale: boolean };
+
+/** #13920 — one machine's latest health beat. ts is the HUB's receive time (never the sender's
+ * clock), so staleness is a straight now-ts comparison against the hub's own window. */
+export type MachineHealthRow = {
+  machine: string;
+  cpuPct: number;   // 1-min loadavg / cores, as a percent — CAN exceed 100 when overloaded
+  memUsed: number;
+  memTotal: number;
+  ts: number;
+};
+export type MachinesHealthReport = { machines: MachineHealthRow[]; staleAfterMs: number };
 
 export type Handoff = { project: string; session: string; ts: number; trigger?: string; id?: string };
 export type FileClaim = { project: string; file: string; session: string; ts: number; agoSec: number };

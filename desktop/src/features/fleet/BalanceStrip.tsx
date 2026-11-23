@@ -8,6 +8,7 @@ import { RefreshCw } from "lucide-react";
 import { HubClient, type BalancesReport } from "../../shared/api/client";
 import { chipFrom, isStale, isZombie, sortRows, toneClass, type BalanceRow } from "./balanceChips";
 import { BrandMark } from "./BrandMark";
+import { MachineHealthRows, useMachinesHealth } from "./MachineHealth";
 import { UsagePopover } from "./UsagePopover";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
@@ -30,6 +31,9 @@ export function BalanceStrip({ client }: { client: HubClient }) {
   const [report, setReport] = useState<BalancesReport | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [spinning, setSpinning] = useState(false);
+  // #13920: machine CPU/memory rides the same footer on its own faster cadence (the runner beats
+  // every ~30s); its rows grey per-machine, never dimming with a balances failure.
+  const machines = useMachinesHealth(client);
   // The strip's chips open the Usage roster popover (same data, no second fetch).
   const [open, setOpen] = useState(false);
 
@@ -90,7 +94,9 @@ export function BalanceStrip({ client }: { client: HubClient }) {
   // Zombie rows (the hidden gemini ghost) stay out of the popover roster too.
   const roster = rows.filter(e => !isZombie(e, ts));
   const chips = sortRows(roster).map(e => chipFrom(e, { snapshotTs: ts })).filter((c): c is NonNullable<typeof c> => c != null);
-  if (!chips.length && failure === null) return null;
+  // Machine health rows keep the footer alive on their own: a machine reporting with no balance
+  // chips still shows (and the strip stays hidden when NEITHER side has anything to say).
+  if (!chips.length && failure === null && !(machines?.machines?.length)) return null;
 
   const dimmed = failure !== null || stale;
 
@@ -123,6 +129,9 @@ export function BalanceStrip({ client }: { client: HubClient }) {
           </button>
         ))}
       </div>
+      {/* #13920: per-machine CPU/memory sits beside the seat counts — greyed "stale" when a
+          machine stops beating, nothing at all when no machine reports. */}
+      <MachineHealthRows report={machines} />
       <button type="button" onClick={() => void refetch()} title="Re-query every provider now"
         className="shrink-0 text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
         <RefreshCw size={11} strokeWidth={1.75} className={spinning ? "animate-spin" : undefined} />
