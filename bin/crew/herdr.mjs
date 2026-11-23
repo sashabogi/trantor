@@ -43,9 +43,14 @@ export function splitPane(ctx, pane, direction, cwd = "", execute = herdrCall) {
 // is a layout question; process-info is the terminal question, and only a terminal hosts a session.
 export function paneAlive(ctx, pane) {
   if (!pane) return false;
-  const result = herdrCall(ctx, ["pane", "process-info", "--pane", pane]);
-  const parsed = parseJsonOutput(result.stdout);
-  return Boolean(result.ok && parsed && !parsed.error && parsed.result?.process_info);
+  return paneReadAlive(ctx, pane);
+}
+
+// Herdr can retain a layout row after its terminal has vanished. A readable pane is the
+// authoritative liveness signal shared by CLI callers; process-info can report stale metadata.
+export function paneReadAlive(ctx, pane) {
+  if (!pane) return false;
+  return herdrCall(ctx, ["pane", "read", pane, "--source", "recent-unwrapped"]).ok;
 }
 
 export function workspacePane(ctx, workspace, preferredCwd) {

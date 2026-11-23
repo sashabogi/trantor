@@ -169,7 +169,10 @@ function reattach(ctx, workspace, pane, id) {
     if (!started.ok) throw new Error(`trantor open: could not start the orchestrator in pane ${pane}`);
     reportOrchestrator(ctx, pane, id);
     console.error(`— orchestrator pane was empty: resumed session ${id} in herdr:${workspace || "?"}/${pane} —`);
-  } else console.error(`— orchestrator already hosted: reattached to herdr:${workspace || "?"}/${pane} —`);
+  } else {
+    reportOrchestrator(ctx, pane, id);
+    console.error(`— orchestrator already hosted: reattached to herdr:${workspace || "?"}/${pane} —`);
+  }
   console.log(`herdr:${workspace || "?"}/${pane}`);
   return true;
 }

@@ -344,6 +344,7 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
     let mut live_panes: Vec<String> = Vec::new();
     let mut in_flight_of: BTreeMap<String, u32> = BTreeMap::new();
     for (project, pane) in orch_projects_from_rows(&rows) {
+        if !herdr_pane_alive(&pane) { continue; }
         live_panes.push(pane.clone());
         let (status, sid) = herdr::agent_status_and_session(&pane);
         let sid = sid.or_else(|| orch_session_id_from_rows(&orch_rows, &project));
@@ -598,6 +599,18 @@ pub(crate) fn shell_stdout(bin: &str, args: &[&str]) -> String {
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default()
+}
+
+/// A pane row can outlive its terminal after a restore. `pane read` is the authoritative
+/// liveness probe: a failed read means the pane cannot receive a Wake, even if agent.list says idle.
+pub(crate) fn herdr_pane_alive(pane: &str) -> bool {
+    if pane.trim().is_empty() || pane.contains('\0') { return false; }
+    identity_env::command("herdr")
+        .args(["pane", "read", pane, "--source", "recent-unwrapped"])
+        .env("PATH", terminal_path())
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
 }
 
 #[tauri::command]

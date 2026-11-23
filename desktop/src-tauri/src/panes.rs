@@ -24,6 +24,9 @@ pub(crate) fn orchestrator_status(project: String) -> Result<String, String> {
         Some(p) => p,
         None => return Ok("none".into()),
     };
+    if !crate::local_sessions::herdr_pane_alive(&pane) {
+        return Ok("none".into());
+    }
     let out = identity_env::command("herdr")
         .args(["agent", "list"])
         .env("PATH", terminal_path())
