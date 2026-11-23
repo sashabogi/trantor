@@ -97,6 +97,8 @@ echo 'the long turn is still working and its presence must remain online past th
     TURN_DIR: work, ERRF: join(work, "err.txt"), TRANSCRIPT_DIR: work, RUNNER_ID: "drill",
     MODEL: "", STATE_SCHEMA_FILE: "", TURN_MAX_MS: 10000, TURN: 0, sid: "", inFollowUp: true,
     PRESENCE_MS: 150, MACHINE_LABEL: "", sessionCard: 13939,
+    // #13923: runTurn exports the seat-instance stamp into the turn shell.
+    BOOT_TS: Date.now(),
     TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     cutChain: [], cardTokens: 0, cardCommits: 0, afterTurn, saveWipLogged: record,
     CAPCFG: { cap: 0 }, capFreshTurn: 0,

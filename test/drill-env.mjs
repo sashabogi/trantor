@@ -17,6 +17,10 @@ export const DRILL_IDENTITY_VARS = [
   // A mode flag scrubbed for the same reason: a seat under Trantor State exports it and drills
   // inheriting it armed state mode in every spawned runner (#7759).
   "TRANTOR_STATE_ASSEMBLE",
+  // The seat-instance boot stamp is identity too (#13923): a drill spawning a runner or MCP server
+  // from inside a live seat would otherwise inherit that seat's start and fence assignments
+  // against a stamp that is not the drill's own.
+  "TRANTOR_SEAT_BOOT_TS",
   // The session KIND is identity too (#11577): a gate runner inside `claude -p` exports
   // CLAUDE_CODE_ENTRYPOINT=sdk-cli, and a drill inheriting it would see every sessionstart spawn
   // refuse to claim. Tests that exercise the print guard set it as a deliberate override.

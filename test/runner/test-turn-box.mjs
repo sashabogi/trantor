@@ -93,6 +93,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     // #7762: runTurn's telemetry row reads the module-scope sessionCard (0 = no card yet).
     sessionCard: 0,
+    // #13923: runTurn exports the seat-instance stamp into the turn shell.
+    BOOT_TS: Date.now(),
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
     cutChain: [],
     // #13474: runTurn feeds the burn counters and saves WIP at a cut; neither is under test here.

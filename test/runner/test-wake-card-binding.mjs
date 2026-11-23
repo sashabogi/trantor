@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 // trantor wake-policy drill, session/card-binding half (#7061, #7763, #7765, #7060, #6289) —
 // a wake names a card; these drills prove WHICH card the session binds to, live through the real
-// runner: the assigned one, never a done card cited in passing, never a message-card transcript,
-// and an armed seat says on every turn which path it took. Hermetic: mock hub + fake CLI.
-// #9832 part 4: split out of test-wake-policy.mjs (it grew past the runner's per-suite cap); the
-// shared mock harness is test/lib/wake-mock.mjs; turn-cost/cross-project stay in test-wake-policy.
+// runner: the assigned one, never a done card cited in passing, never a message-card transcript.
+// #9832 part 4: split out of test-wake-policy.mjs; shared harness test/lib/wake-mock.mjs.
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -100,7 +98,9 @@ console.log("\n## the bound card is the assigned one");
 // question it carried. Now the runner checks the board BEFORE binding and reroutes.
 console.log("\n## a message-card citation binds the seat's own card");
 {
-  const r = await drill([{ text: "#7700 is the transcript — answer the question inside it" }],
+  // #13923: the wake cites the real card too — a transcript carries the contract it transcribed,
+  // and under the instance fence only a card the instance was contracted for may be adopted.
+  const r = await drill([{ text: "#7700 is the transcript of the contract for #7701 — answer the question inside it" }],
     { waitMs: 5000, cards: MSGCARD_BOARD, tasks: Object.values(MSGCARD_BOARD) });
   ok("#7765: the wake still buys its turn — the question gets reached, not dropped", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
   ok("#7763: the turn is bound to the seat's REAL card, not the message-card",
