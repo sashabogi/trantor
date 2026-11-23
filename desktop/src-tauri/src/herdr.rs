@@ -19,6 +19,9 @@ pub enum PromptOutcome {
     NotReady,
     /// No lifecycle change was observed after the send (`agent_prompt_stalled`).
     Stalled,
+    /// The wait window closed without the agent reaching working/blocked (herdr code `timeout`,
+    /// #13913): the text and Enter were sent — the session just never picked them up.
+    TimedOut,
     /// Nothing herdr recognizes as an agent lives at the target (`agent_not_found`).
     NoAgent,
 }
@@ -55,13 +58,27 @@ fn request_within(req: &serde_json::Value, read_timeout: Duration) -> Result<Str
 
 /// Deliver operator text to the agent occupying `target` (a pane id like "w2:p8", or a
 /// live agent name). Text goes through verbatim — newlines stay newlines in the draft.
+/// herdr 0.9.5 sends the text plus Enter BEFORE reporting success, and `wait` holds the
+/// answer until the agent shows working/blocked activity (#13913): `Delivered` means herdr
+/// observed the pickup itself, `TimedOut` means the bytes landed but nobody took them yet.
 pub fn prompt(target: &str, text: &str) -> Result<PromptOutcome, String> {
-    let req = serde_json::json!({
+    map_prompt_response(&request(&prompt_request(target, text))?)
+}
+
+/// The bounded pickup window (#13913): herdr resolves it server-side, so the socket read
+/// budget only needs to outlive it, and a busy session answers `timeout` instead of hanging.
+const PROMPT_WAIT_TIMEOUT_MS: u64 = 10_000;
+
+fn prompt_request(target: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
         "id": "trantor:agent.prompt",
         "method": "agent.prompt",
-        "params": { "target": target, "text": text },
-    });
-    map_prompt_response(&request(&req)?)
+        "params": {
+            "target": target,
+            "text": text,
+            "wait": { "until": ["working", "blocked"], "timeout_ms": PROMPT_WAIT_TIMEOUT_MS },
+        },
+    })
 }
 
 /// Write raw bytes into `target`'s pty (#6094): the picker-answer path, where `agent.prompt`'s
@@ -261,6 +278,7 @@ fn map_prompt_response(raw: &str) -> Result<PromptOutcome, String> {
             "agent_blocked" => Ok(PromptOutcome::Blocked),
             "agent_not_ready" => Ok(PromptOutcome::NotReady),
             "agent_prompt_stalled" => Ok(PromptOutcome::Stalled),
+            "timeout" => Ok(PromptOutcome::TimedOut),
             "agent_not_found" => Ok(PromptOutcome::NoAgent),
             _ => Err(err
                 .get("message")
@@ -288,6 +306,9 @@ mod tests {
     const NOT_FOUND: &str = r#"{"id":"probe2","error":{"code":"agent_not_found","message":"agent target nonexistent not found"}}"#;
     const NOT_READY: &str = r#"{"error":{"code":"agent_not_ready","message":"agent drill is blocked during startup and is not ready for prompts"},"id":"cli:agent:start"}"#;
     const STALLED: &str = r#"{"error":{"code":"agent_prompt_stalled","message":"prompt produced no lifecycle change"},"id":"trantor:agent.prompt"}"#;
+    // #13913: a busy session — herdr sent text plus Enter, then the bounded wait closed with
+    // no working/blocked activity. Delivery truth stops at the transcript scrape this replaces.
+    const TIMED_OUT: &str = r#"{"error":{"code":"timeout","message":"prompt wait timed out"},"id":"trantor:agent.prompt"}"#;
 
     #[test]
     fn maps_the_five_real_outcomes() {
@@ -296,6 +317,19 @@ mod tests {
         assert!(matches!(map_prompt_response(NOT_FOUND), Ok(PromptOutcome::NoAgent)));
         assert!(matches!(map_prompt_response(NOT_READY), Ok(PromptOutcome::NotReady)));
         assert!(matches!(map_prompt_response(STALLED), Ok(PromptOutcome::Stalled)));
+        assert!(matches!(map_prompt_response(TIMED_OUT), Ok(PromptOutcome::TimedOut)));
+    }
+
+    #[test]
+    fn the_prompt_request_waits_for_pickup_with_a_bounded_timeout() {
+        let req = prompt_request("w2:p8", "run the drills");
+        assert_eq!(req["params"]["target"], "w2:p8");
+        assert_eq!(req["params"]["text"], "run the drills");
+        assert_eq!(req["params"]["wait"]["until"], serde_json::json!(["working", "blocked"]));
+        assert_eq!(req["params"]["wait"]["timeout_ms"], serde_json::json!(PROMPT_WAIT_TIMEOUT_MS));
+        // The socket's own read budget must outlive the server-side wait, or a busy session
+        // would read as a socket error instead of herdr's own `timeout` answer.
+        assert!(Duration::from_secs(30).as_millis() as u64 > PROMPT_WAIT_TIMEOUT_MS);
     }
 
     // `pane.send_text` over the real socket: the success shape, and a `pane_not_found` error that

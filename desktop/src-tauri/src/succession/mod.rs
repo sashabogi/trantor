@@ -802,8 +802,10 @@ pub(crate) fn unix_secs() -> u64 {
         .unwrap_or_default()
 }
 
-/// The retry decision for one boot-prompt attempt (#6184), pure. Delivered and Blocked stop,
-/// NotReady/NoAgent/Err retry, Stalled gets exactly one retry (the count lives with the caller).
+/// The retry decision for one boot-prompt attempt (#6184), pure. Delivered, TimedOut and
+/// Blocked stop, NotReady/NoAgent/Err retry, Stalled gets exactly one retry (the count lives
+/// with the caller). TimedOut stops (#13913): herdr already sent the text and Enter, so a
+/// retry would type the kickoff twice.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum BootPromptDecision {
     Retry,
@@ -815,7 +817,9 @@ pub(crate) fn boot_prompt_decision(
 ) -> BootPromptDecision {
     match outcome {
         Ok(o) => match o {
-            herdr::PromptOutcome::Delivered | herdr::PromptOutcome::Blocked => BootPromptDecision::Stop,
+            herdr::PromptOutcome::Delivered
+            | herdr::PromptOutcome::TimedOut
+            | herdr::PromptOutcome::Blocked => BootPromptDecision::Stop,
             herdr::PromptOutcome::NotReady | herdr::PromptOutcome::NoAgent => BootPromptDecision::Retry,
             herdr::PromptOutcome::Stalled => {
                 if stalled_retries < 1 {
@@ -834,6 +838,7 @@ pub(crate) fn boot_prompt_decision(
 pub(crate) fn kickoff_outcome_label(outcome: &herdr::PromptOutcome) -> &'static str {
     match outcome {
         herdr::PromptOutcome::Delivered => "prompt delivered — successor is recapping",
+        herdr::PromptOutcome::TimedOut => "sent, not yet picked up — successor will take it at the boundary",
         herdr::PromptOutcome::Blocked => "agent blocked at a dialog — answer it in the pane",
         herdr::PromptOutcome::NotReady => "agent still starting — recap will wait",
         herdr::PromptOutcome::Stalled => "no lifecycle change observed — recap may not land",
