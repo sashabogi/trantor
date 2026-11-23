@@ -35,5 +35,8 @@ jobs:
       - name: Desktop typecheck + build
         run: pnpm -C desktop run build
 
+      - name: Desktop release build gate
+        run: node bin/desktop-build-gate.mjs
+
       - name: Cargo test (desktop/src-tauri)
         run: node bin/heavy-gate.mjs -- cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml

@@ -64,6 +64,7 @@ function discover() {
     }
   }
   suites.push(
+    { rel: "desktop-build-gate", lane: "gate", cmd: ["node", ["bin/desktop-build-gate.mjs"]], timeoutMs: 900_000 },
     { rel: "desktop-vitest", lane: "gate", cmd: ["npm", ["--prefix", "desktop", "run", "test", "--silent"]] },
     { rel: "routing-py", lane: "gate", cmd: ["python3", ["engine/test-routing.py"]] },
   );
@@ -127,7 +128,7 @@ function runSuite(s) {
     const timer = setTimeout(() => {
       timedOut = true;
       try { process.kill(-kid.pid, "SIGKILL"); } catch { try { kid.kill("SIGKILL"); } catch {} }
-    }, TIMEOUT_MS);
+    }, s.timeoutMs || TIMEOUT_MS);
     kid.stdout.on("data", d => (out += d));
     kid.stderr.on("data", d => (out += d));
     kid.on("close", (code, signal) => {
