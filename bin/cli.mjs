@@ -43,6 +43,7 @@ switch (cmd) {
   case "down":    runCrew(); break;
   case "swap":    runCrew(); break;
   case "prune":   runCrew(); break;
+  case "restore": runCrew(); break;
   case "hub": {
     const sub = args[0];
     if (sub === "timeouts") { args.splice(0, 1); run("bin/hub-timeouts.mjs", process.execPath); break; }
@@ -259,6 +260,7 @@ switch (cmd) {
   trantor sync        realign a seat branch with main from the receipts: sync [<seat>] [--dry-run] — refuses and names unharvested commits
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor prune       drop dead crew-window tracking rows (ghost workspaces/panes) without spawning anything
+  trantor restore     after a reboot, reopen only the orchestrators you opted in: restore [--dry-run] · restore enable|disable <project>
   trantor ui          open the live dashboard (board + flow views)
   trantor pair        pair a phone: mint a trantor://enroll link for the companion app — [--role owner] [--sim] [--json]
   trantor app         the DESKTOP app: status | install | update — pulls the latest DMG from GitHub Releases
