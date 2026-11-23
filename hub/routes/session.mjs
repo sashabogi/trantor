@@ -217,10 +217,23 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     }
   }
 
-  // #12140: the desktop publishes the seats its Mac can spawn (from `trantor provider status
-  // --json`) at boot and every 10 minutes. Memory-only like the chat mirror — a restarted hub
-  // has no roster until the desktop republishes.
-  const roster = new Map();     // machine -> { machine, updatedAt, seats }
+// #12140: the desktop publishes the seats its Mac can spawn (from `trantor provider status
+// --json`) at boot and every 10 minutes. Memory-only like the chat mirror — a restarted hub
+// has no roster until the desktop republishes.
+const roster = new Map();     // machine -> { machine, updatedAt, seats }
+
+// #13920: machine health heartbeat — the crew-runner on each seat-hosting machine POSTs its
+// loadavg/memory every ~30s (config healthHeartbeat:true). Memory-only like the roster; the ts is
+// the hub's RECEIVE time, never the sender's clock, so a skewed machine clock cannot poison the
+// staleness math. Rows older than a day are pruned: a decommissioned machine must not read
+// "stale" forever. State, not events — nothing here is appended to the audit log.
+const machinesHealth = new Map();   // machine -> { machine, cpuPct, memUsed, memTotal, ts }
+const HEALTH_STALE_MS = Number(process.env.RELAY_HEALTH_STALE_MS || 90_000);
+const HEALTH_KEEP_MS = 24 * 60 * 60 * 1000;
+function pruneMachinesHealth() {
+  const cut = now() - HEALTH_KEEP_MS;
+  for (const [m, h] of machinesHealth) if (h.ts < cut) machinesHealth.delete(m);
+}
 
   async function route({ req, res, q, P, auth, ctx }) {
     const isChat = P === "/session/chat";
@@ -230,7 +243,8 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     const isAnswer = P === "/session/answer";
     const isCrewCommand = P === "/crew/command";
     const isCrewRoster = P === "/crew/roster";
-    if (!isChat && !isPrompts && !isPrompt && !isAttachment && !isAnswer && !isCrewCommand && !isCrewRoster) return false;
+    const isMachinesHealth = P === "/machines/health";
+    if (!isChat && !isPrompts && !isPrompt && !isAttachment && !isAnswer && !isCrewCommand && !isCrewRoster && !isMachinesHealth) return false;
     const { body, json, canon, scopeAllows } = ctx;
 
     // #12137: the phone's answer to an AskUserQuestion joins the SAME queue as a plain prompt,
@@ -344,6 +358,33 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
 
     if (req.method === "GET" && isCrewRoster) {
       return json(res, 200, { machines: [...roster.values()] });
+    }
+
+    // #13920: a seat-signed POST (write on its own project, machine label from the body — the
+    // signer is a seat like "glm:trantor", not a machine, so the roster's signer-keying cannot
+    // apply). The label is held to the machineLabel grammar and every number is validated; the
+    // payload ts is ignored in favour of the hub's receive time.
+    if (req.method === "POST" && isMachinesHealth) {
+      const b = await body(req);
+      const machine = String(b.machine || "");
+      if (!/^[a-z0-9-]{1,24}$/.test(machine)) return json(res, 400, { error: "machine must match ^[a-z0-9-]{1,24}$" });
+      const cpuPct = Number(b.cpuPct);
+      if (!Number.isFinite(cpuPct) || cpuPct < 0 || cpuPct > 100000) return json(res, 400, { error: "cpuPct must be a finite percent (load can exceed 100)" });
+      const memUsed = Number(b.memUsed);
+      const memTotal = Number(b.memTotal);
+      if (!Number.isFinite(memUsed) || !Number.isFinite(memTotal) || memUsed < 0 || memTotal <= 0 || memUsed > memTotal) {
+        return json(res, 400, { error: "memUsed/memTotal must be bytes with used <= total" });
+      }
+      machinesHealth.set(machine, { machine, cpuPct: Math.round(cpuPct), memUsed: Math.round(memUsed), memTotal: Math.round(memTotal), ts: now() });
+      return json(res, 200, { ok: true, machine });
+    }
+
+    if (req.method === "GET" && isMachinesHealth) {
+      pruneMachinesHealth();
+      const machines = [...machinesHealth.values()]
+        .map(h => ({ ...h, stale: now() - h.ts > HEALTH_STALE_MS }))
+        .sort((a, b) => a.machine.localeCompare(b.machine));
+      return json(res, 200, { machines, staleAfterMs: HEALTH_STALE_MS });
     }
 
     if (req.method === "POST" && isChat) {

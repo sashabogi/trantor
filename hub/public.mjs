@@ -4,7 +4,8 @@ import { HDR } from "../lib/identity.mjs";
 const ALLOWED = new Set([
   ...["/health", "/projects", "/catchup", "/tasks", "/card", "/events", "/stream",
     "/inbox", "/poll", "/recent", "/peers", "/holds", "/verify-gates", "/proposals",
-    "/balances", "/economics", "/session/chat", "/session/prompt", "/crew/roster", "/_op"]
+    "/balances", "/economics", "/session/chat", "/session/prompt", "/crew/roster",
+    "/machines/health", "/_op"]
     .map(path => `GET ${path}`),
   ...["/enroll", "/task/update", "/task/checklist-toggle", "/send", "/delivered",
     "/verify-gate", "/hold/decide", "/proposal/decide", "/session/prompt", "/session/answer",
