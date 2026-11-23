@@ -2,7 +2,7 @@
 // Wraps lib/signed-fetch.mjs (#3916) with hub URL resolution per project (§12.1), session identity
 // (the same derivation mcp.mjs uses) and the Ed25519 keypair. FAIL-OPEN IS A CONTRACT (acceptance §9
 // #10): getJSON/signedPost never throw; no key means unsigned, and only the hub knows its RELAY_AUTH policy.
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId, resolveHub } from "../../lib/project.mjs";
@@ -11,6 +11,22 @@ import { sfetchJson } from "../../lib/signed-fetch.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 1500;
 export const WRITE_TIMEOUT_MS = 8000;   // #7755: writes get their own budget above the read default
+
+function recordAmbiguousTimeout(pathOrUrl, op, elapsedMs, project) {
+  const busDir = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
+  const file = join(busDir, "hub-timeouts.jsonl");
+  const row = {
+    ts: new Date().toISOString(),
+    route: String(pathOrUrl),
+    op,
+    elapsedMs,
+    hubUrl: relayUrl(project),
+  };
+  try {
+    mkdirSync(busDir, { recursive: true });
+    appendFileSync(file, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+  } catch { /* timeout reporting must never change the fail-open result */ }
+}
 
 // Hub URL, PER-PROJECT (TDD §12.1): env RELAY_URL, then config `hubs[project]`, then the legacy global
 // `url`, then the local default. Never throws, keeping hooks fail-open.
@@ -180,6 +196,7 @@ export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, ses
 // one GET /_op — committed returns the stored body as success, rejected returns the stored refusal,
 // unknown reads "ambiguous: timed out, outcome unknown". Never a bare failure for a write that landed.
 export async function signedPost(pathOrUrl, payload, { timeoutMs = WRITE_TIMEOUT_MS, session, instance, project } = {}) {
+  const startedAt = Date.now();
   const proj = projectOf(project, payload, pathOrUrl);
   const sess = session || sessionFor(proj);
   const durable = loadIdentity(sess);
@@ -193,6 +210,7 @@ export async function signedPost(pathOrUrl, payload, { timeoutMs = WRITE_TIMEOUT
     const st = q.ok ? q.json?.status : "unknown";
     if (st === "committed") return { ok: true, status: q.json.code || 200, json: q.json.body, resolved: "committed" };
     if (st === "rejected") return { ok: false, status: q.json.code || 400, json: q.json.body, resolved: "rejected" };
+    recordAmbiguousTimeout(pathOrUrl, op, Date.now() - startedAt, proj);
     return { ...f, ambiguous: true, reason: "ambiguous: timed out, outcome unknown" };
   };
   try {
