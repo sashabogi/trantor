@@ -28,6 +28,7 @@ for (const driver of ["opencode", "deepseek", "openrouter"]) {
   assert.ok(argv.length > 0 && argv[argv.indexOf("--resume") + 1] === base.sessionId);
 }
 assert.ok(source.includes("next:  `opencode run --dir {DIR} -s {SID}"));
+assert.ok(source.includes('driver: cli.pinned ? "opencode" : DRIVER'), "provider labels use their canonical opencode driver");
 assert.deepEqual(runnerResumeArgv({ ...base, driver: "dsh" }), [], "dsh has no resumable headless session");
 assert.deepEqual(runnerResumeArgv({ ...base, sessionId: "" }), [], "a fresh or swapped runner reports no stale session");
 assert.deepEqual(runnerResumeArgv({ ...base, dir: "/work/it's" }), [], "an apostrophe rejects only the resume command");

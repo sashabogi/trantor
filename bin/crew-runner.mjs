@@ -259,7 +259,7 @@ function herdrAgent(state) {
       .filter(c => c.length >= 4 && c[0] === PROJ && c[1] === "herdr" && c[2] === PERSONA)
       .pop();
     if (!row || !row[3]) return;
-    const resumeArgv = runnerResumeArgv({ agent: AGENT, driver: DRIVER, persona: PERSONA, dir: DIR,
+    const resumeArgv = runnerResumeArgv({ agent: AGENT, driver: cli.pinned ? "opencode" : DRIVER, persona: PERSONA, dir: DIR,
       runnerPath: join(import.meta.dirname, "crew-runner.mjs"), model: MODEL, effort: EFFORT,
       project: PROJ, hub: HUB, sessionId: sid });
     const args = herdrReportArgs({ pane: row[3], agent: AGENT, state, sessionId: sid, resumeArgv });
