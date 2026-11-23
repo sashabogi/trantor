@@ -202,22 +202,56 @@ pub(crate) async fn run_cli_json(args: &[&str]) -> Result<String, String> {
     run_cli_json_at(args, None).await
 }
 
+fn cli_failure_trace(command: &str, code: Option<i32>, stderr: &str) -> String {
+    let exit = code.map_or_else(|| "not-spawned".to_string(), |code| code.to_string());
+    format!("cli FAILED command={command} exit={exit} stderr={stderr:?}")
+}
+
+fn trace_cli_failure(command: &str, code: Option<i32>, stderr: &str) {
+    crate::changes::trace(cli_failure_trace(command, code, stderr));
+}
+
+fn cli_error_reason(command: &str, code: Option<i32>, stdout: &str, stderr: &str) -> String {
+    let detail = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
+    if !detail.is_empty() {
+        return detail.to_string();
+    }
+    let exit = code.map_or_else(|| "not spawned".to_string(), |code| format!("exited {code}"));
+    format!("{command} {exit} without an error message")
+}
+
 pub(crate) async fn run_cli_json_at(args: &[&str], project: Option<&str>) -> Result<String, String> {
+    let command = trantor_cli::shell_command(args);
     let mut cmd = trantor_cli::async_command();
     if let Some(project) = project {
-        let dir = project_dir(project).ok_or_else(|| format!("No local checkout for {project}"))?;
+        let dir = match project_dir(project) {
+            Some(dir) => dir,
+            None => {
+                let error = format!("No local checkout for {project}");
+                trace_cli_failure(&command, None, &error);
+                return Err(error);
+            }
+        };
         cmd.current_dir(&dir).env("PWD", &dir).env("RELAY_PROJECT", project);
     }
     cmd.args(args);
-    let out = cmd
-        .output()
-        .await
-        .map_err(|e| format!("{}: {e}", args.join(" ")))?;
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if text.is_empty() {
-        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    let out = match cmd.output().await {
+        Ok(out) => out,
+        Err(error) => {
+            let error = error.to_string();
+            trace_cli_failure(&command, None, &error);
+            return Err(cli_error_reason(&command, None, "", &error));
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    if !out.status.success() || stdout.is_empty() {
+        trace_cli_failure(&command, out.status.code(), &stderr);
     }
-    Ok(text)
+    if stdout.is_empty() {
+        return Err(cli_error_reason(&command, out.status.code(), "", &stderr));
+    }
+    Ok(stdout)
 }
 
 /// Run the EXISTING doctor engine and hand back its JSON.
@@ -269,6 +303,34 @@ mod cli_compatibility_tests {
         assert!(reason.contains("npm i -g trantor@0.18.47"), "{reason}");
         assert!(cli_compatibility(Some("0.18.47")).compatible);
         assert!(cli_compatibility(Some("0.19.0")).compatible);
+    }
+
+    #[test]
+    fn failed_cli_trace_preserves_the_command_exit_and_exact_stderr() {
+        assert_eq!(
+            cli_failure_trace("'node' '/opt/trantor/bin/cli.mjs' 'up' 'kimi' '--json'", Some(1), "auth failed\nrun kimi login\n"),
+            "cli FAILED command='node' '/opt/trantor/bin/cli.mjs' 'up' 'kimi' '--json' exit=1 stderr=\"auth failed\\nrun kimi login\\n\""
+        );
+        assert_eq!(
+            cli_failure_trace("'trantor' 'up' 'kimi'", None, "spawn failed"),
+            "cli FAILED command='trantor' 'up' 'kimi' exit=not-spawned stderr=\"spawn failed\""
+        );
+    }
+
+    #[test]
+    fn failed_cli_reason_prefers_stderr_and_never_returns_blank() {
+        assert_eq!(
+            cli_error_reason("trantor up kimi", Some(1), "diagnostic stdout", "kimi login required\n"),
+            "kimi login required"
+        );
+        assert_eq!(
+            cli_error_reason("trantor up kimi", Some(1), "", ""),
+            "trantor up kimi exited 1 without an error message"
+        );
+        assert_eq!(
+            cli_error_reason("trantor up kimi", None, "", ""),
+            "trantor up kimi not spawned without an error message"
+        );
     }
 }
 

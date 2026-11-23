@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { ChevronDown } from "lucide-react";
 import { SeatTab } from "./SeatTab";
 import { isStaleOffline, type PaneTarget } from "./paneTargets";
-import { availableAgent, balanceFor, canStart, crewApi, parkReason, quotaLabel, type CrewAction, type CrewApi, type CrewCatalog, type SeatWhy } from "./crewControlApi";
+import { availableAgent, balanceFor, canStart, crewApi, parkReason, quotaLabel, startFailureReason, type CrewAction, type CrewApi, type CrewCatalog, type SeatWhy } from "./crewControlApi";
 
 // each check is a node CLI spawn per seat tab; 3s across six tabs kept the machine busy
 export const SEAT_WHY_POLL_MS = 15_000;
@@ -65,7 +65,13 @@ function OfflineSeats({ project, targets, catalog, api, onSelect, onChanged, rep
     try {
       const launch = catalog?.agents.find(a => a.id === seat)?.launch ?? seat;
       const result = await api.action(project, "up", launch);
-      if (mounted.current) report(`${seat} · ${result.ok ? "Started" : result.reason ?? "Start failed"}`, !result.ok);
+      if (result.ok) {
+        if (mounted.current) report(`${seat} · Started`);
+      } else {
+        let latest: SeatWhy | null = null;
+        try { latest = await api.why(project, seat); } catch { /* the CLI's reason still reaches the tab */ }
+        if (mounted.current) report(`${seat} · ${startFailureReason(seat, result.reason, latest)}`, true);
+      }
     } catch (e) {
       if (mounted.current) report(`${seat} · ${String(e)}`, true);
     } finally {
@@ -102,7 +108,7 @@ export function CrewControls({ project, targets, selected, onSelect, onChanged, 
   const closeAdd = useCallback(() => setAdding(false), []);
   const report: Report = useCallback((text, failed = false, busy = false) => setNotice({ text, failed, busy }), []);
   useEffect(() => {
-    if (!notice.text || notice.busy) return;
+    if (!notice.text || notice.busy || notice.failed) return;
     const timer = setTimeout(() => setNotice({ text: "", failed: false, busy: false }), 5000);
     return () => clearTimeout(timer);
   }, [notice]);
@@ -185,17 +191,23 @@ function CrewSeatTab({ project, target, active, onSelect, catalog, api, onChange
     generation.current += 1;
     setBusy(true); setMenu(false);
     report(`${seat} · ${command === "up" ? "Starting…" : command === "down" ? "Stopping…" : "Swapping…"}`, false, true);
+    let failure: string | null = null;
     try {
       const launch = catalog?.agents.find(a => a.id === seat)?.launch ?? seat;
       const result = await api.action(project, command, command === "up" ? launch : seat, replacement);
-      if (!mounted.current) return;
-      report(`${seat} · ${result.ok ? command === "up" ? "Started" : command === "down" ? "Stopped" : `Swapped to ${result.to}` : result.reason ?? `${command} failed`}`, !result.ok);
-    } catch (e) { if (mounted.current) { report(`${seat} · ${String(e)}`, true); } }
+      if (result.ok) {
+        if (mounted.current) report(`${seat} · ${command === "up" ? "Started" : command === "down" ? "Stopped" : `Swapped to ${result.to}`}`);
+      } else failure = result.reason ?? `${command} failed`;
+    } catch (e) { failure = String(e); }
     finally {
+      let latest: SeatWhy | null = null;
       try {
-        const latest = await api.why(project, seat);
+        latest = await api.why(project, seat);
         if (mounted.current) { setWhy(latest); setError(""); }
       } catch (e) { if (mounted.current) { setWhy(null); setError(String(e)); } }
+      if (failure !== null && mounted.current) {
+        report(`${seat} · ${command === "up" ? startFailureReason(seat, failure, latest) : failure}`, true);
+      }
       locked.current = false;
       if (mounted.current) { setBusy(false); onChanged(); }
     }

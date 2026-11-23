@@ -33,6 +33,13 @@ export function createCrewApi(run: CliRunner = runCliJson) {
 export type CrewApi = ReturnType<typeof createCrewApi>;
 export const crewApi = createCrewApi();
 export const canStart = (state: string) => state === "parked" || state === "no-runner" || state.startsWith("dead-");
+export function startFailureReason(seat: string, reason: string | undefined, why?: SeatWhy | null) {
+  if (why?.state === "dead-auth") {
+    return seat === "kimi" ? "kimi isn't signed in: run kimi login" : `${seat} isn't signed in: check its provider login`;
+  }
+  if (why?.state === "dead-quota") return `${seat} has no usable provider quota: swap it or restore its quota`;
+  return reason?.trim() || `${seat} did not start and the CLI gave no reason`;
+}
 export function balanceFor(agent: AgentStatus, balances: Balance[]) {
   const provider = agent.launch.split(":")[1]?.split("/")[0] ?? agent.id;
   return balances.find(b => b.provider === provider || (provider === "zai-coding-plan" && b.provider === "zai"));

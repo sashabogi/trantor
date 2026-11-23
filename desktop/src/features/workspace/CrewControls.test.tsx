@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CrewControls, SEAT_WHY_POLL_MS } from "./CrewControls";
 import { OFFLINE_FOLD_MS, type PaneTarget } from "./paneTargets";
-import { availableAgent, quotaLabel, createCrewApi, type CrewApi, type CrewCatalog, type CrewResult, type SeatWhy } from "./crewControlApi";
+import { availableAgent, quotaLabel, createCrewApi, startFailureReason, type CrewApi, type CrewCatalog, type CrewResult, type SeatWhy } from "./crewControlApi";
 
 // SAFETY: React reads this test-only flag from globalThis.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -103,6 +103,30 @@ describe("Workspace crew controls", () => {
     await mount(api); await click("glm actions"); await click("Stop");
     expect(host.textContent).toContain("CLI missing");
     expect(host.querySelector<HTMLButtonElement>('button[aria-label="glm actions"]')?.disabled).toBe(false);
+  });
+  it("keeps a plain auth failure on the seat tab instead of clearing it after five seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = fakeApi("no-runner");
+      api.why = vi.fn().mockResolvedValueOnce(state("no-runner")).mockResolvedValue(state("dead-auth"));
+      api.action = vi.fn(async () => ({ ok: false, action: "up", seat: "kimi", reason: "CREW INCOMPLETE" }));
+      await act(async () => root.render(<CrewControls project="trantor" targets={[target("kimi")]} onSelect={vi.fn()} api={api} onChanged={vi.fn()} />));
+      await click("kimi actions"); await click("Start");
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe("kimi · kimi isn't signed in: run kimi login");
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(host.querySelector('[role="alert"]')?.textContent).toBe("kimi · kimi isn't signed in: run kimi login");
+    } finally { vi.useRealTimers(); }
+  });
+  it("shows the same plain start failure from the folded offline menu", async () => {
+    const api = fakeApi("dead-auth");
+    api.action = vi.fn(async () => ({ ok: false, action: "up", seat: "kimi", reason: "CREW INCOMPLETE" }));
+    await act(async () => root.render(<CrewControls project="trantor" targets={[staleTarget("kimi")]} onSelect={vi.fn()} api={api} onChanged={vi.fn()} />));
+    await click("+1 offline"); await click("Start kimi");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("kimi · kimi isn't signed in: run kimi login");
+  });
+  it("keeps non-auth CLI reasons and supplies one when the CLI is silent", () => {
+    expect(startFailureReason("glm", "herdr workspace is unavailable", state("no-runner"))).toBe("herdr workspace is unavailable");
+    expect(startFailureReason("glm", "", state("no-runner"))).toBe("glm did not start and the CLI gave no reason");
   });
   it("offers a seat when the crew is empty without starting it until Start is clicked", async () => {
     const api = fakeApi("no-runner");
