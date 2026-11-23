@@ -1943,7 +1943,13 @@ async function resolveWakeCard(messages, { session }) {
         savePending([], pendingBcast);
         return;
       }
-      if (aligned.parked) log(`preserved unharvested work at ${aligned.parked} before aligning to ${base}`);
+      if (aligned.parked) {
+        const notice = `saved unharvested seat commits at ${aligned.parked} before aligning #${card} to ${base}`;
+        log(notice);
+        const owed = assigners.map(a => a.from).filter(f => f && f !== SESSION);
+        for (const to of (owed.length ? owed : ["all"]))
+          await api("/send", { from: SESSION, to, text: notice, project: PROJ, kind: "alert" }).catch(() => {});
+      }
     }
     const baseText = base ? `\n${baseLine(base)}\n` : "";
     // #6289: the session SHAPE (fresh vs resume) reads the served contract's raw citation — a wake

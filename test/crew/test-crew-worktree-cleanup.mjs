@@ -106,7 +106,7 @@ try {
       third.created === true && git(["rev-parse", "HEAD"], third.dir) === mainSha);
   }
 
-  console.log("\ncontract alignment refuses to reset over unharvested commits:");
+  console.log("\ncontract alignment parks unharvested commits before advancing:");
   {
     const home = join(root, "home-align");
     const receiptsRoot = join(root, "receipts");
@@ -136,10 +136,15 @@ try {
     const nextBase = git(["rev-parse", "HEAD"], repo);
 
     const aligned = alignSeatWorktree({ dir: wt.dir, project: "proj", agent: "codex", base: nextBase, receiptsRoot });
-    ok("alignment refuses and names the unharvested commit", !aligned.ok && aligned.reason.includes(continuedSha.slice(0, 7)));
-    ok("the seat branch remains at its unharvested commit", git(["rev-parse", "HEAD"], wt.dir) === continuedSha
-      && git(["rev-parse", "refs/heads/seat/codex"], wt.dir) === continuedSha);
-    ok("the refused alignment leaves the next base untouched", git(["rev-parse", "HEAD"], wt.dir) !== nextBase);
+    ok("alignment parks unharvested commits and advances to the new base", aligned.ok && aligned.to === nextBase
+      && aligned.parked.includes(`harvest/${continuedSha.slice(0, 7)}`), JSON.stringify(aligned));
+    const parkedRefs = git(["for-each-ref", "--format=%(refname)", "refs/heads/harvest"], wt.dir).split("\n").filter(Boolean);
+    ok("saved refs retain every unharvested commit", parkedRefs.length === 2
+      && parkedRefs.some(ref => git(["rev-parse", ref], wt.dir) === continuedSha)
+      && parkedRefs.some(ref => git(["rev-parse", ref], wt.dir) === seatSha), parkedRefs.join(", "));
+    const repeat = alignSeatWorktree({ dir: wt.dir, project: "proj", agent: "codex", base: nextBase, receiptsRoot });
+    ok("re-aligning is idempotent and does not duplicate saved refs", repeat.ok && repeat.parked === ""
+      && git(["for-each-ref", "--format=%(refname)", "refs/heads/harvest"], wt.dir).split("\n").filter(Boolean).length === 2);
   }
 
   // ---- down() removes worktrees via the seam ----
