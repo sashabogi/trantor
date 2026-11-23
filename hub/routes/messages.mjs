@@ -34,6 +34,12 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       // it (#6134). Stored only when false — absent means wake, so every older client is unchanged.
       const wake = b.wake === false ? { wake: false } : {};
       const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80), ...(re ? { re } : {}), ...(kind ? { kind } : {}), ...wake };
+      const peer = state.peers[msg.from];
+      if (msg.to === "all" && msg.kind === "status" && peer?.status === "crew member booting" && /^[A-Za-z0-9_.-]+ reporting — ready for a contract\b/.test(msg.text.trim())) {
+        peer.status = "idle";
+        peer.phase = "idle";
+        peer.phaseSince = msg.ts;
+      }
       state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
       markDirty(); pushToStreams(msg);               // <-- instant push to live watchers
       // Mirror onto the unified log. `refs` = the card ids this message cites (#3701), which is what
