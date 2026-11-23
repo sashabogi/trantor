@@ -13,7 +13,7 @@ import { addChips, formatBytes, makeChip, removeChip, serializeForSend, type Att
 import { canSendDraft, composerDraftApi, draftSlots, emptyDraft, flushSaves, isEmptyDraft, nextChipId, scheduleSave, type ComposerDraft } from "./composerDraft";
 import { clampComposerPx, growComposerPx, loadComposerHeight, maxComposerPx, minComposerPx, saveComposerHeight } from "./composerHeight";
 import { FONT_STEPS, type FontStep } from "./prefs";
-import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, normalizeAttachments, receiptFor, type ContextGauge, type OpenQuestion, type PendingSend } from "./streaming";
+import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, normalizeAttachments, receiptFor, type ContextGauge, type OpenQuestion, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
@@ -320,8 +320,8 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   model: string;
   modelSource: Provenance;
   working: boolean;
-  /** The transcript's user turns, for delivery receipts (#5504): a send is only DELIVERED once
-   *  one of these contains it — the transcript is the sole truth about arrival. */
+  /** The transcript's user turns (#13913): display only — they clear a "sent, not yet picked
+   *  up" chip when its echo renders. Delivery truth is herdr's own answer, never a row here. */
   userTexts: string[];
   /** The context window as the transcript reports it (#5508) — the gauge beside the dials. */
   context: ContextGauge;
@@ -613,14 +613,18 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   }, [attach]);
 
   // #6250: `to` defaults to the selection, but a RESEND must name the pending's own pane — the
-  // pending, not the selection, owns where its words go. Slash commands and fresh sends have no
-  // pending and take the default.
-  const line = (text: string, to: string | null = target) =>
-    invoke("pane_send", { target: to, text }).catch(e => setError(
-      // #6094 — pane_send's own "answer it there (Terminal tray)" predates the question card and
-      // now points at the wrong place: the ask is rendered right above this composer.
-      blockedAsk ? `The agent is asking a question above — answer it there: "${blockedAsk.questions[0]?.question ?? ""}"` : String(e),
-    ));
+  // pending, not the selection, owns where its words go. #13913: pane_send answers with herdr's
+  // own verdict (text + Enter observed by herdr itself); an IPC-level rejection is the only Err
+  // left and rides as a failed delivery, never a guess.
+  const line = (text: string, to: string | null = target): Promise<{ outcome: string; error: string | null }> =>
+    invoke<{ outcome: string; error: string | null }>("pane_send", { target: to, text }).then(
+      d => blockedAsk && d?.outcome === "blocked"
+        // #6094 — pane_send's own "answer it there (Terminal tray)" predates the question card
+        // and now points at the wrong place: the ask is rendered right above this composer.
+        ? { outcome: "blocked", error: `The agent is asking a question above — answer it there: "${blockedAsk.questions[0]?.question ?? ""}"` }
+        : (d ?? { outcome: "stalled", error: "the desktop did not answer" }),
+      e => ({ outcome: "stalled", error: blockedAsk ? `The agent is asking a question above — answer it there: "${blockedAsk.questions[0]?.question ?? ""}"` : String(e) }),
+    );
 
   // Paste-an-image: a textarea silently swallows image data, so paste must be handled explicitly
   // rather than left to the browser default. The clipboard image is written to a real file
@@ -647,10 +651,11 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     }).catch(err => setError(`pasted image failed: ${err instanceof Error ? err.message : String(err)}`));
   };
 
-  // Delivery receipts (#5504): typing into a terminal is not delivery, the CLI's UI can eat or
-  // fuse input, so a send stays PENDING until the transcript echoes it back, and is declared LOST
-  // (visibly, retry-ready) if it never does. A pending is judged only against its OWN project's
-  // transcript (#6250): judging it against another project's transcript falsely declares it lost.
+  // #13913: delivery truth is herdr's own answer, not the transcript. A send that herdr
+  // delivered records nothing; one whose wait timed out rides a "sent, not yet picked up" chip
+  // until the transcript shows the turn (display only); anything else is a failure carrying
+  // herdr's words verbatim with a MANUAL retry. Nothing is ever re-sent automatically — a
+  // missing transcript row proves nothing, because herdr already sent the text and Enter.
   const [pendings, setPendings] = useState<PendingSend[]>([]);
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -659,58 +664,51 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     return () => clearInterval(t);
   }, [pendings, project, onSent]);
   const ownPendings = pendings.filter(p => p.project === project);
-  // #12913: after a restart the panel can follow the SUCCESSOR transcript while a delivered
-  // send's echo sits in the pane's OWN session transcript. A pending the panel would call lost
-  // is judged against that transcript too (pane_receipt_texts, refreshed on the tick) first.
-  const [paneReceipts, setPaneReceipts] = useState<Record<string, string[]>>({});
-  const receiptsFor = useCallback((p: PendingSend) => {
-    const own = paneReceipts[p.target];
-    return own ? [...userTexts, ...own] : userTexts;
-  }, [userTexts, paneReceipts]);
+  // The transcript's only remaining job: clear a "sent" chip once its echo renders.
   useEffect(() => {
     setPendings(ps => {
-      const kept = ps.filter(p => p.project !== project || receiptFor(p, receiptsFor(p), Date.now()) !== "delivered");
+      const kept = ps.filter(p => p.project !== project || receiptFor(p, userTexts, Date.now()) !== "delivered");
       return kept.length === ps.length ? ps : kept;
     });
-  }, [project, receiptsFor]);
-  // Until the pane's transcript has answered, a panel-lost pending still reads as delivering,
-  // never as lost — the banner is the check's verdict, not its suspicion.
-  // #12913 bounce: every pane check is fenced to rows at/after the send (at - 5s of slack) —
-  // whole-history containment let an old identical "yes" prove a fresh "yes" delivered.
-  const lostChecks = new Map<string, number>();
-  for (const p of ownPendings) {
-    if (receiptFor(p, userTexts, Date.now()) !== "lost") continue;
-    lostChecks.set(p.target, Math.min(lostChecks.get(p.target) ?? p.at, p.at));
-  }
-  const lostKey = [...lostChecks.entries()].map(([t, at]) => `${t}@${at}`).sort().join("\n");
-  useEffect(() => {
-    if (!lostKey) return;
-    let alive = true;
-    for (const entry of lostKey.split("\n")) {
-      const sep = entry.lastIndexOf("@");
-      const t = entry.slice(0, sep);
-      const sinceMs = Number(entry.slice(sep + 1)) - 5000;
-      invoke<string[]>("pane_receipt_texts", { project, target: t, sinceMs })
-        .then(texts => { if (alive) setPaneReceipts(prev => ({ ...prev, [t]: texts })); })
-        .catch(() => { if (alive) setPaneReceipts(prev => ({ ...prev, [t]: [] })); });
-    }
-    return () => { alive = false; };
-  }, [lostKey, tick, project]);
-  const lost = ownPendings.filter(p =>
-    paneReceipts[p.target] !== undefined && receiptFor(p, receiptsFor(p), Date.now()) === "lost");
-  const inFlight = ownPendings.length - lost.length;
+  }, [project, userTexts, tick]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const explain = (p: PendingSend) =>
+    p.outcome === "sent"
+      ? `sent, not yet picked up — “${p.text}”`
+      : p.error
+        ? `not delivered: ${p.error} — “${p.text}”`
+        : `not delivered — “${p.text}”`;
+
+  // One send, one verdict: herdr's answer becomes the pending's own state, in the project and
+  // on the pane it was sent to (#6250).
+  const dispatch = (text: string, to: string, project: string) => {
+    void line(text, to).then(d => {
+      if (d.outcome === "delivered") { setError(null); onSent(); return; }
+      setPendings(ps => [...ps, {
+        text, at: Date.now(), project, target: to,
+        outcome: d.outcome === "sent" ? "sent" : "failed",
+        error: d.error,
+      }]);
+      onSent();
+    });
+  };
 
   const sendText = (raw: string): boolean => {
     // Multi-image sends are rewritten to one-path-per-line BEFORE delivery (#5709) — CC's
-    // converter drops an image when several paths ride one message inline. The pending holds
-    // the NORMALIZED text: receipts must judge what was actually typed into the pane.
+    // converter drops an image when several paths ride one message inline.
     const text = normalizeAttachments(raw.trim());
     if (!text || !target) return false;
     setBusy(true);
-    line(text).then(() => {
-      setPendings(ps => [...ps, { text, at: Date.now(), project, target }]);
-      setError(null); onSent();
-    }).finally(() => setBusy(false));
+    // The verdict can be seconds out (herdr's bounded pickup wait), so busy gates the button.
+    line(text).finally(() => setBusy(false)).then(d => {
+      if (d.outcome === "delivered") { setError(null); onSent(); return; }
+      setPendings(ps => [...ps, {
+        text, at: Date.now(), project, target,
+        outcome: d.outcome === "sent" ? "sent" : "failed",
+        error: d.error,
+      }]);
+      onSent();
+    });
     return true;
   };
 
@@ -730,52 +728,13 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [suggestion]);
 
+  // A retry is a fresh send to the pending's own pane and project (#6250) — the operator's
+  // click, never an automatic resend: herdr already sent the text once, and only a human
+  // decides to type it again.
   const retry = (p: PendingSend) => {
-    // #12913: the manual retry makes the same fresh check first — the echo may sit in the pane's
-    // own transcript while the panel follows a successor. Delivered there: clear, send nothing.
-    void invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target, sinceMs: p.at - 5000 })
-      // A failed invoke yields an empty channel: "no echo evidence", never a delivery claim.
-      .catch(() => [])
-      .then(own => {
-        setPendings(ps => ps.filter(x => x !== p));
-        if (receiptFor(p, [...userTexts, ...own], Date.now()) === "delivered") return;
-        void line(p.text, p.target).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now(), project: p.project, target: p.target }]));
-      });
+    setPendings(ps => ps.filter(x => x !== p));
+    dispatch(p.text, p.target, p.project);
   };
-
-  // ONE mechanical retry at the turn boundary: a send lost mid-turn gets retried automatically
-  // once; lost AGAIN, it stays red for the human. Only THIS project's pendings are judged here
-  // (#6250). The effect fires on `working` alone, so what it judges rides a ref, never a closure.
-  const judgeRef = useRef({ pendings, userTexts });
-  useEffect(() => { judgeRef.current = { pendings, userTexts }; });
-  useEffect(() => {
-    if (working) return;
-    const { pendings: ps, userTexts: ut } = judgeRef.current;
-    // Never auto-retry a send carrying image paths: a duplicated screenshot message is worse
-    // than a lost one, and attachment sends are exactly the receipt's false-alarm class
-    // (gap six). Those keep the manual retry button only.
-    const candidates = ps.filter(p => p.project === project && !p.retried && !hasImagePath(p.text) && receiptFor(p, ut, Date.now()) === "lost");
-    if (!candidates.length) return;
-    let alive = true;
-    void (async () => {
-      for (const p of candidates) {
-        // #12913: a FRESH read of the pane's own transcript decides — an echo there means the
-        // send WAS delivered and nothing is re-typed. And line() fires HERE, never inside a
-        // setState updater: React may invoke an updater twice, and each copy typed the text again.
-        const own = await invoke<string[]>("pane_receipt_texts", { project: p.project, target: p.target, sinceMs: p.at - 5000 })
-          // A failed invoke yields an empty channel: "no echo evidence", never a delivery claim.
-          .catch(() => []);
-        if (!alive) return;
-        if (receiptFor(p, [...ut, ...own], Date.now()) === "delivered") {
-          setPendings(cur => cur.filter(x => x !== p));
-          continue;
-        }
-        void line(p.text, p.target);
-        setPendings(cur => cur.map(x => (x === p ? { text: p.text, at: Date.now(), project: p.project, target: p.target, retried: true } : x)));
-      }
-    })();
-    return () => { alive = false; };
-  }, [working]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Interrupting is a KEY, not a message. Escape is what stops a turn in the harness.
   const stop = () => { if (target) invoke("pane_keys", { target, keys: "Escape" }).catch(e => setError(String(e))); };
@@ -819,18 +778,19 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
           ))}
         </div>
       )}
-      {lost.map((p, i) => (
-        <div key={`${p.at}-${i}`} className="mb-1 flex items-center gap-2 rounded-lg border border-tr-fail/40 bg-tr-fail/10 px-2.5 py-1.5 text-[11.5px]">
-          <span className="min-w-0 flex-1 truncate text-tr-fail">
-            not delivered — the session never received: “{p.text}”
+      {ownPendings.map((p, i) => (
+        <div key={`${p.at}-${i}`} className={`mb-1 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11.5px] ${p.outcome === "sent" ? "border-tr-edge bg-tr-panel/60" : "border-tr-fail/40 bg-tr-fail/10"}`}>
+          <span className={`min-w-0 flex-1 truncate ${p.outcome === "sent" ? "text-tr-muted" : "text-tr-fail"}`}>
+            {explain(p)}
           </span>
-          <button type="button" onClick={() => retry(p)} className="shrink-0 text-tr-text hover:underline">retry</button>
-          <button type="button" onClick={() => setPendings(ps => ps.filter(x => x !== p))} className="shrink-0 text-tr-muted hover:underline">dismiss</button>
+          {p.outcome === "failed" && (
+            <>
+              <button type="button" onClick={() => retry(p)} className="shrink-0 text-tr-text hover:underline">retry</button>
+              <button type="button" onClick={() => setPendings(ps => ps.filter(x => x !== p))} className="shrink-0 text-tr-muted hover:underline">dismiss</button>
+            </>
+          )}
         </div>
       ))}
-      {inFlight > 0 && (
-        <div className="tr-mono mb-1 px-1 text-[10.5px] text-tr-muted">delivering…</div>
-      )}
       {/* The locked state's one action (#5495): the biggest control explains itself by naming
           what it would take to unlock — start, continue, reopen — instead of sitting grey. */}
       {!live && action && (

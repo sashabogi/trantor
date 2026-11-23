@@ -18,7 +18,9 @@ import { LOST_AFTER_MS } from "./streaming";
 // SAFETY: the Tauri IPC boundary as the webview provides it — invoke answers the autonomy read with
 // an empty state; everything else the composer reaches is caught by its own try/catches. The cast
 // names the one key happy-dom's window type does not carry.
-const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string) => Promise<string> } };
+// SAFETY: the Tauri IPC boundary as the webview provides it. pane_send answers with herdr's
+// verdict as an object (#13913); other commands answer with strings.
+const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string) => Promise<string | { outcome: string; error: string | null }> } };
 w.__TAURI_INTERNALS__ = { invoke: () => Promise.resolve("{}") };
 
 // A test-scoped localStorage stub — this happy-dom integration exposes none. Fresh per test, so
@@ -186,24 +188,28 @@ describe("composerTakesDrop (#6147)", () => {
 
 // #6250: a pending send belongs to the project and pane it was delivered to, never to the
 // selection the composer shows now. These drills cross a project switch at the real IPC
-// boundary with the clock pushed past LOST_AFTER_MS, since a pending inside its grace
-// window can never look lost and so never exercises the bug.
+// boundary; the pending rides herdr's "sent" verdict (#13913), so only its own project's
+// transcript echo can clear it.
 describe("a pending send keeps its own project and pane (#6250)", () => {
   // The recorded IPC surface — pane_send's target is the assertion the whole card hangs on.
   // The args ride tauri's own InvokeArgs, the real seam's type, never a raw unknown dictionary.
   const sent: Array<{ cmd: string; args: InvokeArgs }> = [];
   const paneSends = () => sent.filter(s => s.cmd === "pane_send");
+  // The fake herdr's verdict for pane_send (#13913): "sent" — typed, not yet picked up.
+  let delivery: { outcome: string; error: string | null } = { outcome: "sent", error: null };
   const installIpc = () => {
     sent.length = 0;
+    delivery = { outcome: "sent", error: null };
     w.__TAURI_INTERNALS__ = {
       invoke: (cmd: string, args?: InvokeArgs) => {
         sent.push({ cmd, args: args ?? {} });
+        if (cmd === "pane_send") return Promise.resolve(delivery);
         return Promise.resolve("{}");
       },
     };
   };
 
-  // Fake ONLY the clock (the lost-window judgment reads Date.now at render): faking the timers
+  // Fake ONLY the clock (chip judgments read Date.now at render): faking the timers
   // themselves would strand React's act flushing on a faked microtask queue.
   beforeEach(() => {
     installIpc();
@@ -263,15 +269,15 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
-    // The pending is recorded in the send promise's .then — flush the microtask chain.
+    // The verdict is recorded in the send promise's .then — flush the microtask chain.
     await act(async () => {});
   };
 
-  it("a send to project A, a switch to B, B's turn boundary: B's pane receives nothing, and A's receipt still clears it", async () => {
+  it("a send to project A, a switch to B, B's turn boundary: B's pane receives nothing, and A's echo still clears it", async () => {
     view("alpha", "pane-alpha", []);
     await sendDraft("where are the drills");
     expect(paneSends()).toEqual([{ cmd: "pane_send", args: { target: "pane-alpha", text: "where are the drills" } }]);
-    expect(host.textContent).toContain("delivering");
+    expect(host.textContent).toContain("not yet picked up");
 
     // The old code judged the alpha pending against B's empty transcript here and re-sent it
     // into pane-beta; the full-shape match proves exactly one send exists and its target is
@@ -284,13 +290,13 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
 
     expect(paneSends()).toEqual([{ cmd: "pane_send", args: { target: "pane-alpha", text: "where are the drills" } }]);
     expect(host.textContent).not.toContain("not delivered");
-    expect(host.textContent).not.toContain("delivering"); // foreign pendings don't render in B
+    expect(host.textContent).not.toContain("not yet picked up"); // foreign pendings don't render in B
 
-    // Back to A: its transcript (backfilled on the switch) echoes the text and the receipt
-    // clears the pending it always belonged to.
+    // Back to A: its transcript (backfilled on the switch) echoes the text and the chip
+    // clears on the pending it always belonged to.
     view("alpha", "pane-alpha", ["where are the drills"]);
     await act(async () => {});
-    expect(host.textContent).not.toContain("delivering");
+    expect(host.textContent).not.toContain("not yet picked up");
     expect(paneSends()).toHaveLength(1);
   });
 
@@ -301,37 +307,36 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
     // the false-delivered shape. The pending must NOT read them as its own receipt.
     view("beta", "pane-beta", ["where are the drills"]);
     await act(async () => {});
-    // Back on A with nothing arrived yet — within the grace window the pending is still held.
+    // Back on A with nothing arrived yet — the chip is still held.
     view("alpha", "pane-alpha", []);
-    expect(host.textContent).toContain("delivering");
+    expect(host.textContent).toContain("not yet picked up");
     expect(paneSends()).toHaveLength(1);
-    // And A's real receipt clears it.
+    // And A's real echo clears it.
     view("alpha", "pane-alpha", ["where are the drills"]);
     await act(async () => {});
-    expect(host.textContent).not.toContain("delivering");
+    expect(host.textContent).not.toContain("not yet picked up");
   });
 
   it("the manual retry sends to the pending's own pane, not the selection", async () => {
+    delivery = { outcome: "stalled", error: "herdr socket read failed: connection reset" };
     view("alpha", "pane-alpha", []);
     await sendDraft("where are the drills");
-    vi.setSystemTime(LOST_AFTER_MS + 1_000);
-    // No working transition ever fires, so the auto-retry stays out of this drill: the lost
-    // banner is judged at render, in the pending's own project — and since #12913 only after
-    // the pane's own transcript answered (one flush for that invoke to land).
-    view("alpha", "pane-alpha", ["some unrelated turn"]);
-    await act(async () => {});
     await act(async () => {});
     expect(host.textContent).toContain("not delivered");
+    // Switch the selection to B: the retry must still go to the pending's own pane.
+    view("beta", "pane-beta", ["some unrelated turn"]);
+    await act(async () => {});
+    const alphaText = "where are the drills";
+    expect(host.textContent).not.toContain(alphaText); // A's failed pending does not render in B
+    view("alpha", "pane-alpha", []);
+    await act(async () => {});
     const retry = [...host.querySelectorAll("button")].find(b => b.textContent === "retry");
     if (!retry) throw new Error("no retry button");
     await act(async () => { retry.click(); });
     await act(async () => {});
-    await act(async () => {});
     const sends = paneSends();
     expect(sends).toHaveLength(2);
     expect(sends[1].args).toEqual({ target: "pane-alpha", text: "where are the drills" });
-    // The retried send is pending again — held, within its fresh grace window.
-    expect(host.textContent).toContain("delivering");
   });
 });
 

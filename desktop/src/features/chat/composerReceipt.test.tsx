@@ -1,21 +1,21 @@
 // @vitest-environment happy-dom
 
-// #12913: after a session restart the panel can follow the SUCCESSOR transcript while a
-// delivered send's echo sits in the pane's OWN transcript. These drills pin the receipt
-// judgment — banner, auto-retry, manual retry — to the pane's own session, at the IPC boundary.
+// #13913: herdr's `agent.prompt --wait` answer is the delivery receipt. These drills pin the
+// composer to it at the IPC boundary: a successful herdr prompt is delivered with NO transcript
+// match, a herdr error shows verbatim and never auto-resends, and a busy session whose wait
+// timed out reads "sent, not yet picked up" — the transcript only clears that chip.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { Composer } from "./Composer";
-import { LOST_AFTER_MS } from "./streaming";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// SAFETY: the Tauri IPC boundary as the webview provides it. pane_receipt_texts answers with the
-// echo the pane's own transcript holds; everything else gets the empty object.
-const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: InvokeArgs) => Promise<string | string[]> } };
+// SAFETY: the Tauri IPC boundary as the webview provides it. pane_send answers with herdr's own
+// verdict {outcome, error}; everything else gets the empty object.
+const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: InvokeArgs) => Promise<string | string[] | { outcome: string; error: string | null }> } };
 
 // A test-scoped localStorage stub — this happy-dom integration exposes none (Composer.test's pattern).
 let store: Map<string, string>;
@@ -41,7 +41,8 @@ let root: Root;
 // The recorded IPC surface — pane_send's count is the assertion the whole card hangs on.
 const sent: Array<{ cmd: string; args: InvokeArgs }> = [];
 const paneSends = () => sent.filter(s => s.cmd === "pane_send");
-let paneEcho: string[] = [];
+// The fake herdr's answer for pane_send — what the Rust layer would relay of herdr's verdict.
+let delivery: { outcome: string; error: string | null } = { outcome: "delivered", error: null };
 
 beforeEach(() => {
   installStore();
@@ -50,15 +51,15 @@ beforeEach(() => {
   Object.defineProperty(host, "clientHeight", { value: 800, configurable: true });
   root = createRoot(host);
   sent.length = 0;
-  paneEcho = [];
+  delivery = { outcome: "delivered", error: null };
   w.__TAURI_INTERNALS__ = {
     invoke: (cmd: string, args?: InvokeArgs) => {
       sent.push({ cmd, args: args ?? {} });
-      if (cmd === "pane_receipt_texts") return Promise.resolve(paneEcho);
+      if (cmd === "pane_send") return Promise.resolve(delivery);
       return Promise.resolve("{}");
     },
   };
-  // Fake ONLY the clock (the lost-window judgment reads Date.now at render): faking the timers
+  // Fake ONLY the clock (chip judgments read Date.now at render): faking the timers
   // themselves would strand React's act flushing on a faked microtask queue.
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(0);
@@ -70,7 +71,7 @@ afterEach(() => {
   host.remove();
 });
 
-describe("a restart-split receipt is judged against the pane's own transcript (#12913)", () => {
+describe("herdr's own answer is the delivery receipt (#13913)", () => {
   const view = (userTexts: string[], working = false) => {
     act(() => root.render(
       <Composer
@@ -108,69 +109,77 @@ describe("a restart-split receipt is judged against the pane's own transcript (#
     await act(async () => {
       ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
-    // The pending is recorded in the send promise's .then — flush the microtask chain.
+    // The verdict is recorded in the send promise's .then — flush the microtask chain.
     await act(async () => {});
   };
 
-  it("the echo in the pane's own transcript clears the pending — no banner, no auto-retry", async () => {
+  it("a fake herdr that succeeds marks delivered with no transcript match", async () => {
     view([]);
-    await sendDraft("show me when the screenshots are on the canvas");
+    await sendDraft("run the drill and report");
     expect(paneSends()).toHaveLength(1);
 
-    // The restart: the panel re-anchors to the successor transcript (empty); the delivered
-    // send's echo sits only in the transcript the pane's session actually wrote.
-    paneEcho = ["show me when the screenshots are on the canvas"];
-    vi.setSystemTime(LOST_AFTER_MS + 1_000);
+    // The transcript NEVER echoes the words — herdr's agent_prompted is the whole truth now.
+    vi.setSystemTime(60_000);
     view([], true);
     await act(async () => {});
-    await act(async () => {});
-    view([], false); // the turn boundary — the old code re-typed the send here
-    await act(async () => {});
+    view([], false);
     await act(async () => {});
 
     expect(paneSends()).toHaveLength(1);
     expect(host.textContent).not.toContain("not delivered");
-    expect(host.textContent).not.toContain("delivering");
-    // Every pane check carries the send-time fence (#12913 bounce): with the fake clock at 0
-    // when the send went out, sinceMs is exactly p.at - 5000 = -5000.
-    const receiptCalls = sent.filter(s => s.cmd === "pane_receipt_texts");
-    expect(receiptCalls.length).toBeGreaterThan(0);
-    for (const c of receiptCalls) expect(c.args).toMatchObject({ target: "pane-alpha", sinceMs: -5000 });
-  });
-
-  it("the manual retry checks the pane's own transcript first — delivered there, nothing resends", async () => {
-    view([]);
-    await sendDraft("ship build 10 when it's green");
-    vi.setSystemTime(LOST_AFTER_MS + 1_000);
-    view([]);
-    await act(async () => {});
-    await act(async () => {});
-    expect(host.textContent).toContain("not delivered");
-
-    // The echo lands in the pane's own transcript AFTER the banner's last check.
-    paneEcho = ["ship build 10 when it's green"];
-    const retryBtn = [...host.querySelectorAll("button")].find(b => b.textContent === "retry");
-    if (!retryBtn) throw new Error("no retry button");
-    await act(async () => { retryBtn.click(); });
-    await act(async () => {});
-    await act(async () => {});
-
-    expect(paneSends()).toHaveLength(1);
-    expect(host.textContent).not.toContain("not delivered");
+    expect(host.textContent).not.toContain("not yet picked up");
     expect(host.textContent).not.toContain("delivering");
   });
 
-  it("a send with no echo anywhere still auto-retries exactly once at the turn boundary", async () => {
+  it("a fake herdr that errors shows the error verbatim and is never re-sent", async () => {
+    delivery = { outcome: "stalled", error: "herdr socket read failed: connection reset" };
     view([]);
     await sendDraft("where are the drills");
-    vi.setSystemTime(LOST_AFTER_MS + 1_000);
+    await act(async () => {});
+    expect(host.textContent).toContain("herdr socket read failed: connection reset");
+    expect(host.textContent).toContain("not delivered");
+
+    // Turn boundaries, a working flip and a long silence: nothing re-sends — herdr already
+    // refused once, and a missing transcript row proves nothing anymore.
+    vi.setSystemTime(120_000);
+    view([], true);
+    await act(async () => {});
+    view([], false);
+    await act(async () => {});
+
+    expect(paneSends()).toHaveLength(1);
+  });
+
+  it("a busy session whose wait timed out reads sent, not yet picked up — not failed", async () => {
+    delivery = { outcome: "sent", error: "Sent, not yet picked up — the session is mid-turn; it will take the message at the next boundary." };
+    view([]);
+    await sendDraft("ship build 10 when it's green");
+    await act(async () => {});
+
+    expect(host.textContent).toContain("sent, not yet picked up");
+    expect(host.textContent).toContain("ship build 10 when it's green");
+    expect(host.textContent).not.toContain("not delivered");
+    expect([...host.querySelectorAll("button")].some(b => b.textContent === "retry")).toBe(false);
+
+    // The transcript is display only: the echo renders and the chip clears — no resend, ever.
+    expect(paneSends()).toHaveLength(1);
+    vi.setSystemTime(30_000);
+    view(["ship build 10 when it's green"]);
+    await act(async () => {});
+    expect(host.textContent).not.toContain("not yet picked up");
+    expect(paneSends()).toHaveLength(1);
+  });
+
+  it("no code path scrapes the transcript for delivery — the pane_receipt_texts command is gone", async () => {
+    delivery = { outcome: "sent", error: "Sent, not yet picked up — the session is mid-turn." };
+    view([]);
+    await sendDraft("anything at all");
+    vi.setSystemTime(120_000);
     view([], true);
     await act(async () => {});
     view([], false);
     await act(async () => {});
     await act(async () => {});
-
-    expect(paneSends()).toHaveLength(2);
-    expect(paneSends()[1].args).toEqual({ target: "pane-alpha", text: "where are the drills" });
+    expect(sent.filter(s => s.cmd === "pane_receipt_texts")).toHaveLength(0);
   });
 });

@@ -161,19 +161,20 @@ export function sessionLiveness(status: string, target: string | null): Liveness
   return { live: true, why: "" };
 }
 
-/** A message the composer sent that the transcript has not yet echoed back (#5504). `retried`
- *  marks the one mechanical turn-boundary retry as spent; after that, staying lost is the human's
- *  call. `project`/`target` pin where the send went (#6250) so retries and the receipt judge
- *  against that pane, never whatever project the composer shows now. */
-export type PendingSend = { text: string; at: number; project: string; target: string; retried?: boolean };
+/** A message the composer sent, carrying herdr's own verdict for it (#13913): "sent" means
+ *  herdr typed the text and Enter but the session has not picked it up yet (the transcript's
+ *  echo is what clears it — display only); "failed" means herdr refused or errored, and
+ *  `error` rides verbatim. `project`/`target` pin where the send went (#6250) so a retry
+ *  returns to that pane, never whatever project the composer shows now. */
+export type PendingSend = { text: string; at: number; project: string; target: string; outcome: "sent" | "failed"; error?: string | null };
 
 /** Silence past this window means the words never made it into the conversation. */
 export const LOST_AFTER_MS = 10_000;
 
-/** Judge one pending send against the transcript's user turns. Sending is not delivery: the CLI's
- *  UI state can eat or fuse typed text, so the transcript is the only truth. A send counts as
- *  delivered when a user turn CONTAINS it, not equals it, since a fused row is still delivered,
- *  just dirty; "lost" only fires after the window, not before. */
+/** Judge one pending send against the transcript's user turns — #13913: DISPLAY ONLY now
+ *  (clearing a "sent, not yet picked up" chip when its echo renders); it never decides whether
+ *  anything is retried. A chip counts as cleared when a user turn CONTAINS it, not equals it,
+ *  since a fused row is still the same arrival, just dirty. */
 export function receiptFor(p: Pick<PendingSend, "text" | "at">, userTexts: string[], now: number): "sending" | "delivered" | "lost" {
   // TRIMMED containment: the drop-insert appends a trailing space to each path (#5507), but CC
   // records a dropped image as "[Image: source: <path>]" with no trailing space, so an untrimmed

@@ -18,7 +18,7 @@ let disk: Map<string, string>;
 let sent: { target: string | null; text: string }[];
 type IpcArgs = { project?: string; draft?: string; target?: string | null; text?: string };
 // SAFETY: Tauri's bridge object does not exist under happy-dom; this adds the one key the code reads.
-const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: IpcArgs) => Promise<string> } };
+const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: IpcArgs) => Promise<string | { outcome: string; error: null }> } };
 w.__TAURI_INTERNALS__ = {
   invoke: (cmd, args = {}) => {
     if (cmd === "composer_draft_get") return Promise.resolve(disk.get(String(args.project)) ?? "null");
@@ -27,7 +27,7 @@ w.__TAURI_INTERNALS__ = {
       if (draft === "null") disk.delete(String(args.project)); else disk.set(String(args.project), draft);
       return Promise.resolve("");
     }
-    if (cmd === "pane_send") { sent.push({ target: args.target ?? null, text: String(args.text) }); return Promise.resolve(""); }
+    if (cmd === "pane_send") { sent.push({ target: args.target ?? null, text: String(args.text) }); return Promise.resolve({ outcome: "delivered", error: null }); }
     return Promise.resolve("{}");
   },
 };
