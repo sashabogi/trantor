@@ -230,15 +230,22 @@ fn cli_error_reason(command: &str, code: Option<i32>, spawned: bool, stdout: &st
     format!("{command} {exit} without an error message")
 }
 
+fn trace_workspace_cli(args: &[&str]) -> bool {
+    args.first().is_some_and(|arg| matches!(*arg, "up" | "down" | "swap" | "seat-why"))
+}
+
 pub(crate) async fn run_cli_json_at(args: &[&str], project: Option<&str>) -> Result<String, String> {
-    let command = trantor_cli::shell_command(args);
+    let traced = trace_workspace_cli(args);
+    let command = if traced { trantor_cli::shell_command(args) } else { args.join(" ") };
     let mut cmd = trantor_cli::async_command();
     if let Some(project) = project {
         let dir = match project_dir(project) {
             Some(dir) => dir,
             None => {
                 let error = format!("No local checkout for {project}");
-                trace_cli_failure(&command, None, false, &error);
+                if traced {
+                    trace_cli_failure(&command, None, false, &error);
+                }
                 return Err(error);
             }
         };
@@ -249,17 +256,23 @@ pub(crate) async fn run_cli_json_at(args: &[&str], project: Option<&str>) -> Res
         Ok(out) => out,
         Err(error) => {
             let error = error.to_string();
-            trace_cli_failure(&command, None, false, &error);
-            return Err(cli_error_reason(&command, None, false, "", &error));
+            if traced {
+                trace_cli_failure(&command, None, false, &error);
+                return Err(cli_error_reason(&command, None, false, "", &error));
+            }
+            return Err(format!("{command}: {error}"));
         }
     };
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    if !out.status.success() || stdout.is_empty() {
+    if traced && (!out.status.success() || stdout.is_empty()) {
         trace_cli_failure(&command, out.status.code(), true, &stderr);
     }
     if stdout.is_empty() {
-        return Err(cli_error_reason(&command, out.status.code(), true, "", &stderr));
+        if traced {
+            return Err(cli_error_reason(&command, out.status.code(), true, "", &stderr));
+        }
+        return Err(stderr);
     }
     Ok(stdout)
 }
@@ -313,6 +326,16 @@ mod cli_compatibility_tests {
         assert!(reason.contains("npm i -g trantor@0.18.47"), "{reason}");
         assert!(cli_compatibility(Some("0.18.47")).compatible);
         assert!(cli_compatibility(Some("0.19.0")).compatible);
+    }
+
+    #[test]
+    fn exact_cli_tracing_is_limited_to_workspace_seat_commands() {
+        assert!(trace_workspace_cli(&["up", "kimi", "--json"]));
+        assert!(trace_workspace_cli(&["down", "kimi", "--json"]));
+        assert!(trace_workspace_cli(&["swap", "kimi", "codex", "--json"]));
+        assert!(trace_workspace_cli(&["seat-why", "kimi", "--json"]));
+        assert!(!trace_workspace_cli(&["provider", "verify", "kimi", "--key", "secret", "--json"]));
+        assert!(!trace_workspace_cli(&["doctor", "--json"]));
     }
 
     #[test]
