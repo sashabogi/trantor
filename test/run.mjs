@@ -8,7 +8,8 @@ import { userInfo } from "node:os";
 import { DRILL_IDENTITY_VARS } from "./drill-env.mjs";
 import { realHerdrSocket } from "./lib/herdr-stub.mjs";
 
-const realKeys = join(userInfo().homedir, ".agent-bus", "keys");
+const REAL_HOME = userInfo().homedir;
+const realKeys = join(REAL_HOME, ".agent-bus", "keys");
 const keysBefore = testIdentityFiles(realKeys);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -64,7 +65,8 @@ function discover() {
     }
   }
   suites.push(
-    { rel: "desktop-build-gate", lane: "gate", cmd: ["node", ["bin/desktop-build-gate.mjs"]], timeoutMs: 900_000 },
+    { rel: "desktop-build-gate", lane: "gate", cmd: ["node", ["bin/desktop-build-gate.mjs"]], timeoutMs: 900_000,
+      env: { CARGO_HOME: join(REAL_HOME, ".cargo"), RUSTUP_HOME: join(REAL_HOME, ".rustup") } },
     { rel: "desktop-vitest", lane: "gate", cmd: ["npm", ["--prefix", "desktop", "run", "test", "--silent"]] },
     { rel: "routing-py", lane: "gate", cmd: ["python3", ["engine/test-routing.py"]] },
   );
@@ -122,7 +124,7 @@ function runSuite(s) {
     mkdirSync(outDir, { recursive: true });
     const home = mkdtempSync(join(outDir, "suite-home-"));
     mkdirSync(join(home, "tmp"));
-    const env = { ...process.env, GIT_CEILING_DIRECTORIES: outDir, HOME: home, TMPDIR: join(home, "tmp"), AGENT_BUS_DIR: join(home, ".agent-bus"), TRANTOR_NO_KEYCHAIN: "1", TRANTOR_SECRETS_BACKEND: "file" };
+    const env = { ...process.env, GIT_CEILING_DIRECTORIES: outDir, HOME: home, TMPDIR: join(home, "tmp"), AGENT_BUS_DIR: join(home, ".agent-bus"), TRANTOR_NO_KEYCHAIN: "1", TRANTOR_SECRETS_BACKEND: "file", ...s.env };
     const kid = spawn(cmd, args, { cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", timedOut = false;
     const timer = setTimeout(() => {
