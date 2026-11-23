@@ -45,6 +45,7 @@ switch (cmd) {
   case "prune":   runCrew(); break;
   case "hub": {
     const sub = args[0];
+    if (sub === "timeouts") { args.splice(0, 1); run("bin/hub-timeouts.mjs", process.execPath); break; }
     // Per-project hub routing (TDD §12.1): a project lives on exactly ONE hub; codependent
     // projects MUST share one. The mapping lives in ~/.agent-bus/config.json `hubs`.
     if (sub === "list" || sub === "set" || sub === "unset") {
