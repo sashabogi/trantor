@@ -6,7 +6,7 @@ import { timingSafeEqual, randomBytes } from "node:crypto";
 import { publicView } from "../lib/identity.mjs";
 import { IDENTITY_KINDS } from "../lib/store-contract.mjs";
 
-export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS, LOOPBACK_BIND, ENROLL_MODE, seenNonces = new Map() }) {
+export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS, LOOPBACK_BIND, ENROLL_MODE, seenNonces = new Map(), diagnostics = null }) {
 const now = () => Date.now();
 // Route measurements and supported envelopes: docs/REQUEST-BODY-LIMITS.md.
 const BODY_CAP_DEFAULT = 4 * 1024 * 1024;
@@ -61,7 +61,9 @@ async function body(req, maxBytes = BODY_CAP_DEFAULT) {
 function json(res, code, obj) {
   if (res.headersSent || res.writableEnded || res.destroyed) return false;
   res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(JSON.stringify(obj));
+  const payload = JSON.stringify(obj);
+  diagnostics?.recordStep("response.serialize", Buffer.byteLength(payload));
+  res.end(payload);
   return true;
 }
 // Canonical project name: follow the alias chain so historically-divergent keys

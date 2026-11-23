@@ -21,6 +21,7 @@ import { routeMessages } from "./hub/routes/messages.mjs";
 import { routeDevices } from "./hub/routes/devices.mjs";
 import { createSessionRuntime } from "./hub/routes/session.mjs";
 import { createNotifier } from "./hub/notifier.mjs";
+import { createHubDiagnostics } from "./lib/hub-diagnostics.mjs";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
 const HOST = process.env.RELAY_HOST || "127.0.0.1";
@@ -65,11 +66,12 @@ if (!LOOPBACK_BIND && AUTH_MODE !== "enforce") {
   process.exit(1);
 }
 
-const store = await createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA });
+const diagnostics = createHubDiagnostics();
+const store = await createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA, diagnostics });
 const seenNonces = new Map();
 const authRuntime = createAuthRuntime({
   state: store.state, markDirty: store.markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS,
-  LOOPBACK_BIND, ENROLL_MODE, seenNonces,
+  LOOPBACK_BIND, ENROLL_MODE, seenNonces, diagnostics,
 });
 const notifier = createNotifier({ state: store.state, markDirty: store.markDirty, canRead: authRuntime.canRead });
 const events = createEventRuntime({ state: store.state, markDirty: store.markDirty, AUTH_MODE, ONLINE_MS, canon: authRuntime.canon, notifier });
@@ -140,12 +142,16 @@ const routes = [routeDevices, routeAdmin, routeCards, routeInsights, routeMessag
 
 const publicAuth = createAuthRuntime({
   state: store.state, markDirty: store.markDirty, AUTH_MODE: "enforce", SUPERSEDE_GRACE_MS,
-  LOOPBACK_BIND: true, ENROLL_MODE: "invite", seenNonces,
+  LOOPBACK_BIND: true, ENROLL_MODE: "invite", seenNonces, diagnostics,
 });
 const publicContext = { ...context, ...publicAuth, AUTH_MODE: "enforce" };
 
 function requestHandler(runtime, ctx, gate = null) {
   return async (req, res) => {
+    diagnostics.beginRequest(req);
+    const finish = () => diagnostics.endRequest(req);
+    res.once("finish", finish);
+    res.once("close", finish);
     try {
       const u = new URL(req.url, "http://x");
       const q = Object.fromEntries(u.searchParams);
@@ -190,6 +196,7 @@ function requestHandler(runtime, ctx, gate = null) {
   };
 }
 
+diagnostics.start();
 const server = http.createServer(requestHandler(authRuntime, context));
 server.listen(PORT, HOST, () => console.error(`[trantor] hub on http://${HOST}:${PORT} (auth: ${AUTH_MODE}; data: ${DATA})`));
 

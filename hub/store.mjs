@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { createPersistHealth } from "../lib/persist-health.mjs";
 import { DEFAULT_ORG } from "../lib/store-contract.mjs";
 
-export async function createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA }) {
+export async function createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA, diagnostics = null }) {
 function emptyState() {
   return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, balancesByMachine: {}, subagentCostReset: false, handoffLog: [], identities: {}, devices: [], inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0, sessionPrompts: [], sessionPromptSeq: 0 };
 }
@@ -195,7 +195,9 @@ const snapshotState = () => {
   const cardEvents = events.filter(e => ["created", "moved", "updated"].includes(e?.type));
   const messages = state.messages.slice();
   const tasks = state.tasks.slice();
-  const snapshot = JSON.parse(JSON.stringify({ ...state, events: [], cardEvents: [], messages: [], tasks: [] }));
+  const serialized = JSON.stringify({ ...state, events: [], cardEvents: [], messages: [], tasks: [] });
+  diagnostics?.recordStep("snapshot.serialize", Buffer.byteLength(serialized));
+  const snapshot = JSON.parse(serialized);
   snapshot.events = events;
   snapshot.cardEvents = cardEvents;
   snapshot.messages = messages;
@@ -233,7 +235,9 @@ const persist = () => {
     return;
   }
   try {
-    writeFileSync(DATA, JSON.stringify(snapshotState()));
+    const serialized = JSON.stringify(snapshotState());
+    diagnostics?.recordStep("json.persist.serialize", Buffer.byteLength(serialized));
+    writeFileSync(DATA, serialized);
     dirty = false;
     persistHealth.succeeded();
   } catch (e) {
