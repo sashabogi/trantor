@@ -95,6 +95,7 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     sessionCard: 0,
     // #13923: runTurn exports the seat-instance stamp into the turn shell.
     BOOT_TS: Date.now(),
+    seatBuildCacheEnv: (env) => env,   // #12270: the shared-cache env is the runner's; identity here
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
     cutChain: [],
     // #13474: runTurn feeds the burn counters and saves WIP at a cut; neither is under test here.

@@ -67,6 +67,7 @@ async function drill(t, { maxMs, cliBody }) {
     PRESENCE_MS: 60000, MACHINE_LABEL: "", sessionCard: 7749,
     // #13923: runTurn exports the seat-instance stamp into the turn shell.
     BOOT_TS: Date.now(),
+    seatBuildCacheEnv: (env) => env,   // #12270: the shared-cache env is the runner's; identity here
     // #7761: no ceiling here, so the box is the plain wall-clock box these drills measure.
     TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.

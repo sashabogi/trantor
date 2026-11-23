@@ -124,8 +124,9 @@ console.log("\n## the contract fallback fetches the current origin/main");
   ok("the fake seat resolved that sha from its own worktree", r.log.includes(`seat resolved base ${currentOrigin}: yes`), r.log.slice(-300));
   ok("the seat worktree is a linked worktree of the same repo",
     /cwd=.*\.agent-bus\/worktrees\/tt-base\/codex/.test(t), t.slice(0, 120));
-  ok("the rules tell the seat to start at the contract base",
-    t.includes("never at origin/main") && t.includes("verified at <sha>"), "rules text missing the #7754 lines");
+  ok("the rules say the runner aligned the seat to the contract base and forbid a hand reset",
+    t.includes("runner has already aligned your seat branch") && t.includes("Never `git reset`") && t.includes("verified at <sha>"),
+    "rules text missing the #7754 / #13961 lines");
   ok("nothing was moved to blocked", !r.moves.some(m => m.status === "blocked"), JSON.stringify(r.moves));
 }
 
