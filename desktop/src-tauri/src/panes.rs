@@ -121,9 +121,11 @@ pub(crate) fn prompt_delivery(result: Result<herdr::PromptOutcome, String>) -> P
              (Terminal tray), then send again. Nothing was typed.".into())),
         Ok(PromptOutcome::NotReady) => ("not_ready", Some(
             "The agent is still starting up — try again in a moment. Nothing was typed.".into())),
-        Ok(PromptOutcome::Stalled) => ("stalled", Some(
-            "The send didn't register with the agent — no lifecycle change was observed. \
-             Try again.".into())),
+        // #13913: herdr's agent_prompt_stalled means the text and Enter WERE sent; the agent just
+        // showed no activity within 5s. Treating it as failed offered a retry that duplicates it.
+        Ok(PromptOutcome::Stalled) => ("sent", Some(
+            "Typed into the session, but it hasn't started on it yet. Don't send it again; \
+             check the pane if it stays quiet.".into())),
         Ok(PromptOutcome::NoAgent) => ("no_agent", Some(
             "No agent is running in this pane — reopen the session first.".into())),
         Err(error) => ("stalled", Some(error)),
@@ -172,6 +174,13 @@ mod prompt_delivery_tests {
 
     /// #13913: a timed-out wait is herdr saying the bytes landed but the session has not
     /// picked them up — "sent", never a failure, so nothing downwind resends.
+    #[test]
+    fn stalled_is_sent_never_a_retryable_failure() {
+        let d = prompt_delivery(Ok(herdr::PromptOutcome::Stalled));
+        assert_eq!(d.outcome, "sent");
+        assert!(d.error.is_some_and(|e| e.contains("Don't send it again")));
+    }
+
     #[test]
     fn timed_out_is_sent_not_a_failure() {
         let d = prompt_delivery(Ok(herdr::PromptOutcome::TimedOut));

@@ -211,7 +211,7 @@ async fn every_herdr_outcome_maps_to_ack_and_preserves_composer_reason() {
         (Delivered, "delivered"),
         (Blocked, "blocked"),
         (NotReady, "not_ready"),
-        (Stalled, "stalled"),
+        (Stalled, "sent"),   // #13913: herdr typed it; the agent just hasn't reacted yet
         (NoAgent, "no_agent"),
     ] {
         let hub = FakeHub::new(vec![(200, claim())]);
