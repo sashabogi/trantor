@@ -147,6 +147,31 @@ try {
       && git(["for-each-ref", "--format=%(refname)", "refs/heads/harvest"], wt.dir).split("\n").filter(Boolean).length === 2);
   }
 
+  console.log("\ncontract alignment recovers per-card and detached branches:");
+  {
+    for (const mode of ["own-branch", "detached", "already-reachable"]) {
+      const repo = makeRepo(root, `repo-recover-${mode}`);
+      const wt = ensureSeatWorktree({ sourceDir: repo, project: "proj", agent: "x", home: join(root, `home-recover-${mode}`), log: silent });
+      const base = git(["rev-parse", "HEAD"], wt.dir);
+      if (mode === "own-branch") git(["checkout", "-q", "-b", "seat/x-card-42"], wt.dir);
+      if (mode === "detached") git(["checkout", "-q", "--detach"], wt.dir);
+      if (mode !== "already-reachable") {
+        writeFileSync(join(wt.dir, "contract.txt"), `${mode}\n`);
+        git(["add", "contract.txt"], wt.dir);
+        git(["commit", "-q", "-m", "contract #42"], wt.dir);
+      }
+      const oldTip = git(["rev-parse", "HEAD"], wt.dir);
+      const result = alignSeatWorktree({ dir: wt.dir, project: "proj", agent: "x", base, receiptsRoot: join(root, `receipts-${mode}`), log: silent });
+      ok(`${mode} aligns onto seat/x at the base`, result.ok && git(["branch", "--show-current"], wt.dir) === "seat/x" && git(["rev-parse", "HEAD"], wt.dir) === base, JSON.stringify(result));
+      if (mode === "already-reachable") {
+        ok("a tip already reachable from base is not saved", !result.parked && git(["for-each-ref", "--format=%(refname)", "refs/heads/harvest"], wt.dir) === "");
+      } else {
+        const saved = result.parked.split(", ").filter(Boolean);
+        ok(`${mode} old tip is saved at harvest`, saved.length === 1 && git(["rev-parse", `refs/heads/${saved[0]}`], wt.dir) === oldTip, JSON.stringify(result));
+      }
+    }
+  }
+
   // ---- down() removes worktrees via the seam ----
   console.log("\ndown() removes each stopped seat's worktree and names kept ones:");
   {
