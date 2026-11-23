@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
 import { machineLabel } from "../lib/machine-label.mjs";
 import { resolveSecrets, shadowEnv, withSecretExports } from "../lib/secrets.mjs";
+import { seatBuildCacheEnv } from "../lib/seat-cache.mjs";
 import { runnerPersona } from "../lib/persona.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
@@ -1066,7 +1067,7 @@ exit $turn_exit`;
     detached: true,
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
   };
-  const spawnEnv = { ...process.env, ...shadowEnv(secrets), RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
+  const spawnEnv = { ...seatBuildCacheEnv(process.env, PROJ), ...shadowEnv(secrets), RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
     // #6228: marks this env as belonging to PROJ, unlike a one-off RELAY_PROJECT override; crew.mjs's
     // `up` guard refuses to bring up another project's crew from a shell carrying this badge.
     TRANTOR_SEAT: PROJ,

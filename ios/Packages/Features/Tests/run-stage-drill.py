@@ -3,6 +3,7 @@
 import datetime
 import json
 from pathlib import Path
+from shared_cache import derived_data_path
 import re
 import subprocess
 import sys
@@ -59,7 +60,7 @@ shots.mkdir(exist_ok=True)
 command = [
     "xcodebuild", "-project", str(OUT / "StageDrill.xcodeproj"), "-scheme", "StageDrill",
     "-destination", f"platform=iOS Simulator,id={device['udid']}",
-    "-derivedDataPath", str(OUT / "UIDerivedData"), "-resultBundlePath", str(result),
+    "-derivedDataPath", str(derived_data_path(OUT, "UIDerivedData")), "-resultBundlePath", str(result),
     "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO", "test",
 ]
 log_path = OUT / f"ui-tests-{stamp}.log"

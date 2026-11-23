@@ -2,6 +2,7 @@
 """Run the question-answering tests on the iPad simulator."""
 import json
 from pathlib import Path
+from shared_cache import derived_data_path
 import subprocess
 import sys
 
@@ -58,7 +59,7 @@ project = OUT / "test-project.json"
 project.write_text(json.dumps(spec, indent=2))
 subprocess.run(["xcodegen", "generate", "--spec", str(project)], check=True, cwd=ROOT)
 command = ["xcodebuild", "-project", str(OUT / "AnswerDrill.xcodeproj"), "-scheme", "AnswerDrill",
-           "-destination", f"platform=iOS Simulator,id={DEVICE}", "-derivedDataPath", str(OUT / "TestDerivedData"),
+           "-destination", f"platform=iOS Simulator,id={DEVICE}", "-derivedDataPath", str(derived_data_path(OUT, "TestDerivedData")),
            "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO", "test"] + sys.argv[1:]
 with (OUT / "tests.log").open("w") as log:
     result = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT)

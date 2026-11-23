@@ -6,6 +6,7 @@ import os
 import plistlib
 import signal
 from pathlib import Path
+from shared_cache import derived_data_path
 import subprocess
 import sys
 import time
@@ -115,7 +116,7 @@ def main():
     if result.exists():
         raise SystemExit(f"Keep the earlier evidence: move {result} aside before rerunning")
     command = ["xcodebuild", "-project", str(OUT / "AuroraDrill.xcodeproj"), "-scheme", "AuroraDrill",
-               "-destination", f"platform=iOS Simulator,id={args.device}", "-derivedDataPath", str(OUT / "DerivedData"),
+               "-destination", f"platform=iOS Simulator,id={args.device}", "-derivedDataPath", str(derived_data_path(OUT, "DerivedData")),
                "-resultBundlePath", str(result), "-parallel-testing-enabled", "NO", "-jobs", "2",
                "-collect-test-diagnostics", "never", "CODE_SIGNING_ALLOWED=NO", "test"]
     if args.phase == "design":
