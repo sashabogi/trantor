@@ -26,6 +26,7 @@ import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine }
 import {
   cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, turnDelivered, budgetPause, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
+  ownCardForInstance, contractedCardIds,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
@@ -174,6 +175,11 @@ const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${redactKeys(String
 const LOGDIR = join(homedir(), ".agent-bus", "logs");
 try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
 let TURN = releaseState?.turn || 0;
+// #13923: when THIS seat instance started. A seat name is reused across instances and the board's
+// assignee only knows the name, so the my-cards surfaces (relay_board mine, the own-card reroute)
+// fence assignments against this stamp — cards assigned before it are a predecessor's (#12138).
+// Carried across the in-place release restart; a swap or a fresh `trantor up` stamps anew.
+const BOOT_TS = releaseState?.bootTs || Date.now();
 const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${PERSONA}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
 // The boot line records the HUB this runner bound to, so a split-brain is diagnosable from disk.
 telemetry({ ts: Date.now(), persona: PERSONA, agent: AGENT, project: PROJ, boot: true, hub: HUB, pid: process.pid, version: bootVersion });
@@ -933,7 +939,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #6393: the store's keys ride the spawn env under shadow names and the shell re-exports them
   // AFTER the sources ran, so the keychain wins over a stale .env line and no file is ever copied.
   const secrets = resolveSecrets(process.env);
-  cmd = withEnvFiles(withSecretExports(seatSignalPrefix(TURN_DIR) + cmd, Object.keys(secrets)), envs);
+  // #13923: the instance stamp rides the turn shell so the CLI's own MCP server (relay_board mine)
+  // fences inherited assignments with the SAME clock the runner's own-card resolution uses.
+  const bootStamp = `export TRANTOR_SEAT_BOOT_TS=${BOOT_TS}\n`;
+  cmd = withEnvFiles(withSecretExports(seatSignalPrefix(TURN_DIR) + bootStamp + cmd, Object.keys(secrets)), envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   // #7777: the one effort line — which effort parameters were set, or that the model is uncatalogued.
   if (turnEffort.changed) log(`effort: ${turnEffort.effort.difficulty} for #${sessionCard} (launch ${EFFORT?.difficulty || "none"}) — ${turnEffort.text}`);
@@ -1508,15 +1517,29 @@ function askedExcerpt(message) {
 // bus message parked on the board is never work, and chasing one (or a phantom id) is how a turn
 // burns on bookkeeping. Only a CONFIRMED message-card title reroutes, to the seat's OWN newest
 // open card (same statuses/ordering as relay_board's mine view); a phantom binds nothing.
-async function newestOwnCard(session, why) {
+
+// #13923: the reroute lands only on a card THIS instance may work (newer than its start, or
+// contracted to it after) — never an assignment the reused name inherited from a predecessor.
+async function newestOwnCard(session, why, messages = []) {
   try {
     const { tasks } = await api(`/tasks?project=${encodeURIComponent(PROJ)}`);
     const own = (Array.isArray(tasks) ? tasks : [])
-      .filter((t) => t.assignee === session && OPEN_CARD_STATUSES.includes(t.status) && !isMessageCardTitle(t.title))
-      .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0));
-    if (own.length) log(`${why} — resolved to the seat's own #${own[0].id} (${own[0].status})`);
+      .filter((t) => t.assignee === session && OPEN_CARD_STATUSES.includes(t.status) && !isMessageCardTitle(t.title));
+    let eligible = own;
+    if (own.some((t) => (Number(t.ts) || 0) < BOOT_TS)) {
+      // Contracts in hand (this wake batch) plus everything the hub still shows as delivered to
+      // this session — a contract consumed turns ago still counts, so long as it is post-boot.
+      const contracted = contractedCardIds(messages, { session, bootTs: BOOT_TS });
+      try {
+        const r = await api(`/inbox?session=${encodeURIComponent(session)}&since=0&peek=1`);
+        for (const id of contractedCardIds(r?.messages, { session, bootTs: BOOT_TS })) contracted.add(id);
+      } catch { /* inbox unreadable: the in-hand batch still decides; the fence holds */ }
+      eligible = own.filter((t) => ownCardForInstance(t, { bootTs: BOOT_TS, contractedIds: contracted }));
+    }
+    const list = eligible.sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0));
+    if (list.length) log(`${why} — resolved to the seat's own #${list[0].id} (${list[0].status})`);
     else log(`${why} — and the seat has no open card, so this turn carries no card binding`);
-    return own.length ? own[0].id : 0;
+    return list.length ? list[0].id : 0;
   } catch { return 0; }   // board unreadable: no binding beats a guessed one
 }
 async function resolveWakeCard(messages, { session }) {
@@ -1527,7 +1550,7 @@ async function resolveWakeCard(messages, { session }) {
   try {
     const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${cited}`);
     if (!task) { log(`#${cited}: the wake cites a card this board does not have — no card binding; the mine view is the first call`); return 0; }
-    if (isMessageCardTitle(task.title)) return newestOwnCard(session, `#${cited} is a message-card ("${String(task.title).slice(0, 60)}")`);
+    if (isMessageCardTitle(task.title)) return newestOwnCard(session, `#${cited} is a message-card ("${String(task.title).slice(0, 60)}")`, messages);
     return cited;
   } catch { return cited; }   // hub unreachable: keep the pre-#7763 reading rather than drop a contract
 }
@@ -1626,7 +1649,7 @@ async function resolveWakeCard(messages, { session }) {
       writeFileSync(PENDF, JSON.stringify({ persona: PERSONA, agent: AGENT, project: PROJ, ts: Date.now(),
         wake: pendingWake, bcast: pendingBcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
       const state = { cursor, turn: TURN, sid, sessionCard, retryAt, deliveryFails,
-        noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions],
+        noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions], bootTs: BOOT_TS,
         cardTokens, cardCommits, cardStartedAt, budgetStop, budgetRetryAt,
         capHandoffs, capLogged, capArmed, capFreshTurn };
       process.execve(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
