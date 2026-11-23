@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileText, MessageSquare, Search } from "lucide-react";
 import { HubClient, hubForProject, type Card, type HubEvent } from "../../shared/api/client";
+import { loadTasks } from "../../shared/tasks";
 import { searchFiles } from "../code/fileApi";
 import { paletteHits, type PaletteHit } from "./match";
 
@@ -49,7 +50,7 @@ export function Palette({ scope, projects, searchProjects, onClose, onJumpProjec
           const hub = await hubForProject(p);
           const client = new HubClient(hub);
           const [taskRows, eventRows] = await Promise.all([
-            client.tasks(p),
+            loadTasks(client, p),
             client.events({ project: p, limit: 500 }).then(r => r.events ?? []),
           ]);
           return { project: p, cards: taskRows, events: eventRows };

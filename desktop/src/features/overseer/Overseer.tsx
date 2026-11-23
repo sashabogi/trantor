@@ -3,6 +3,7 @@
 // liveness and controls, open episodes, the stuck-mail ledger, and the hub's warn/gate policy map
 // into the app.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { loadTasks } from "../../shared/tasks";
 import { Activity, ExternalLink, Link2, Minus, Plus, Power, ShieldCheck, Square, Unlink } from "lucide-react";
 import {
   dutyLogPath,
@@ -57,7 +58,7 @@ async function resolveGateBlast(client: HubClient, gate: HubEvent): Promise<Gate
   const cited = claimCardId(gate.claim ?? "");
   const ids = cited !== null
     ? [cited]
-    : await client.tasks(gate.project).then(cards => fallbackCandidates(gate.by ?? "", gate.project ?? "", cards).map(c => c.id)).catch((): number[] => []);
+    : await loadTasks(client, gate.project).then(cards => fallbackCandidates(gate.by ?? "", gate.project ?? "", cards).map(c => c.id)).catch((): number[] => []);
   for (const id of ids.slice(0, FALLBACK_CARDS_MAX)) {
     const task = await client.card(id).then(r => r.task).catch(() => null);
     const note = task?.log ? blastFromLog(task.log) : null;

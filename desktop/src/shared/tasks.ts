@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Card, HubClient } from "./api/client";
 
 const POLL_MS = 12_000;
-type Entry = { cards: Card[]; listeners: Set<(cards: Card[]) => void>; timer: ReturnType<typeof setInterval>; pending?: Promise<void> };
+type Entry = { cards: Card[]; loaded: boolean; listeners: Set<(cards: Card[]) => void>; timer: ReturnType<typeof setInterval>; pending?: Promise<void> };
 const entries = new Map<string, Entry>();
 const keyOf = (client: HubClient, project?: string) => `${client.baseUrl}\u0000${project ?? ""}`;
 
@@ -15,15 +15,22 @@ export function refreshTasks(client: HubClient, project?: string): Promise<void>
   const entry = entries.get(keyOf(client, project));
   if (!entry) return client.tasks(project).then(() => {});
   if (entry.pending) return entry.pending;
-  entry.pending = client.tasks(project).then(cards => publish(entry, cards)).finally(() => { entry.pending = undefined; });
+  entry.pending = client.tasks(project).then(cards => { entry.loaded = true; publish(entry, cards); }).finally(() => { entry.pending = undefined; });
   return entry.pending;
+}
+
+export async function loadTasks(client: HubClient, project?: string): Promise<Card[]> {
+  const entry = entries.get(keyOf(client, project));
+  if (!entry) return client.tasks(project);
+  if (!entry.loaded) await refreshTasks(client, project);
+  return entry.cards;
 }
 
 export function subscribeTasks(client: HubClient, project: string | undefined, listener: (cards: Card[]) => void) {
   const key = keyOf(client, project);
   let entry = entries.get(key);
   if (!entry) {
-    const created: Entry = { cards: [], listeners: new Set(), timer: setInterval(() => { void refreshTasks(client, project).catch(() => {}); }, POLL_MS) };
+    const created: Entry = { cards: [], loaded: false, listeners: new Set(), timer: setInterval(() => { void refreshTasks(client, project).catch(() => {}); }, POLL_MS) };
     entries.set(key, created);
     entry = created;
     void refreshTasks(client, project).catch(() => {});
