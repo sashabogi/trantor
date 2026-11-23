@@ -149,7 +149,7 @@ const publicContext = { ...context, ...publicAuth, AUTH_MODE: "enforce" };
 function requestHandler(runtime, ctx, gate = null) {
   return async (req, res) => {
     diagnostics.beginRequest(req);
-    const finish = () => diagnostics.endRequest(req);
+    const finish = () => diagnostics.endRequest(req, res);
     res.once("finish", finish);
     res.once("close", finish);
     try {

@@ -2,40 +2,70 @@
 import assert from "node:assert/strict";
 import { createHubDiagnostics } from "../../lib/hub-diagnostics.mjs";
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const block = ms => {
-  const until = performance.now() + ms;
-  while (performance.now() < until) {}
-};
-
 const lines = [];
+let lagClock = 0;
+const histogram = {
+  max: 0,
+  enable() {},
+  disable() {},
+  reset() { this.max = 0; },
+};
 const diagnostics = createHubDiagnostics({
-  sampleIntervalMs: 40,
+  histogram,
+  now: () => lagClock,
   logIntervalMs: 0,
   log: line => lines.push(line),
 });
 diagnostics.start();
 try {
-  await sleep(100);
-  block(300);
-  await sleep(120);
+  lagClock = 300;
+  histogram.max = 300e6;
+  diagnostics.checkLag();
   assert.equal(lines.length, 0, `sub-threshold block logged: ${lines.join("\n")}`);
 
   const req = { method: "POST", url: "/task/update?secret=not-logged" };
   diagnostics.beginRequest(req);
   diagnostics.recordStep("snapshot.serialize", 1234);
-  block(700);
+  lagClock = 1000;
+  histogram.max = 700e6;
   diagnostics.endRequest(req);
-  const deadline = Date.now() + 1000;
-  while (!lines.length && Date.now() < deadline) await sleep(20);
-  await sleep(120);
+  diagnostics.checkLag();
+  diagnostics.checkLag();
   assert.equal(lines.length, 1, `700ms block should log exactly once: ${lines.join("\n")}`);
-  assert.match(lines[0], /event-loop stall \d+ms \(>500ms\)/);
-  assert.match(lines[0], /inFlight=POST \/task\/update/);
+  assert.match(lines[0], /event-loop stall 700ms \(>500ms\)/);
+  assert.match(lines[0], /inFlight=POST \/task\/update \(700ms\)/);
   assert.doesNotMatch(lines[0], /secret=not-logged/);
-  assert.match(lines[0], /lastStep=snapshot\.serialize bytes=1234/);
+  assert.match(lines[0], /lastStep=snapshot\.serialize bytes=1234 age=700ms/);
 } finally {
   diagnostics.stop();
 }
 
-console.log("hub diagnostics: sub-500ms quiet; 700ms stall logged once with route and serialize size");
+const slowLines = [];
+let clock = 0;
+const requests = createHubDiagnostics({
+  now: () => clock,
+  logIntervalMs: 5000,
+  log: line => slowLines.push(line),
+});
+const quick = { method: "GET", url: "/health", headers: {} };
+requests.beginRequest(quick);
+clock = 1000;
+requests.endRequest(quick, { statusCode: 200 });
+assert.equal(slowLines.length, 0, "a request at the threshold must stay quiet");
+
+const slow = { method: "POST", url: "/task/update?private=query", headers: {}, _bodyBytes: 73 };
+clock = 2000;
+requests.beginRequest(slow);
+clock = 3001;
+requests.endRequest(slow, { statusCode: 201 });
+assert.equal(slowLines.length, 1);
+assert.match(slowLines[0], /slow request POST \/task\/update 1001ms \(>1000ms\) body=73B status=201/);
+assert.doesNotMatch(slowLines[0], /private=query/);
+
+clock = 4000;
+requests.beginRequest(slow);
+clock = 5002;
+requests.endRequest(slow, { statusCode: 201 });
+assert.equal(slowLines.length, 1, "slow-request logs must be rate-limited");
+
+console.log("hub diagnostics: sub-500ms quiet; 700ms stall logged once with route and serialize size; slow routes thresholded and rate-limited");
