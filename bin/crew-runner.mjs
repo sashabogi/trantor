@@ -948,7 +948,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // a resume without an id must fall back to a new session, never to `next`'s bare resume shape.
   let cmd = isFirst || ((cli.sid || cli.pinned) && !sid)
     ? (sid && cli.firstById ? cli.firstById : cli.first)
-    : (sid && cli.nextById ? cli.nextById : cli.next);
+    : (runnerOption("resume") && sid && cli.nextById ? cli.nextById : cli.next);
   // The flagged row (TDD §4.6). `{S}` exists only in `stateNext`, so the replaceAll below is a
   // no-op on every other path — which is what "flag off = byte-identical" has to mean.
   if (opts.state && cli.stateNext) cmd = cli.stateNext;
