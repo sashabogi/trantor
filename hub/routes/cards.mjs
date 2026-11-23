@@ -28,6 +28,8 @@ function slimCard(t) {
   for (const k of Object.keys(t)) if (!SLIM_DROP.has(k)) out[k] = t[k];
   // Keep the ·N the board renders, so slimming costs a reader nothing visible.
   out.logCount = Array.isArray(t.log) ? t.log.length : 0;
+  out.checklistCount = Array.isArray(t.checklist) ? t.checklist.length : 0;
+  out.checklistDone = Array.isArray(t.checklist) ? t.checklist.filter(item => item.done).length : 0;
   return out;
 }
 

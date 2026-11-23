@@ -157,13 +157,13 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
         {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
         {/* #5624: the acceptance denominator — rendered ONLY when a checklist exists; a card
             without one shows nothing rather than a fabricated bar. */}
-        {card.checklist && card.checklist.length > 0 && (
+        {(card.checklistCount ?? card.checklist?.length ?? 0) > 0 && (
           <span className="flex shrink-0 items-center gap-1 rounded bg-black/30 px-1.5 py-0.5"
-                title={`${card.checklist.filter(c => c.done).length} of ${card.checklist.length} acceptance items met`}>
-            {card.checklist.filter(c => c.done).length}/{card.checklist.length}
+                title={`${card.checklistDone ?? card.checklist?.filter(c => c.done).length ?? 0} of ${card.checklistCount ?? card.checklist?.length} acceptance items met`}>
+            {card.checklistDone ?? card.checklist?.filter(c => c.done).length ?? 0}/{card.checklistCount ?? card.checklist?.length}
             <span className="h-[3px] w-8 overflow-hidden rounded-full bg-white/10">
               <span className="block h-full rounded-full bg-[var(--color-tr-doing)]"
-                    style={{ width: `${(card.checklist.filter(c => c.done).length / card.checklist.length) * 100}%` }} />
+                    style={{ width: `${((card.checklistDone ?? card.checklist?.filter(c => c.done).length ?? 0) / (card.checklistCount ?? card.checklist?.length ?? 1)) * 100}%` }} />
             </span>
           </span>
         )}

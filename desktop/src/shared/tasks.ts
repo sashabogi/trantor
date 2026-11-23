@@ -23,10 +23,10 @@ export function subscribeTasks(client: HubClient, project: string | undefined, l
   const key = keyOf(client, project);
   let entry = entries.get(key);
   if (!entry) {
-    const created: Entry = { cards: [], listeners: new Set(), timer: setInterval(() => { void refreshTasks(client, project); }, POLL_MS) };
+    const created: Entry = { cards: [], listeners: new Set(), timer: setInterval(() => { void refreshTasks(client, project).catch(() => {}); }, POLL_MS) };
     entries.set(key, created);
     entry = created;
-    void refreshTasks(client, project);
+    void refreshTasks(client, project).catch(() => {});
   }
   entry.listeners.add(listener);
   listener(entry.cards);

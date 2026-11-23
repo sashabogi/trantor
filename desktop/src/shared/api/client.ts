@@ -29,6 +29,9 @@ export type Card = {
   /** #5624: acceptance items — checked/total is the one honest denominator for a progress bar.
    * Absent or empty = no checklist, and the UI renders nothing (never fabricate progress). */
   checklist?: { text: string; done: boolean }[];
+  /** Compact acceptance progress retained by fields=slim for board tiles. */
+  checklistCount?: number;
+  checklistDone?: number;
   /** Who POSTED the card — `${hostId()}:${project}`, the same shape a focus card's assignee has.
    * This, not `parent`, is what actually joins a sub-agent to the session that spawned it. */
   by?: string;
