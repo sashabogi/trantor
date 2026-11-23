@@ -26,7 +26,7 @@ writeFileSync(callsPath, "");
 
 const writeBin = (name, source) => writeFileSync(join(fakeBin, name), `#!${process.execPath}\n${source}\n`, { mode: 0o755 });
 writeBin("xcrun", `
-const fs = require("node:fs");
+import fs from "node:fs";
 const state = JSON.parse(fs.readFileSync(process.env.SIMCTL_STATE, "utf8"));
 const args = process.argv.slice(2);
 const log = (entry) => fs.appendFileSync(process.env.SIMCTL_CALLS, JSON.stringify(entry) + "\\n");
@@ -37,7 +37,7 @@ else if (args[0] === "simctl" && args[1] === "io" && args[3] === "screenshot") {
 else { log(args); if (args[1] === "launch") process.stdout.write("com.example.app: 1234\\n"); }
 `);
 writeBin("axe", `
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.SIMCTL_CALLS, JSON.stringify(["axe", ...args]) + "\\n");
 if (args[0] === "--version") process.stdout.write("2.1.1\\n");
@@ -45,7 +45,7 @@ else if (args[0] === "describe-ui") process.stdout.write(JSON.stringify([{ role:
 else if (process.env.FAIL_AXE) { process.stderr.write("synthetic AXe failure\\n"); process.exit(4); }
 `);
 writeBin("sips", `
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "-g") process.stdout.write("/tmp/screen.png\\n  pixelWidth: 1170\\n  pixelHeight: 2532\\n");
 else fs.copyFileSync(args[3], args[5]);
@@ -67,6 +67,7 @@ function ok(name, value, detail = "") {
 
 try {
   let r = run(["boot", "iPhone 17"]);
+  if (r.status !== 0) throw new Error(`boot failed (status ${r.status}): ${r.error?.message || r.stderr}`);
   let j = JSON.parse(r.stdout);
   ok("boot emits JSON and waits for simulator readiness", r.status === 0 && j.udid === "SIM-A" && j.state === "Booted"
     && calls().some((call) => call[1] === "bootstatus"));
