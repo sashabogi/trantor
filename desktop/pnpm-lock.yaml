@@ -20,6 +20,9 @@ importers:
       '@tauri-apps/plugin-opener':
         specifier: ^2
         version: 2.5.4
+      '@tauri-apps/plugin-window-state':
+        specifier: 2.2.1
+        version: 2.2.1
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
@@ -665,6 +668,9 @@ packages:
 
   '@tauri-apps/plugin-opener@2.5.4':
     resolution: {integrity: sha512-1HnPkb+AmgO29HBazm4uPLKB+r7zzcTBW1d0fyYp1uP+jwtpoiNDGKMMzz58SFp49nOIrxdE3aUJtT57lfO9CQ==}
+
+  '@tauri-apps/plugin-window-state@2.2.1':
+    resolution: {integrity: sha512-L7FhG/ocQNt8t+TMBkvl8eLhCU6I19t848unKMUgNHuvwHPaurzZr4knulNyKzqz7zVYSz9AdvgWy4915eq+AA==}
 
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
@@ -1719,6 +1725,10 @@ snapshots:
       '@tauri-apps/api': 2.11.1
 
   '@tauri-apps/plugin-opener@2.5.4':
+    dependencies:
+      '@tauri-apps/api': 2.11.1
+
+  '@tauri-apps/plugin-window-state@2.2.1':
     dependencies:
       '@tauri-apps/api': 2.11.1
 

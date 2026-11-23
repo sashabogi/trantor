@@ -4,7 +4,7 @@
 // project_wake call is a fake behind the same guard and outcome classifier the shell uses.
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InterruptedStrip, interruptedError } from "./InterruptedStrip";
 import { guardedWake } from "./wakeGuard";
 import { classifyWakeOutcome, type WakeRowState } from "../features/genesis/wakeRow";
@@ -50,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  vi.unstubAllGlobals();
 });
 
 // SAFETY: every test renders both rows, so the lookup always finds the one <button> without a
@@ -63,6 +64,15 @@ const settle = async (fn: () => void) => { await act(async () => { fn(); await P
 
 describe("the Interrupted strip (#11640)", () => {
   it("eight interrupted rows collapse to one persistent header", () => {
+    // Node 26 ships its own localStorage global (inert without --localstorage-file) that shadows
+    // happy-dom's, so the collapse memory gets an in-memory Storage of its own here.
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+      clear: () => store.clear(),
+    });
     const rows = Array.from({ length: 8 }, (_, i) => row(`interrupted-${i}`));
     const render = () => act(() => root.render(
       <InterruptedStrip rows={rows} wakeStates={new Map()} onResume={() => {}} onDismiss={() => {}} />,
