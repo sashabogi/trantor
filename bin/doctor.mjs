@@ -15,6 +15,7 @@ import { scan } from "../lib/splitbrain.mjs";
 import { resolveSecrets, envFileSecrets, backendFor } from "../lib/secrets.mjs";
 import { resolveStateFlags } from "../lib/state/flags.mjs";
 import { probeClaudeIntegration, HERDR_CLAUDE_INSTALL } from "../lib/herdr-integration.mjs";
+import { axeDoctorStatus } from "../lib/sim/axe-status.mjs";
 
 const H = homedir();
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -362,6 +363,20 @@ prof?.providers && Object.keys(prof.providers).length
 // billing issues while the duty seat had held 48 undelivered messages for 22 hours and finished
 // crew work went unread overnight: credentials EXIST is not the fleet is MOVING. Both signals are
 // already on disk, written by the runner itself.
+section("iOS simulator driver");
+{
+  const present = has("axe");
+  let version = "";
+  if (present) {
+    try { version = execSync("axe --version", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); }
+    catch { version = ""; }
+  }
+  const status = axeDoctorStatus(process.platform, present, version);
+  if (status.kind === "ok") ok(status.message);
+  else if (status.kind === "warn") warn(status.message, `bash ${join(ROOT, "bin", "install-axe.sh")}`);
+  else note(status.message);
+}
+
 section("the fleet (is it actually running?)");
 {
   const busDir = join(H, ".agent-bus");

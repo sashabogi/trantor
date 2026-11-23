@@ -20,6 +20,7 @@ const runCrew = () => {
 switch (cmd) {
   case "setup":   run("deploy/setup.sh", "/bin/bash"); break;
   case "doctor":  run("bin/doctor.mjs"); break;
+  case "sim":     run("bin/sim.mjs"); break;
   case "connect": run("bin/connect.mjs"); break;
   case "profile": run("bin/profile.mjs"); break;
   case "provider": case "providers": run("bin/provider.mjs"); break;
@@ -239,6 +240,7 @@ switch (cmd) {
 
   trantor setup       one-shot install: hub as an always-on service + config + CLI wiring + doctor
   trantor doctor      where do I stand? hub/plugin/CLIs/auth/keys/profile, with copy-paste fixes
+  trantor sim         drive the owned iOS Simulator through AXe: boot|install|launch|screen|tap|swipe|type|shutdown
   trantor connect     (re)wire every installed AI CLI to the bus
   trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
   trantor provider    bring ANY model (BYOM): list · status [--json] · verify <name> --key … · add <name> --key … · remove <name>
