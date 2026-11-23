@@ -41,7 +41,15 @@ import fs from "node:fs";
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.SIMCTL_CALLS, JSON.stringify(["axe", ...args]) + "\\n");
 if (args[0] === "--version") process.stdout.write("2.1.1\\n");
-else if (args[0] === "describe-ui") process.stdout.write(JSON.stringify([{ role: "Application", frame: { x: 0, y: 0, width: 390, height: 844 }, children: [{ AXLabel: "Continue", AXUniqueId: "continue-button", role_description: "button", enabled: true, frame: { x: 20, y: 730, width: 350, height: 50 } }] }]));
+else if (args[0] === "describe-ui") process.stdout.write(JSON.stringify([{ role: "Application", frame: { x: 0, y: 0, width: 390, height: 844 }, children: [
+  { role: "Group", frame: { x: 0, y: 0, width: 390, height: 844 } },
+  { role: "Group", frame: { x: 12, y: 22, width: 0, height: 0 } },
+  { role: "Slider", role_description: "scroll bar", frame: { x: 380, y: 0, width: 10, height: 844 } },
+  { role: "Group", frame: { x: 8, y: 60, width: 100, height: 30 } },
+  { AXLabel: "Full screen labeled row", role: "Group", frame: { x: 0, y: 0, width: 390, height: 844 } },
+  { AXUniqueId: "empty-but-addressable", role: "Group", frame: { x: 12, y: 22, width: 0, height: 0 } },
+  { AXLabel: "Continue", AXUniqueId: "continue-button", role_description: "button", enabled: true, frame: { x: 20, y: 730, width: 350, height: 50 } }
+] }]));
 else if (process.env.FAIL_AXE) { process.stderr.write("synthetic AXe failure\\n"); process.exit(4); }
 `);
 writeBin("sips", `
@@ -92,6 +100,11 @@ try {
     && j.dimensionsPoints.width === 390 && j.dimensionsPoints.height === 844
     && j.elements.some((item) => item.label === "Continue" && item.id === "continue-button" && item.role === "button" && item.enabled)
     && existsSync(j.screenshot) && calls().some((call) => call[0] === "axe" && call[1] === "describe-ui"));
+  ok("screen trims unlabeled full-screen, zero-size, and scroll-bar nodes while retaining addressable nodes", j.elements.length === 4
+    && j.elements.some((item) => item.role === "Group" && item.frame.width === 100)
+    && j.elements.some((item) => item.label === "Full screen labeled row")
+    && j.elements.some((item) => item.id === "empty-but-addressable")
+    && !j.elements.some((item) => item.role === "scroll bar" || item.role === "Slider"));
 
   r = run(["tap", "--label", "Continue"]);
   ok("tap supports labels", r.status === 0 && calls().some((call) => call[1] === "tap" && call.includes("--label") && call.includes("Continue")));
@@ -99,8 +112,25 @@ try {
   ok("tap supports identifiers", r.status === 0 && calls().some((call) => call[1] === "tap" && call.includes("--id") && call.includes("continue-button")));
   r = run(["tap", "--xy", "10,20"]);
   ok("tap supports point coordinates", r.status === 0 && calls().some((call) => call[1] === "tap" && call.includes("-x") && call.includes("10")));
+  let before = calls().filter((call) => call[0] === "axe" && call[1] === "tap").length;
+  r = run(["tap", "--xy", "9999,9999"]);
+  ok("tap rejects coordinates outside the screen without driving AXe", r.status !== 0 && /outside the simulator screen \(390x844 points\)/.test(r.stderr)
+    && calls().filter((call) => call[0] === "axe" && call[1] === "tap").length === before);
+  const cached = JSON.parse(readFileSync(registryPath, "utf8"));
+  delete cached.owners[Object.keys(cached.owners)[0]].dimensionsPoints;
+  writeFileSync(registryPath, JSON.stringify(cached));
+  before = calls().filter((call) => call[0] === "axe" && call[1] === "describe-ui").length;
+  r = run(["tap", "--xy", "10,20"]);
+  const recached = JSON.parse(readFileSync(registryPath, "utf8"));
+  ok("coordinate tap reads and caches dimensions when screen has not been read", r.status === 0
+    && calls().filter((call) => call[0] === "axe" && call[1] === "describe-ui").length === before + 1
+    && recached.owners[Object.keys(recached.owners)[0]].dimensionsPoints.width === 390);
   r = run(["swipe", "--from", "10,20", "--to", "100,200"]);
   ok("swipe forwards point-space endpoints", r.status === 0 && calls().some((call) => call[1] === "swipe" && call.includes("--start-x") && call.includes("--end-y")));
+  before = calls().filter((call) => call[0] === "axe" && call[1] === "swipe").length;
+  r = run(["swipe", "--from", "10,20", "--to", "9999,9999"]);
+  ok("swipe rejects either endpoint outside the screen", r.status !== 0 && /--to point 9999,9999 is outside/.test(r.stderr)
+    && calls().filter((call) => call[0] === "axe" && call[1] === "swipe").length === before);
   r = run(["type", "hello", "world"]);
   ok("type preserves whitespace-separated input", r.status === 0 && calls().some((call) => call[1] === "type" && call[2] === "hello world"));
 

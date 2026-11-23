@@ -98,7 +98,9 @@ function parseTree(raw) {
           if (label) element.label = String(label);
           if (id) element.id = String(id);
           if (role) element.role = String(role);
-          elements.push(element);
+          elements.push({ ...element, _hasLabelOrId: Boolean(label || id), _scrollBarSlider:
+            /slider/i.test(String(node.role ?? node.type ?? node.AXRole ?? ""))
+            && /scroll.?bar/i.test(String(node.role_description ?? node.roleDescription ?? node.AXLabel ?? node.label ?? "")) });
         }
       }
     }
@@ -106,13 +108,38 @@ function parseTree(raw) {
   };
   visit(root);
   if (maxX <= 0 || maxY <= 0) fail("AXe accessibility tree has no screen-sized frame");
-  return { elements, widthPoints: Math.round(maxX), heightPoints: Math.round(maxY) };
+  const widthPoints = Math.round(maxX), heightPoints = Math.round(maxY);
+  const visible = elements.filter((element) => {
+    if (element._scrollBarSlider) return false;
+    if (element._hasLabelOrId) return true;
+    const { x, y, width, height } = element.frame;
+    if (width <= 0 || height <= 0) return false;
+    if (x <= 0 && y <= 0 && width >= widthPoints && height >= heightPoints) return false;
+    return true;
+  }).map(({ _hasLabelOrId, _scrollBarSlider, ...element }) => element);
+  return { elements: visible, widthPoints, heightPoints };
 }
 
 function point(value, name) {
   const coords = String(value || "").split(",").map(Number);
   if (coords.length !== 2 || coords.some((part) => !Number.isFinite(part) || part < 0)) fail(`${name} must be x,y in simulator points`);
   return coords;
+}
+
+function pointDimensions(device) {
+  const shared = registry();
+  const owned = shared.owners[ownerId];
+  if (owned.dimensionsPoints?.width > 0 && owned.dimensionsPoints?.height > 0) return owned.dimensionsPoints;
+  const tree = parseTree(axe(["describe-ui", "--minimal-keys", "--udid", device.udid]));
+  owned.dimensionsPoints = { width: tree.widthPoints, height: tree.heightPoints };
+  saveRegistry(shared);
+  return owned.dimensionsPoints;
+}
+
+function checkOnScreen(coords, name, dimensions) {
+  if (coords[0] >= dimensions.width || coords[1] >= dimensions.height) {
+    fail(`${name} point ${coords.join(",")} is outside the simulator screen (${dimensions.width}x${dimensions.height} points)`);
+  }
 }
 
 try {
@@ -150,6 +177,9 @@ try {
     mkdirSync(dirname(path), { recursive: true });
     command("xcrun", ["simctl", "io", device.udid, "screenshot", path]);
     const tree = parseTree(axe(["describe-ui", "--minimal-keys", "--udid", device.udid]));
+    const shared = registry();
+    shared.owners[ownerId].dimensionsPoints = { width: tree.widthPoints, height: tree.heightPoints };
+    saveRegistry(shared);
     const dimensions = command("sips", ["-g", "pixelWidth", "-g", "pixelHeight", path]);
     const pixelWidth = Number(dimensions.match(/pixelWidth:\s*(\d+)/)?.[1]);
     const pixelHeight = Number(dimensions.match(/pixelHeight:\s*(\d+)/)?.[1]);
@@ -163,13 +193,21 @@ try {
     const device = selected();
     const mode = args[0], value = args[1];
     if (args.length !== 2 || !["--label", "--id", "--xy"].includes(mode) || !value) fail("usage: trantor sim tap --label <text> | --id <identifier> | --xy x,y");
-    const target = mode === "--xy" ? ["-x", String(point(value, "--xy")[0]), "-y", String(point(value, "--xy")[1])] : [mode, value];
+    let target;
+    if (mode === "--xy") {
+      const coords = point(value, "--xy");
+      checkOnScreen(coords, "--xy", pointDimensions(device));
+      target = ["-x", String(coords[0]), "-y", String(coords[1])];
+    } else target = [mode, value];
     axe(["tap", ...target, "--udid", device.udid]);
     emit({ verb, udid: device.udid, selector: mode, target: value });
   } else if (verb === "swipe") {
     const device = selected();
     if (args.length !== 4 || args[0] !== "--from" || args[2] !== "--to") fail("usage: trantor sim swipe --from x,y --to x,y");
     const from = point(args[1], "--from"), to = point(args[3], "--to");
+    const dimensions = pointDimensions(device);
+    checkOnScreen(from, "--from", dimensions);
+    checkOnScreen(to, "--to", dimensions);
     axe(["swipe", "--start-x", String(from[0]), "--start-y", String(from[1]), "--end-x", String(to[0]), "--end-y", String(to[1]), "--udid", device.udid]);
     emit({ verb, udid: device.udid, from, to });
   } else if (verb === "type") {
