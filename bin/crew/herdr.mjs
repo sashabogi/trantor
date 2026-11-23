@@ -6,6 +6,15 @@ export function herdrCall(ctx, args) {
   return call("herdr", args, { env: ctx.env });
 }
 
+function requireHerdr(ctx, args, execute = herdrCall) {
+  const result = execute(ctx, args);
+  if (!result.ok) {
+    const detail = result.stderr || result.stdout || "no error output";
+    throw new Error(`${formatCommand("herdr", args)} exited ${result.status}: ${detail}`);
+  }
+  return result;
+}
+
 export function workspaceList(ctx) {
   if (!ctx.have.herdr) return { proven: false, ids: new Set(), names: new Set(), items: [] };
   const result = herdrCall(ctx, ["workspace", "list"]);
@@ -21,12 +30,12 @@ export function workspaceList(ctx) {
 }
 
 export function createWorkspace(ctx, cwd, label) {
-  const parsed = parseJsonOutput(herdrCall(ctx, ["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"]).stdout);
+  const parsed = parseJsonOutput(requireHerdr(ctx, ["workspace", "create", "--cwd", cwd, "--label", label, "--no-focus"]).stdout);
   const result = parsed?.result || {};
-  return {
-    workspace: result.workspace?.workspace_id || "",
-    pane: result.root_pane?.pane_id || "",
-  };
+  const workspace = result.workspace?.workspace_id || "";
+  const pane = result.root_pane?.pane_id || "";
+  if (!workspace || !pane) throw new Error("herdr workspace create returned no usable workspace and root pane");
+  return { workspace, pane };
 }
 
 export function splitPane(ctx, pane, direction, cwd = "", execute = herdrCall) {
@@ -34,7 +43,7 @@ export function splitPane(ctx, pane, direction, cwd = "", execute = herdrCall) {
   if (pane) args.push(pane);
   args.push("--direction", direction, "--no-focus");
   if (cwd) args.push("--cwd", cwd);
-  const parsed = parseJsonOutput(execute(ctx, args).stdout);
+  const parsed = parseJsonOutput(requireHerdr(ctx, args, execute).stdout);
   return parsed?.result?.pane?.pane_id || "";
 }
 
@@ -108,9 +117,10 @@ export function reportAgent(ctx, pane, agent, { sessionId = "", resumeArgv = [] 
 }
 
 function runSeat(ctx, pane, agent, command) {
-  if (!pane || ctx.dry) return;
-  herdrCall(ctx, ["pane", "rename", pane, `${agent} · ${ctx.project}`]);
-  herdrCall(ctx, ["pane", "run", pane, command]);
+  if (ctx.dry) return;
+  if (!pane) throw new Error(`herdr created no pane for ${agent}; the seat runner was not started`);
+  requireHerdr(ctx, ["pane", "rename", pane, `${agent} · ${ctx.project}`]);
+  requireHerdr(ctx, ["pane", "run", pane, command]);
 }
 
 function trackedWorkspace(ctx) {

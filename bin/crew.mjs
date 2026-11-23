@@ -162,7 +162,9 @@ try {
 if (!result) result = jsonResult(code);
 if (!result.ok && !result.reason) result.reason = diagnostics.at(-1) || `${command} failed; see stderr`;
 if (result.reason) result.reason = redactKeys(result.reason);
-if (jsonMode) output(JSON.stringify(result));
-else if (result.reason) console.error(result.reason);
+if (jsonMode) {
+  if (!result.ok && result.reason) console.error(result.reason);
+  output(JSON.stringify(result));
+} else if (result.reason) console.error(result.reason);
 else if (command === "swap") console.log(`— swapped ${result.seat} → ${result.to}; moved contracts: ${result.moved.join(", ") || "none"} —`);
 process.exit(code);

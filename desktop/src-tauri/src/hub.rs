@@ -202,21 +202,31 @@ pub(crate) async fn run_cli_json(args: &[&str]) -> Result<String, String> {
     run_cli_json_at(args, None).await
 }
 
-fn cli_failure_trace(command: &str, code: Option<i32>, stderr: &str) -> String {
-    let exit = code.map_or_else(|| "not-spawned".to_string(), |code| code.to_string());
-    format!("cli FAILED command={command} exit={exit} stderr={stderr:?}")
+fn cli_exit(code: Option<i32>, spawned: bool) -> String {
+    if !spawned {
+        return "not-spawned".to_string();
+    }
+    code.map_or_else(|| "terminated-by-signal".to_string(), |code| code.to_string())
 }
 
-fn trace_cli_failure(command: &str, code: Option<i32>, stderr: &str) {
-    crate::changes::trace(cli_failure_trace(command, code, stderr));
+fn cli_failure_trace(command: &str, code: Option<i32>, spawned: bool, stderr: &str) -> String {
+    format!("cli FAILED command={command} exit={} stderr={stderr:?}", cli_exit(code, spawned))
 }
 
-fn cli_error_reason(command: &str, code: Option<i32>, stdout: &str, stderr: &str) -> String {
+fn trace_cli_failure(command: &str, code: Option<i32>, spawned: bool, stderr: &str) {
+    crate::changes::trace(cli_failure_trace(command, code, spawned, stderr));
+}
+
+fn cli_error_reason(command: &str, code: Option<i32>, spawned: bool, stdout: &str, stderr: &str) -> String {
     let detail = if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() };
     if !detail.is_empty() {
         return detail.to_string();
     }
-    let exit = code.map_or_else(|| "not spawned".to_string(), |code| format!("exited {code}"));
+    let exit = match (spawned, code) {
+        (false, _) => "was not spawned".to_string(),
+        (true, Some(code)) => format!("exited {code}"),
+        (true, None) => "was terminated by a signal".to_string(),
+    };
     format!("{command} {exit} without an error message")
 }
 
@@ -228,7 +238,7 @@ pub(crate) async fn run_cli_json_at(args: &[&str], project: Option<&str>) -> Res
             Some(dir) => dir,
             None => {
                 let error = format!("No local checkout for {project}");
-                trace_cli_failure(&command, None, &error);
+                trace_cli_failure(&command, None, false, &error);
                 return Err(error);
             }
         };
@@ -239,17 +249,17 @@ pub(crate) async fn run_cli_json_at(args: &[&str], project: Option<&str>) -> Res
         Ok(out) => out,
         Err(error) => {
             let error = error.to_string();
-            trace_cli_failure(&command, None, &error);
-            return Err(cli_error_reason(&command, None, "", &error));
+            trace_cli_failure(&command, None, false, &error);
+            return Err(cli_error_reason(&command, None, false, "", &error));
         }
     };
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     if !out.status.success() || stdout.is_empty() {
-        trace_cli_failure(&command, out.status.code(), &stderr);
+        trace_cli_failure(&command, out.status.code(), true, &stderr);
     }
     if stdout.is_empty() {
-        return Err(cli_error_reason(&command, out.status.code(), "", &stderr));
+        return Err(cli_error_reason(&command, out.status.code(), true, "", &stderr));
     }
     Ok(stdout)
 }
@@ -308,28 +318,32 @@ mod cli_compatibility_tests {
     #[test]
     fn failed_cli_trace_preserves_the_command_exit_and_exact_stderr() {
         assert_eq!(
-            cli_failure_trace("'node' '/opt/trantor/bin/cli.mjs' 'up' 'kimi' '--json'", Some(1), "auth failed\nrun kimi login\n"),
+            cli_failure_trace("'node' '/opt/trantor/bin/cli.mjs' 'up' 'kimi' '--json'", Some(1), true, "auth failed\nrun kimi login\n"),
             "cli FAILED command='node' '/opt/trantor/bin/cli.mjs' 'up' 'kimi' '--json' exit=1 stderr=\"auth failed\\nrun kimi login\\n\""
         );
         assert_eq!(
-            cli_failure_trace("'trantor' 'up' 'kimi'", None, "spawn failed"),
+            cli_failure_trace("'trantor' 'up' 'kimi'", None, false, "spawn failed"),
             "cli FAILED command='trantor' 'up' 'kimi' exit=not-spawned stderr=\"spawn failed\""
+        );
+        assert_eq!(
+            cli_failure_trace("'trantor' 'up' 'kimi'", None, true, ""),
+            "cli FAILED command='trantor' 'up' 'kimi' exit=terminated-by-signal stderr=\"\""
         );
     }
 
     #[test]
     fn failed_cli_reason_prefers_stderr_and_never_returns_blank() {
         assert_eq!(
-            cli_error_reason("trantor up kimi", Some(1), "diagnostic stdout", "kimi login required\n"),
+            cli_error_reason("trantor up kimi", Some(1), true, "diagnostic stdout", "kimi login required\n"),
             "kimi login required"
         );
         assert_eq!(
-            cli_error_reason("trantor up kimi", Some(1), "", ""),
+            cli_error_reason("trantor up kimi", Some(1), true, "", ""),
             "trantor up kimi exited 1 without an error message"
         );
         assert_eq!(
-            cli_error_reason("trantor up kimi", None, "", ""),
-            "trantor up kimi not spawned without an error message"
+            cli_error_reason("trantor up kimi", None, false, "", ""),
+            "trantor up kimi was not spawned without an error message"
         );
     }
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { assertHerdrIsolated, herdrSocketFor, realHerdrSocket, writeStubHerdr } from "../lib/herdr-stub.mjs";
+import { splitPane } from "../../bin/crew/herdr.mjs";
 
 // #13922: every herdr-touching test resolves a STUB herdr and fails closed on the real socket;
 // crew closes aimed at the caller's own workspace/pane are refused. All herdr calls here go to
@@ -30,6 +31,18 @@ const runChild = (script, env) => {
 };
 
 try {
+  ok("a failed pane split names the exact herdr command, exit and stderr", () => {
+    assert.throws(
+      () => splitPane({ env: childEnv() }, "P-HOST", "right", "/tmp/project", () => ({
+        ok: false, status: 7, stdout: "", stderr: "pane_not_found",
+      })),
+      error => {
+        assert.match(error.message, /herdr pane split P-HOST --direction right --no-focus --cwd \/tmp\/project exited 7: pane_not_found/);
+        return true;
+      },
+    );
+  });
+
   ok("herdrSocketFor honors HERDR_SOCKET_PATH, then falls back to HOME", () => {
     assert.equal(herdrSocketFor({ HERDR_SOCKET_PATH: "/tmp/alt.sock", HOME: "/home/a" }), "/tmp/alt.sock");
     assert.equal(herdrSocketFor({ HOME: "/home/a" }), join("/home/a", ".config", "herdr", "herdr.sock"));
