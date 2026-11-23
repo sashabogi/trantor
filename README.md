@@ -535,6 +535,15 @@ The default is `max(1, floor(cores / 4))` slots; set `"heavyGateSlots": 4` in
 `~/.agent-bus/config.json` to override it. Crew runners wire Cargo and package-runner shims into
 each seat. For a heavy command outside a runner, use `node bin/heavy-gate.mjs -- <command> …`.
 
+Seats share one build cache per project under `~/.agent-bus/cache/<project>/`: Cargo builds go to
+`cargo-target` there (an explicit `CARGO_TARGET_DIR` still wins) and the iOS drills put Xcode's
+DerivedData beside it. The disk janitor prunes it under the same thresholds as other build output.
+
+A machine that hosts seats can report its load: set `"healthHeartbeat": true` (plus a
+`"machineLabel"`) in its `~/.agent-bus/config.json`, and its crew runners post CPU and memory to
+the hub every 30 seconds. The desktop bottom bar shows each reporting machine, greyed once its last
+report is older than 90 seconds.
+
 ## License
 
 [MIT](./LICENSE) © 2026 Sasha Bogojevic · Built with [Claude Code](https://claude.com/claude-code) ·
