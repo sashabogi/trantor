@@ -1,7 +1,7 @@
 {
   "name": "desktop",
   "private": true,
-  "version": "0.3.205",
+  "version": "0.3.206",
   "type": "module",
   "scripts": {
     "dev": "vite",
