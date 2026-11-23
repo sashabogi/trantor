@@ -112,6 +112,20 @@ function summary(value, limit = 240) {
   return oneLine.length > limit ? `${oneLine.slice(0, limit - 1)}…` : oneLine;
 }
 
+/** #13913: herdr's own answer is the delivery receipt — text plus Enter are sent before herdr
+ *  reports anything, so this only names what became of the kickoff. `timeout` is the busy
+ *  successor (words are in, not picked up yet), never a failure to resend. */
+export function kickoffVerdict(raw) {
+  let response;
+  try { response = JSON.parse(String(raw)); } catch { return "unreadable_response"; }
+  if (response?.result?.type === "agent_prompted") return "agent_prompted";
+  if (response?.error) {
+    const code = String(response.error.code || "herdr error");
+    return code === "timeout" ? "sent, not yet picked up" : `${code} (${summary(response.error.message)})`;
+  }
+  return "unexpected_response";
+}
+
 async function main() {
   if (!handoffFile || !existsSync(handoffFile)) { log(`no handoff file (${handoffFile}) — abort`); process.exit(1); }
   const pane = arg("--pane") || orchPane((() => { try { return readFileSync(join(busDir, "crew-windows.txt"), "utf8"); } catch { return ""; } })(), projectName);
@@ -168,10 +182,14 @@ async function main() {
     await sleep(3000);
   }
   try {
-    const raw = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: { target: pane, text: KICKOFF_PROMPT } });
-    const response = JSON.parse(raw);
-    const result = response.result?.type || response.error?.code || "unexpected_response";
-    log(`kickoff result: ${result}${response.error?.message ? ` (${summary(response.error.message)})` : ""}`);
+    // #13913: the same bounded pickup wait the app uses — herdr sends the text and Enter, then
+    // holds the answer until the successor shows working/blocked activity (10s budget, well
+    // inside this socket's own 30s read timeout).
+    const raw = await socketRequest({
+      id: "trantor:agent.prompt", method: "agent.prompt",
+      params: { target: pane, text: KICKOFF_PROMPT, wait: { until: ["working", "blocked"], timeout_ms: 10_000 } },
+    });
+    log(`kickoff result: ${kickoffVerdict(raw)}`);
   } catch (e) {
     log(`kickoff FAILED (${String(e?.message).slice(0, 120)}) — successor may sit idle until spoken to`);
   }
