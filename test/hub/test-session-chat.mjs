@@ -161,6 +161,22 @@ try {
   r = await sFetch(base, phone, "POST", "/session/prompt/claim", { id: probeId, host: "phone" });
   ok("phone approver cannot claim (owner-only)", r.status === 403, `status ${r.status}`);
 
+  // ---- #13913: outcome "sent" — typed but not yet picked up, terminal and never re-claimed ----
+  r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "busy session words" });
+  const sentId = r.json.id;
+  r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: sentId, host: "mac" });
+  ok("busy-session prompt claims", r.status === 200, `status ${r.status}`);
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: sentId, outcome: "sent", error: "Sent, not yet picked up — the session is mid-turn" });
+  ok("ack sent lands as status sent, not failed", r.status === 200 && r.json.status === "sent", JSON.stringify(r.json));
+  r = await sFetch(base, phone, "GET", `/session/prompt?id=${sentId}`);
+  ok("phone reads sent with the explanation", r.json.status === "sent" && r.json.outcome === "sent"
+    && /not yet picked up/.test(r.json.error), JSON.stringify(r.json));
+  r = await sFetch(base, owner, "GET", "/session/prompts?project=projA&status=queued");
+  ok("a sent prompt is not queued — no seat will ever re-type it",
+    !(r.json.prompts || []).some(p => p.id === sentId), JSON.stringify(r.json.prompts?.map(p => p.id)));
+  r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: sentId, host: "mac" });
+  ok("claiming a sent prompt is 409 — delivery is herdr's answer, never retried", r.status === 409, `status ${r.status}`);
+
   // ---- #12161 review: POST /session/prompt authorizes the project the write LANDS in --------
   // shipId names an existing projA row; borrowing it must not let a projA key queue into projB.
   r = await sFetch(base, phone, "POST", "/session/prompt", { id: shipId, project: "projB", text: "smuggled into projB" });

@@ -303,7 +303,10 @@ public final class ChatStore {
     public func apply(_ receipt: PromptStatus) {
         guard let index = outgoing.firstIndex(where: { $0.promptID == receipt.id }), outgoing[index].delivery != .seen else { return }
         switch receipt.status {
-        case "queued", "claimed":
+        // #13913: "sent" is herdr's answer that the Mac typed the text and Enter but the session
+        // has not picked it up — it stays queued here, never failed, and never re-sent; the
+        // transcript echo is what moves it on (markSeen).
+        case "queued", "claimed", "sent":
             if outgoing[index].delivery == .sending { outgoing[index].delivery = .queued }
         case "delivered": outgoing[index].delivery = .delivered
         case "failed", "expired": outgoing[index].delivery = .failed(receipt.failureReason)

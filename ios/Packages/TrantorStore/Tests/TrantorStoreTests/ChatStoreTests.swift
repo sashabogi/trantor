@@ -84,6 +84,22 @@ final class ChatStoreTests: XCTestCase {
         XCTAssertEqual(store.outgoing.map(\.delivery), [.seen, .seen])
     }
 
+    /// #13913: "sent" is the Mac relaying herdr's answer — text and Enter landed, the session
+    /// has not picked them up. The phone keeps it queued (never failed, nothing re-sent) until
+    /// the transcript echo marks it seen.
+    func testSentStatusKeepsQueuedUntilTheTranscriptEchoes() async throws {
+        let store = store(StubHub())
+        store.merge(snapshot([turn(0, "hold the line", role: "user")]))
+        _ = await store.send("hold the line")
+        let id = try XCTUnwrap(store.outgoing.first?.promptID)
+        store.apply(PromptStatus(id: id, status: "sent", outcome: "sent", error: "Sent, not yet picked up"))
+        XCTAssertEqual(store.outgoing.first?.delivery, .queued)
+        store.apply(PromptStatus(id: id, status: "sent", outcome: "sent", error: "Sent, not yet picked up"))
+        XCTAssertEqual(store.outgoing.first?.delivery, .queued, "sent is steady, not a failure")
+        store.merge(snapshot([turn(1, "hold the line", role: "user")]))
+        XCTAssertEqual(store.outgoing.first?.delivery, .seen, "the transcript echo is what clears it")
+    }
+
     func testReceiptsSurfaceFailureReasonsAndExpiry() async throws {
         let hub = StubHub(), store = store(StubHub())
         store.api = hub

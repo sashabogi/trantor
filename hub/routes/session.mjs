@@ -17,7 +17,7 @@ const CLAIM_TTL_MS = 300000;
 const PROMPT_SWEEP_MS = Number(process.env.RELAY_PROMPT_SWEEP_MS || 30000);
 const EXPIRED_REASON = "No Mac is relaying this project. Is the Trantor app open?";
 const CLAIMED_EXPIRED_REASON = "The Mac claimed this prompt but never delivered it. Try sending it again.";
-const ACK_OUTCOMES = new Set(["delivered", "blocked", "not_ready", "stalled", "no_agent", "stale"]);
+const ACK_OUTCOMES = new Set(["delivered", "sent", "blocked", "not_ready", "stalled", "no_agent", "stale"]);
 const ANSWER_PICKS_MAX = 10;
 const ANSWER_OTHER_MAX = 2000;
 const ANSWER_ENTRIES_MAX = 4;    // CC's question limit per ask (#12912)
@@ -524,8 +524,15 @@ function pruneMachinesHealth() {
       if (p.kind === "crew") {
         p.output = stripAnsi(String(b.output || "")).slice(-CREW_OUTPUT_MAX);
         p.status = outcome;   // "done" or "failed"
+      } else if (outcome === "delivered") {
+        p.status = "delivered";
+      } else if (outcome === "sent") {
+        // #13913: herdr typed the text and Enter but the session has not picked it up. Terminal
+        // for claiming (never re-claimed, never re-typed); phones keep it queued until the
+        // transcript itself shows the turn.
+        p.status = "sent";
       } else {
-        p.status = outcome === "delivered" ? "delivered" : "failed";
+        p.status = "failed";
       }
       // A terminal row will never be claimed or downloaded again: its bytes go now.
       unlinkAttachments(p);
