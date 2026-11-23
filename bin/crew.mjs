@@ -7,6 +7,7 @@ import { createCmuxAdapter, spawnCmux } from "./crew/cmux.mjs";
 import { createHerdrAdapter, spawnHerdr } from "./crew/herdr.mjs";
 import { resolveSpec, reportSkipped } from "./crew/models.mjs";
 import { openOrchestrator } from "./crew/open.mjs";
+import { restoreOrchestrators } from "./crew/restore.mjs";
 import { performSwap, swapOptions, swapRuntime } from "./crew/swap.mjs";
 import { redactKeys } from "../lib/redact.mjs";
 import { reapSeat, down, prune, readRows } from "./crew/state.mjs";
@@ -39,7 +40,7 @@ const adapters = {
 };
 
 function usage() {
-  console.log("usage: crew.mjs up <agent...> | crew.mjs open [<project>] | crew.mjs swap <old> <new[:provider[/model]]> | crew.mjs down [<agent>...] [--all --yes] | crew.mjs prune");
+  console.log("usage: crew.mjs up <agent...> | crew.mjs open [<project>] | crew.mjs restore [--dry-run] | crew.mjs swap <old> <new[:provider[/model]]> | crew.mjs down [<agent>...] [--all --yes] | crew.mjs prune");
 }
 
 function parseUpArgs(args) {
@@ -150,6 +151,7 @@ try {
   if (command === "down") code = await down(ctx, rawArgs, adapters);
   else if (command === "prune") { prune(ctx, adapters); console.log(`— pruned dead crew rows (${ctx.statePath}) —`); }
   else if (command === "open") code = openOrchestrator(ctx, rawArgs);
+  else if (command === "restore") code = await restoreOrchestrators(ctx, rawArgs);
   else if (command === "swap") { result = await swap(rawArgs); code = result.ok ? 0 : 1; }
   else if (command === "up") code = guardCrossProjectUp(ctx) ? await runUp(rawArgs) : 1;
   else { usage(); code = 1; }
