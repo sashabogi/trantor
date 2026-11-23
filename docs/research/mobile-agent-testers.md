@@ -80,3 +80,11 @@ Local references: [`run-aurora-drill.py`](../../ios/Packages/Features/Tests/run-
 5. On Mac, run the card's real drill on the built Trantor artifact, confirm findings/artifacts are readable only by the intended operator, and check `xcrun simctl list devices` after completion to ensure no simulator remains booted. Keep the deterministic drill as the required gate.
 
 **Mac drill required:** validate the actual Trantor iOS build path, a small workflow-dispatched persona run, screenshot/result collection and privacy, and simulator cleanup. None of those were executed from this Linux seat.
+
+## Decision update: adopt AXe for local simulator control
+
+The operator chose AXe as the local interactive driver, rather than adopting the `mobile-agent-testers` GitHub Actions template. AXe is a mature native CLI for simulator accessibility reads and input, and its explicit-UDID interface fits a thin Trantor wrapper that can coordinate simulator ownership. The setup skill should call that wrapper so both Claude and other seats share one guarded workflow.
+
+Pin **AXe v2.1.1** from its [official universal macOS release](https://github.com/cameroncooke/AXe/releases/tag/v2.1.1). The release API publishes SHA-256 `8788838b1b32059d143cf06541b72fcaead85c16274457cdbff086510a5b17fa` for `AXe-macOS-v2.1.1-universal.tar.gz`; the install instructions should verify it before extraction. The release page documents the Homebrew tap, but Homebrew's unversioned formula does not itself pin an exact version.
+
+AXe upstream documents `describe-ui`, coordinate and label/identifier taps, typing, swipes, and screenshots with an explicit simulator UDID. Its `--agent` mode provides checked, stateful element refs, but the Trantor wrapper is intentionally the stable local CLI boundary and must normalize successful results into compact JSON. Upstream describes AXe as using Apple's private accessibility APIs; it requires a Mac with Xcode/simulator services and is not available on this Linux seat. See the [AXe README](https://github.com/cameroncooke/AXe#readme), [v2.1.1 release](https://github.com/cameroncooke/AXe/releases/tag/v2.1.1), and [release asset digest](https://api.github.com/repos/cameroncooke/AXe/releases/tags/v2.1.1).
