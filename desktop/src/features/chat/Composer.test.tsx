@@ -10,17 +10,16 @@ import { draftSlots, nextChipId } from "./composerDraft";
 import { makeChip } from "./attachments";
 import { Composer, composerTakesDrop } from "./Composer";
 import { clampComposerPx, maxComposerPx, minComposerPx } from "./composerHeight";
-import { LOST_AFTER_MS } from "./streaming";
+import { LOST_AFTER_MS, type PromptVerdict } from "./streaming";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // SAFETY: the Tauri IPC boundary as the webview provides it — invoke answers the autonomy read with
 // an empty state; everything else the composer reaches is caught by its own try/catches. The cast
-// names the one key happy-dom's window type does not carry.
-// SAFETY: the Tauri IPC boundary as the webview provides it. pane_send answers with herdr's
-// verdict as an object (#13913); other commands answer with strings.
-const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string) => Promise<string | { outcome: string; error: string | null }> } };
+// names the one key happy-dom's window type does not carry; pane_send resolves herdr's verdict
+// object (#13913) while other commands answer with strings.
+const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string) => Promise<string | PromptVerdict> } };
 w.__TAURI_INTERNALS__ = { invoke: () => Promise.resolve("{}") };
 
 // A test-scoped localStorage stub — this happy-dom integration exposes none. Fresh per test, so
@@ -196,7 +195,7 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
   const sent: Array<{ cmd: string; args: InvokeArgs }> = [];
   const paneSends = () => sent.filter(s => s.cmd === "pane_send");
   // The fake herdr's verdict for pane_send (#13913): "sent" — typed, not yet picked up.
-  let delivery: { outcome: string; error: string | null } = { outcome: "sent", error: null };
+  let delivery: PromptVerdict = { outcome: "sent", error: null };
   const installIpc = () => {
     sent.length = 0;
     delivery = { outcome: "sent", error: null };

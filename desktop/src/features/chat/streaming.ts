@@ -161,11 +161,14 @@ export function sessionLiveness(status: string, target: string | null): Liveness
   return { live: true, why: "" };
 }
 
+/** pane_send's answer (#13913): herdr's own verdict, relayed verbatim by the Rust layer —
+ *  the desktop's owner contract for what became of a prompt. */
+export type PromptVerdict = { outcome: string; error: string | null };
+
 /** A message the composer sent, carrying herdr's own verdict for it (#13913): "sent" means
  *  herdr typed the text and Enter but the session has not picked it up yet (the transcript's
- *  echo is what clears it — display only); "failed" means herdr refused or errored, and
- *  `error` rides verbatim. `project`/`target` pin where the send went (#6250) so a retry
- *  returns to that pane, never whatever project the composer shows now. */
+ *  echo clears it — display only); "failed" means herdr refused or errored, `error` verbatim.
+ *  `project`/`target` pin where the send went (#6250) so a retry returns to that pane. */
 export type PendingSend = { text: string; at: number; project: string; target: string; outcome: "sent" | "failed"; error?: string | null };
 
 /** Silence past this window means the words never made it into the conversation. */

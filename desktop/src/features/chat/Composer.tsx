@@ -13,7 +13,7 @@ import { addChips, formatBytes, makeChip, removeChip, serializeForSend, type Att
 import { canSendDraft, composerDraftApi, draftSlots, emptyDraft, flushSaves, isEmptyDraft, nextChipId, scheduleSave, type ComposerDraft } from "./composerDraft";
 import { clampComposerPx, growComposerPx, loadComposerHeight, maxComposerPx, minComposerPx, saveComposerHeight } from "./composerHeight";
 import { FONT_STEPS, type FontStep } from "./prefs";
-import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, normalizeAttachments, receiptFor, type ContextGauge, type OpenQuestion, type PendingSend } from "./streaming";
+import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, normalizeAttachments, receiptFor, type ContextGauge, type OpenQuestion, type PendingSend, type PromptVerdict } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
@@ -616,8 +616,8 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   // pending, not the selection, owns where its words go. #13913: pane_send answers with herdr's
   // own verdict (text + Enter observed by herdr itself); an IPC-level rejection is the only Err
   // left and rides as a failed delivery, never a guess.
-  const line = (text: string, to: string | null = target): Promise<{ outcome: string; error: string | null }> =>
-    invoke<{ outcome: string; error: string | null }>("pane_send", { target: to, text }).then(
+  const line = (text: string, to: string | null = target): Promise<PromptVerdict> =>
+    invoke<PromptVerdict>("pane_send", { target: to, text }).then(
       d => blockedAsk && d?.outcome === "blocked"
         // #6094 — pane_send's own "answer it there (Terminal tray)" predates the question card
         // and now points at the wrong place: the ask is rendered right above this composer.
@@ -651,11 +651,10 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     }).catch(err => setError(`pasted image failed: ${err instanceof Error ? err.message : String(err)}`));
   };
 
-  // #13913: delivery truth is herdr's own answer, not the transcript. A send that herdr
-  // delivered records nothing; one whose wait timed out rides a "sent, not yet picked up" chip
-  // until the transcript shows the turn (display only); anything else is a failure carrying
-  // herdr's words verbatim with a MANUAL retry. Nothing is ever re-sent automatically — a
-  // missing transcript row proves nothing, because herdr already sent the text and Enter.
+  // #13913: delivery truth is herdr's own answer, not the transcript. Delivered records
+  // nothing; a timed-out wait rides a "sent, not yet picked up" chip until the transcript
+  // shows the turn; anything else is a failure with herdr's words verbatim and a MANUAL
+  // retry — a missing transcript row proves nothing and never re-sends anything.
   const [pendings, setPendings] = useState<PendingSend[]>([]);
   const [tick, setTick] = useState(0);
   useEffect(() => {

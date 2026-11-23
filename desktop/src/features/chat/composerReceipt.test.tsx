@@ -9,13 +9,14 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { Composer } from "./Composer";
+import { type PromptVerdict } from "./streaming";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // SAFETY: the Tauri IPC boundary as the webview provides it. pane_send answers with herdr's own
-// verdict {outcome, error}; everything else gets the empty object.
-const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: InvokeArgs) => Promise<string | string[] | { outcome: string; error: string | null }> } };
+// verdict (PromptVerdict, #13913); everything else gets the empty object.
+const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: InvokeArgs) => Promise<string | string[] | PromptVerdict> } };
 
 // A test-scoped localStorage stub — this happy-dom integration exposes none (Composer.test's pattern).
 let store: Map<string, string>;
@@ -42,7 +43,7 @@ let root: Root;
 const sent: Array<{ cmd: string; args: InvokeArgs }> = [];
 const paneSends = () => sent.filter(s => s.cmd === "pane_send");
 // The fake herdr's answer for pane_send — what the Rust layer would relay of herdr's verdict.
-let delivery: { outcome: string; error: string | null } = { outcome: "delivered", error: null };
+let delivery: PromptVerdict = { outcome: "delivered", error: null };
 
 beforeEach(() => {
   installStore();

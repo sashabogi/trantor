@@ -8,6 +8,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer";
 import { makeChip } from "./attachments";
+import { type PromptVerdict } from "./streaming";
 import { canSendDraft, composerDraftApi, draftSlots, emptyDraft, flushSaves, fromStored, scheduleSave, toStored } from "./composerDraft";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
@@ -18,7 +19,7 @@ let disk: Map<string, string>;
 let sent: { target: string | null; text: string }[];
 type IpcArgs = { project?: string; draft?: string; target?: string | null; text?: string };
 // SAFETY: Tauri's bridge object does not exist under happy-dom; this adds the one key the code reads.
-const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: IpcArgs) => Promise<string | { outcome: string; error: null }> } };
+const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: IpcArgs) => Promise<string | PromptVerdict> } };
 w.__TAURI_INTERNALS__ = {
   invoke: (cmd, args = {}) => {
     if (cmd === "composer_draft_get") return Promise.resolve(disk.get(String(args.project)) ?? "null");
