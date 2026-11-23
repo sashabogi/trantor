@@ -68,4 +68,20 @@ clock = 5002;
 requests.endRequest(slow, { statusCode: 201 });
 assert.equal(slowLines.length, 1, "slow-request logs must be rate-limited");
 
+// Long-poll and SSE run for minutes by design: no slow line, and they don't eat the rate limit.
+const longLines = [];
+let lclock = 0;
+const longPoll = createHubDiagnostics({ now: () => lclock, logIntervalMs: 5000, log: line => longLines.push(line) });
+const poll = { method: "GET", url: "/poll?since=5", headers: {} };
+longPoll.beginRequest(poll);
+lclock = 280_000;
+longPoll.endRequest(poll, { statusCode: 200 });
+assert.equal(longLines.length, 0, "a long-poll must never log as a slow request");
+const realSlow = { method: "GET", url: "/tasks", headers: {} };
+longPoll.beginRequest(realSlow);
+lclock = 281_400;
+longPoll.endRequest(realSlow, { statusCode: 200 });
+assert.equal(longLines.length, 1, "a real slow request right after a long-poll still logs");
+assert.match(longLines[0], /slow request GET \/tasks 1400ms/);
+
 console.log("hub diagnostics: sub-500ms quiet; 700ms stall logged once with route and serialize size; slow routes thresholded and rate-limited");
