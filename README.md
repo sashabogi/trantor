@@ -391,6 +391,9 @@ project's own checkout wherever it is called from, handoff-beats-resume, and the
 prompt so the woken session catches up (handoff, board, memory) and recaps on its own.
 A reboot can leave herdr with a pane in its layout and no terminal behind it; `trantor open`,
 the app's Resume and `trantor prune` all treat such a pane as dead and host a fresh one.
+Trantor does not write herdr's global config. To make restored agents start one at a time, add
+`startup_per_agent_delay_ms = 100` under `[session]` in `~/.config/herdr/config.toml`, then restart
+the herdr server.
 
 Why crews never exhaust the orchestrator: bus messages are **by reference** (~70 tokens),
 work products stay in each agent's own context — the orchestrator burns at coordination
