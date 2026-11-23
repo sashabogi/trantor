@@ -5,7 +5,7 @@
 import { drillEnv } from "../drill-env.mjs";
 import { startTestHub } from "../lib/test-hub.mjs";
 import { createWakeHarness } from "../lib/wake-mock.mjs";
-import { cardRef, cardRefs, assignedCardRef, wakeCard, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES } from "../../lib/turn-policy.mjs";
+import { cardRef, cardRefs, assignedCardRef, wakeCard, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES, sameCardWork, shouldAlignForContract } from "../../lib/turn-policy.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -22,6 +22,13 @@ console.log("\n## the rules");
   ok("an imperative alone is work", carriesWork("resume where you left off"));
   ok("an ack is NOT work", !carriesWork("thanks, acknowledged"));
   ok("a queue note is NOT work", !carriesWork("noted, I will queue that behind the current one"));
+  ok("same-card follow-up is recognized from restored turn state", sameCardWork(13967, 13967));
+  ok("same-card follow-up is recognized from a recent card commit", sameCardWork(13967, 0, "fix runner alignment #13967\n"));
+  ok("different-card commits do not make the current wake a continuation", !sameCardWork(13968, 13967, "fix runner alignment #13967\n"));
+  ok("a longer card number does not match by prefix", !sameCardWork(13967, 0, "fix runner alignment #139670\n"));
+  ok("same-card follow-up without a base keeps the branch", !shouldAlignForContract(13967, "", 13967));
+  ok("same-card follow-up with an explicit new base aligns", shouldAlignForContract(13967, "abc1234", 13967));
+  ok("a different card aligns without an explicit base", shouldAlignForContract(13968, "", 13967));
 
   // ---- #7061: which card a wake BINDS to ------------------------------------------------------
   // The live failure, verbatim in shape: the order opened with what shipped since the seat's last

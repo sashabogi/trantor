@@ -30,6 +30,7 @@ import {
   cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, turnDelivered, budgetPause, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   ownCardForInstance, contractedCardIds,
+  shouldAlignForContract,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
@@ -1986,6 +1987,10 @@ async function resolveWakeCard(messages, { session }) {
     const baseCard = card || servedContractCard(wakeForTurn, { session: SESSION });
     const statedBase = contractBase(wakeForTurn);
     const base = statedBase || originMainHead();
+    const recentCardCommits = card && !statedBase
+      ? gitOut(["log", "-5", "--format=%s%n%b"], TURN_DIR)
+      : "";
+    const alignForContract = shouldAlignForContract(card, statedBase, sessionCard, recentCardCommits);
     if (base && baseCard && !resolvesHere(base)) {
       const text = `cannot resolve base ${base} in ${TURN_DIR} (git cat-file -e failed) — #${baseCard} moved to blocked; push or fetch that sha, or name one this worktree can reach`;
       log(text);
@@ -1997,7 +2002,7 @@ async function resolveWakeCard(messages, { session }) {
       savePending([], pendingBcast);
       return;
     }
-    if (base && TURN_DIR !== DIR && card) {
+    if (base && TURN_DIR !== DIR && card && alignForContract) {
       const aligned = alignSeatWorktree({ dir: TURN_DIR, project: PROJ, agent: PERSONA, base });
       if (!aligned.ok) {
         const text = `cannot align seat worktree for #${card}: ${aligned.reason}`;
