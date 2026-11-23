@@ -53,7 +53,7 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 // The fake CLI writes into $PWD (the seat's worktree, the watchdog's worktree channel) and says
 // nothing on stdout while it works — the extension must come from the files, not from bytes.
 // `writeFor` seconds of writing, then `after` (a shell fragment) decides how the turn ends.
-async function drill(name, { writeFor, after, waitMs }) {
+async function drill(name, { writeFor, after, waitMs, waitForSend }) {
   sends.length = 0; eventSeq = 0; handed = 0;
   const root = mkdtempSync(join(tmpdir(), "tt-ext-"));
   const HOME = join(root, "home");
@@ -88,7 +88,8 @@ ${after}
   // Wait for the contract turn's own ledger row (the first direct-message row), bounded.
   const rowsNow = () => read(JSONL).split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return {}; } });
   while (!rowsNow().some(x => x.trigger === "direct message") && Date.now() - start < waitMs) await sleep(200);
-  await sleep(600);   // let the post-turn notices land on the mock hub
+  while (waitForSend && !sends.some(waitForSend) && Date.now() - start < waitMs) await sleep(50);
+  if (!waitForSend) await sleep(600);   // let the post-turn notices land on the mock hub
   runner.kill("SIGKILL"); await sleep(150);
   const rows = rowsNow();
   const row = rows.find(x => x.trigger === "direct message");
@@ -127,7 +128,12 @@ console.log("\n## a turn that keeps moving is extended and completes");
 // ---- drill 2: a turn that goes silent is stalled at the window, extended or not ----------------
 console.log("\n## a turn that goes silent still ends at the stall window");
 {
-  const r = await drill("quiet", { writeFor: 5, after: "/bin/sleep 30", waitMs: 30000 });
+  const r = await drill("quiet", {
+    writeFor: 5,
+    after: "/bin/sleep 30",
+    waitMs: 30000,
+    waitForSend: s => s.to === "drillhost:tt-ext-quiet" && /turn STALLED/.test(s.text || ""),
+  });
   ok("#7761: the turn is ledgered STALLED (#7752), never completed and never a plain cut",
     r.row && r.row.outcome === "stalled" && r.row.stalled === true,
     JSON.stringify(r.row && { outcome: r.row.outcome, stalled: r.row.stalled, duration: r.row.duration_ms }));
