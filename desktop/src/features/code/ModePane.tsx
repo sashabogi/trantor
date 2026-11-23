@@ -5,7 +5,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FolderTree, GitBranch, History, MessageSquare, Network } from "lucide-react";
 import { GRAPH_PATH } from "./codeTabs";
-import type { Card, HubClient, Peer } from "../../shared/api/client";
+import type { HubClient, Peer } from "../../shared/api/client";
+import { useTasks } from "../../shared/tasks";
 import { localSessions } from "../../shared/api/client";
 import { BrandGlyph } from "../../shared/Avatar";
 import { MachineBadge, machineBadgesVisible } from "../../shared/MachineBadge";
@@ -79,7 +80,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
 
   const [scopeOpen, setScopeOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const [tasks, setTasks] = useState<Card[]>([]);
+  const tasks = useTasks(client, project);
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
@@ -258,13 +259,6 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
 
   // The note composer refs the seat's in-flight card, so a note lands as "#id <note>" exactly
   // like every other card reference the seat already reads. Moved from the SCM rail (#5810).
-  useEffect(() => {
-    let alive = true;
-    const pull = () => { client.tasks(project).then(t => { if (alive) setTasks(t); }).catch(() => {}); };
-    pull();
-    const iv = setInterval(pull, 12_000);
-    return () => { alive = false; clearInterval(iv); };
-  }, [client, project]);
   const seatCard = useMemo(() => {
     if (!seat) return undefined;
     return tasks.find(t => (t.status === "doing" || t.status === "testing") && t.assignee === `${seat}:${project}`);

@@ -10,14 +10,15 @@ import { ProposalsSection } from "../../shared/Proposals";
 import { Collisions } from "./Collisions";
 import { DutyStrip } from "./DutyStrip";
 import { FILE_EVENT_TYPES, unreadStat, unreadTally, type FileEvent } from "../code/graph/unread";
-import type { BalancesReport, Card, Economics, Handoff, Peer } from "../../shared/api/client";
+import type { BalancesReport, Economics, Handoff, Peer } from "../../shared/api/client";
+import { useTasks } from "../../shared/tasks";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 const ONLINE_MS = 5 * 60 * 1000;
 
 type Snapshot = {
   econ: Economics | null; balances: BalancesReport | null;
-  cards: Card[]; peers: Peer[]; lessons: { text: string; scope: string; by: string; ts: number }[];
+  peers: Peer[]; lessons: { text: string; scope: string; by: string; ts: number }[];
   handoffs: Handoff[];
   /** file.claim and file.read across every project: the Unread stat (#7977) */
   fileEvents: FileEvent[];
@@ -40,16 +41,16 @@ export function Home({ client, me, onOpenProject }: {
   client: HubClient; me: string; onOpenProject: (project: string) => void;
 }) {
   const [snap, setSnap] = useState<Snapshot | null>(cachedSnap);
+  const cards = useTasks(client);
 
   useEffect(() => {
     let alive = true;
     const isLocal = client.baseUrl.includes("127.0.0.1") || client.baseUrl.includes("localhost");
     const local = isLocal ? client : new HubClient(LOCAL_HUB);
     const pull = async () => {
-      const [econ, balances, cards, peers, learning, handoffs, fileEvents] = await Promise.all([
+      const [econ, balances, peers, learning, handoffs, fileEvents] = await Promise.all([
         local.economics().catch(() => null),
         local.balances().catch(() => null),
-        client.tasks().catch((): Card[] => []),
         client.peers().catch((): Peer[] => []),
         client.learning().catch(() => null),
         client.handoffs().catch((): Handoff[] => []),
@@ -60,7 +61,7 @@ export function Home({ client, me, onOpenProject }: {
         ? [...learning.lessons.global, ...Object.values(learning.lessons.byAgent).flat()]
             .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 6)
         : [];
-      const s = { econ, balances, cards, peers, lessons, handoffs: handoffs.slice(0, 5), fileEvents };
+      const s = { econ, balances, peers, lessons, handoffs: handoffs.slice(0, 5), fileEvents };
       cachedSnap = s;
       setSnap(s);
     };
@@ -74,9 +75,9 @@ export function Home({ client, me, onOpenProject }: {
   const notional = (ck["subagent-notional"]?.usd ?? 0) + (ck["orchestrator-notional"]?.usd ?? 0);
   const now = Date.now();
   const live = (snap?.peers ?? []).filter(p => p.online || (p.lastSeen && now - p.lastSeen < ONLINE_MS));
-  const projects = new Set((snap?.cards ?? []).map(c => c.project).filter(Boolean));
+  const projects = new Set(cards.map(c => c.project).filter(Boolean));
   const unread = unreadStat(unreadTally(snap?.fileEvents ?? []));
-  const attention = (snap?.cards ?? [])
+  const attention = cards
     .filter(c => ["failed", "blocked", "stale"].includes(c.status))
     .sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0)).slice(0, 6);
 
@@ -98,7 +99,7 @@ export function Home({ client, me, onOpenProject }: {
         <StatCard label="Claude notional" value={notional ? `$${Math.round(notional).toLocaleString()}` : "—"}
                   sub="plan-covered, never billed" />
         <StatCard label="Fleet" value={`${projects.size} projects`}
-                  sub={`${live.length} live session${live.length === 1 ? "" : "s"} · ${(snap?.cards ?? []).length.toLocaleString()} cards`} />
+                  sub={`${live.length} live session${live.length === 1 ? "" : "s"} · ${cards.length.toLocaleString()} cards`} />
         <StatCard label="Unread" value={unread.value} sub={unread.sub} testId="home-unread" />
         <div className="tr-card flex min-w-0 flex-1 flex-col gap-2 p-5">
           <div className="flex items-center justify-between">

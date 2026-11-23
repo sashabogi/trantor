@@ -3,12 +3,13 @@
 // "what needs an answer from me". A project is a channel, and the roster sits beside it since
 // knowing WHO is in the room is most of the context an operator needs while agents talk.
 import { useEffect, useMemo, useState } from "react";
-import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
+import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { Avatar, displayName } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 import { CardDetail } from "../board/CardDetail";
 import { cleanTitle } from "../../shared/Avatar";
+import { useTasks } from "../../shared/tasks";
 
 const ONLINE_MS = 5 * 60 * 1000;
 const BUSY_MS = 90 * 1000;
@@ -41,7 +42,8 @@ export function Conversation({ client, project, me, lens, onLens }: {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [cards, setCards] = useState<Map<number, Card>>(new Map());
+  const tasks = useTasks(client, project);
+  const cards = useMemo(() => new Map(tasks.map(t => [t.id, t])), [tasks]);
   const [openCard, setOpenCard] = useState<number | null>(null);
 
   // Messages come from the event log rather than /inbox: /inbox is per-recipient, and this view is
@@ -57,10 +59,6 @@ export function Conversation({ client, project, me, lens, onLens }: {
     client.peers().then(setPeers).catch(() => {});
     return () => clearInterval(t);
   }, [client]);
-
-  useEffect(() => {
-    client.tasks(project).then(ts => setCards(new Map(ts.map(t => [t.id, t])))).catch(() => {});
-  }, [client, project]);
 
   useEffect(() => client.streamEvents(ev => {
     if (ev.type === "message" && ev.project === project) {

@@ -65,7 +65,9 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
   const [error, setError] = useState<string | null>(null);
   const [code, setCode] = useState<CardCode | null>(null);
 
-  const load = () => client.card(id).then(setData).catch(e => setError(String(e.message || e)));
+  const load = () => Promise.all([client.card(id), client.cards([id])]).then(([story, full]) => {
+    setData({ ...story, task: full[0] ?? story.task });
+  }).catch(e => setError(String(e.message || e)));
 
   useEffect(() => { setData(null); setError(null); setCode(null); void load(); }, [client, id]); // eslint-disable-line react-hooks/exhaustive-deps
 

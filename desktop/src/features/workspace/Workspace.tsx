@@ -3,7 +3,8 @@
 // Honesty rule (design system): everything rendered is real hub data, peers, cards, events.
 // Anything without a live source ships as a stated placeholder, never an imitation.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
+import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
+import { useTasks } from "../../shared/tasks";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
 import { orchestratorOf, type HerdrSeat } from "./herdr";
@@ -93,7 +94,7 @@ export function Workspace({ client, project, lens, onLens }: {
   client: HubClient; project: string; lens: Lens; onLens: (l: Lens) => void;
 }) {
   const [peers, setPeers] = useState<Peer[]>([]);
-  const [tasks, setTasks] = useState<Card[]>([]);
+  const tasks = useTasks(client, project);
   // The record rail folds (#5593, operator: "it reads as a log, not a live surface") —
   // persisted, and collapsing always leaves a visible edge control to bring it back
   // (#5521 doctrine: never a dismissal that needs prior knowledge to undo).
@@ -108,7 +109,6 @@ export function Workspace({ client, project, lens, onLens }: {
     let alive = true;
     const load = () => {
       client.peers().then(p => { if (alive) setPeers(p); }).catch(() => {});
-      client.tasks(project).then(t => { if (alive) setTasks(t); }).catch(() => {});
       client.events({ project, limit: 30 }).then(r => { if (alive) setEvents((r.events ?? []).slice().reverse()); }).catch(() => {});
     };
     load();
@@ -286,7 +286,7 @@ export function Workspace({ client, project, lens, onLens }: {
               <div className="mt-2 text-[13.5px] font-medium leading-snug">{seatCard.title}</div>
               <div className="mt-2.5 flex items-center gap-2 text-[11.5px] text-tr-muted">
                 <span className="min-w-0 flex-1 truncate">
-                  {seatCard.assignee ?? "unassigned"}{seatCard.log?.length ? ` · ${seatCard.log.length} log notes` : ""}
+                  {seatCard.assignee ?? "unassigned"}{(seatCard.logCount ?? seatCard.log?.length) ? ` · ${seatCard.logCount ?? seatCard.log?.length} log notes` : ""}
                 </span>
                 {showMachineBadges && <MachineBadge machine={seats.find(s => s.session === seatCard.assignee)?.machine} />}
               </div>

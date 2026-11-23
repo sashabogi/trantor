@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
 import { CardDetail } from "./CardDetail";
+import { refreshTasks, subscribeTasks } from "../../shared/tasks";
 import { SubagentGroup } from "./SubagentGroup";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { AgentChip, Avatar, cleanTitle, displayName } from "../../shared/Avatar";
@@ -218,10 +219,8 @@ export function Board({ client, project, lens, onLens, focusCard, onFocusConsume
   useEffect(() => {
     let alive = true;
     setCards(null); setError(null); setOpen(null); setQuery(""); setAssignee("");
-    client.tasks(project)
-      .then(t => { if (alive) setCards(t); })
-      .catch(e => { if (alive) setError(String(e.message || e)); });
-    return () => { alive = false; };
+    const unsubscribe = subscribeTasks(client, project, t => { if (alive) setCards(t); });
+    return () => { alive = false; unsubscribe(); };
   }, [client, project]);
 
   // Live updates ride the SAME stream the FEED uses. A card event is cheap to react to: refetch the
@@ -231,7 +230,7 @@ export function Board({ client, project, lens, onLens, focusCard, onFocusConsume
   useEffect(() => {
     return client.streamEvents(ev => {
       if ((ev.project === project && ["created", "moved", "updated"].includes(ev.type)) || ev.type === "hub.reload") {
-        client.tasks(project).then(setCards).catch(() => {});
+        void refreshTasks(client, project).catch(() => {});
       }
     });
   }, [client, project]);
@@ -339,7 +338,7 @@ export function Board({ client, project, lens, onLens, focusCard, onFocusConsume
       </div>
       {open !== null && (
         <CardDetail client={client} id={open} onClose={() => setOpen(null)} onOpen={setOpen}
-                    onMoved={() => client.tasks(project).then(setCards).catch(() => {})} />
+                    onMoved={() => { void refreshTasks(client, project).catch(() => {}); }} />
       )}
     </div>
   );

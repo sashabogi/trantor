@@ -5,7 +5,8 @@
 import { useEffect, useRef, useState } from "react";
 import { hasSeen, markSeen } from "../../shared/seen";
 import { stalenessOf } from "./staleness";
-import type { Card, HubClient, Message, Peer } from "../../shared/api/client";
+import type { HubClient, Message, Peer } from "../../shared/api/client";
+import { useTasks } from "../../shared/tasks";
 import { Avatar } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 import { ago, when } from "../../shared/time";
@@ -117,7 +118,7 @@ export function Inbox({ client, me, onOpenConversation }: {
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
-  const [cards, setCards] = useState<Card[]>([]);
+  const cards = useTasks(client);
   const [staleOpen, setStaleOpen] = useState<Record<number, boolean>>({});
   const [to, setTo] = useState("");
   const [text, setText] = useState("");
@@ -135,7 +136,6 @@ export function Inbox({ client, me, onOpenConversation }: {
     const refresh = () => {
       load();
       client.peers().then(setPeers).catch(() => {});
-      client.tasks().then(setCards).catch(() => {});   // card status is how we know the work moved on
     };
     refresh();
     const t = setInterval(refresh, 30_000);

@@ -22,6 +22,8 @@ export type Card = {
   /** The card's STORY (CARDLOG contract): notes attached on /task + /task/update, capped 40
    * entries × 2000 chars hub-side, chronological oldest→newest. The drawer's primary block. */
   log?: { ts: number; by: string; text: string }[];
+  /** Present on fields=slim rows; text stays available only on a full card. */
+  logCount?: number;
   /** the narrative line ("assigned — did"), written by the cheap summarizer */
   summary?: string;
   /** #5624: acceptance items — checked/total is the one honest denominator for a progress bar.
@@ -172,8 +174,16 @@ export class HubClient {
   }
 
   tasks(project?: string) {
-    const q = project ? `?project=${encodeURIComponent(project)}` : "";
-    return this.request<{ tasks: Card[] }>("GET", `/tasks${q}`).then(r => r.tasks ?? []);
+    const q = new URLSearchParams();
+    if (project) q.set("project", project);
+    q.set("fields", "slim");
+    return this.request<{ tasks: Card[] }>("GET", `/tasks?${q.toString()}`).then(r => r.tasks ?? []);
+  }
+  /** Full rows for cards currently opened in a detail view. */
+  cards(ids: number[]) {
+    if (!ids.length) return Promise.resolve([] as Card[]);
+    const q = new URLSearchParams({ fields: "slim", card: ids.join(",") });
+    return this.request<{ tasks: Card[] }>("GET", `/tasks?${q.toString()}`).then(r => r.tasks ?? []);
   }
   peers()   { return this.request<{ peers: Peer[] }>("GET", "/peers").then(r => r.peers ?? []); }
   health() { return this.request<HubHealth>("GET", "/health"); }
