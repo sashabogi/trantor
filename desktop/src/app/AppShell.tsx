@@ -597,7 +597,7 @@ export function AppShell() {
       </div>
     ) : null}
     <div className="flex min-h-0 flex-1 gap-0">
-      <aside className="flex w-60 shrink-0 flex-col px-3 py-4">
+      <aside className="flex min-h-0 w-60 shrink-0 flex-col px-3 py-4">
         <div className="mb-5 flex items-center gap-2.5 px-3">
           <span className="tr-dot" style={{ background: "var(--color-tr-ok)" }} />
           <span className="text-[13px] font-semibold tracking-[0.18em]">TRANTOR</span>
@@ -618,11 +618,10 @@ export function AppShell() {
           ))}
         </div>
 
-        {/* #5401 — the restore strip: sessions the reboot took, offered back. One row per
-            project, launch-only, dismissable (a dismissal is a decision, not a snooze). */}
-        {restorables.length > 0 && (
-          <div className="mb-3 flex flex-col gap-1">
-            <SectionLabel count={restorables.length}>Interrupted</SectionLabel>
+        <nav className="min-h-0 flex-1 overflow-y-auto">
+          {/* #5401 — sessions the reboot took, offered back. Inside the scroll area so a long
+              restore list can never push Active now beyond the operator's reach. */}
+          {restorables.length > 0 && (
             <InterruptedStrip rows={restorables} wakeStates={wakeStates}
               onResume={p => void wakeProject(p)}
               onDismiss={r => {
@@ -631,10 +630,8 @@ export function AppShell() {
                 // a restart. Fire-and-forget — the strip has already updated optimistically.
                 void dismissedSessionsApi.dismiss(r.project, r.sessionId).catch(() => {});
               }} />
-          </div>
-        )}
+          )}
 
-        <nav className="flex-1 overflow-y-auto">
           {/* The old FILES toggle row is gone (#5841): the tree lives in the Code lens's mode
               pane now, not in a second column. */}
           {activeProjects.length > 0 && (

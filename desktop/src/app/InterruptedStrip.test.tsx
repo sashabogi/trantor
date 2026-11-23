@@ -40,6 +40,7 @@ let host: HTMLDivElement;
 let root: Root;
 let wakes: Map<string, Pending>;
 beforeEach(() => {
+  globalThis.localStorage?.removeItem("trantor.sidebar.interruptedCollapsed");
   host = document.createElement("div");
   document.body.appendChild(host);
   root = createRoot(host);
@@ -61,6 +62,35 @@ const click = (b: HTMLButtonElement) => act(() => { b.click(); });
 const settle = async (fn: () => void) => { await act(async () => { fn(); await Promise.resolve(); }); };
 
 describe("the Interrupted strip (#11640)", () => {
+  it("eight interrupted rows collapse to one persistent header", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => row(`interrupted-${i}`));
+    const render = () => act(() => root.render(
+      <InterruptedStrip rows={rows} wakeStates={new Map()} onResume={() => {}} onDismiss={() => {}} />,
+    ));
+    render();
+    // SAFETY: this render always includes the section's aria-controls toggle button.
+    const toggle = () => host.querySelector('button[aria-controls="interrupted-rows"]') as HTMLButtonElement;
+    expect(toggle().textContent).toBe("Interrupted· 8");
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(host.textContent).toContain("interrupted-7");
+
+    click(toggle());
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector("#interrupted-rows")).toBeNull();
+    expect(host.textContent).not.toContain("interrupted-0");
+    expect(globalThis.localStorage?.getItem("trantor.sidebar.interruptedCollapsed")).toBe("1");
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    render();
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector("#interrupted-rows")).toBeNull();
+
+    click(toggle());
+    expect(host.textContent).toContain("interrupted-7");
+    expect(globalThis.localStorage?.getItem("trantor.sidebar.interruptedCollapsed")).toBe("0");
+  });
+
   it("one project's running wake never swallows another project's click", () => {
     click(resumeButton("builtbetter"));
     expect(resumeButton("builtbetter").textContent).toBe("Resuming…");

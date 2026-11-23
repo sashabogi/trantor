@@ -1,11 +1,22 @@
 // InterruptedStrip.tsx: the sidebar's "Interrupted" rows (#5401). #11640: each row shows its own
 // wake outcome. Resuming while it runs, the error text when the wake failed (Resume enabled
 // again), and nothing on success because the shell drops the row.
+import { useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { RestorableSession } from "../features/workspace/herdr";
 import type { WakeRowState } from "../features/genesis/wakeRow";
 
 const DEFAULT_LINE = "session died with the machine";
 const SHORT_ERROR_CHARS = 72;
+const COLLAPSED_KEY = "trantor.sidebar.interruptedCollapsed";
+
+function loadCollapsed(): boolean {
+  try { return globalThis.localStorage?.getItem(COLLAPSED_KEY) === "1"; } catch { return false; }
+}
+
+function saveCollapsed(collapsed: boolean): void {
+  try { globalThis.localStorage?.setItem(COLLAPSED_KEY, collapsed ? "1" : "0"); } catch { /* this session only */ }
+}
 
 const underway = (s?: WakeRowState) => s?.phase === "running" || s?.phase === "kickoff";
 
@@ -25,36 +36,54 @@ export function InterruptedStrip({ rows, wakeStates, onResume, onDismiss }: {
   onResume: (project: string) => void;
   onDismiss: (row: RestorableSession) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
+  const toggle = () => setCollapsed(current => {
+    saveCollapsed(!current);
+    return !current;
+  });
   return (
-    <>
-      {rows.map(r => {
-        const state = wakeStates.get(r.project);
-        const busy = underway(state);
-        const error = busy ? null : interruptedError(state);
-        return (
-          <div key={r.project} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[12px]">
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[var(--color-tr-text)]/85">{r.project}</span>
-              {error ? (
-                <span className="block truncate text-[10px] text-tr-danger" title={error.full}>{error.short}</span>
-              ) : (
-                <span className="block text-[10px] text-[var(--color-tr-muted)]">{DEFAULT_LINE}</span>
-              )}
-            </span>
-            <button type="button"
-              onClick={() => onResume(r.project)}
-              disabled={busy}
-              className="shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40">
-              {busy ? "Resuming…" : "Resume"}
-            </button>
-            <button type="button" title="dismiss — it stays wakeable from its project row"
-              onClick={() => onDismiss(r)}
-              className="shrink-0 px-1 text-[12px] text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
-              ×
-            </button>
-          </div>
-        );
-      })}
-    </>
+    <div className="mb-3 flex flex-col gap-1">
+      <button type="button" aria-expanded={!collapsed} aria-controls="interrupted-rows"
+        onClick={toggle}
+        className="flex w-full items-center gap-2 px-3 pt-1 pb-1.5 text-left text-[10px] font-semibold uppercase tracking-[0.13em] text-[var(--color-tr-muted)]/60 hover:text-[var(--color-tr-text)]">
+        <span>Interrupted</span>
+        <span className="tr-mono font-normal text-[var(--color-tr-muted)]/40">· {rows.length}</span>
+        {collapsed
+          ? <ChevronRight size={12} strokeWidth={1.8} className="ml-auto" />
+          : <ChevronDown size={12} strokeWidth={1.8} className="ml-auto" />}
+      </button>
+      {!collapsed && (
+        <div id="interrupted-rows" className="flex flex-col gap-1">
+          {rows.map(r => {
+            const state = wakeStates.get(r.project);
+            const busy = underway(state);
+            const error = busy ? null : interruptedError(state);
+            return (
+              <div key={r.project} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[12px]">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[var(--color-tr-text)]/85">{r.project}</span>
+                  {error ? (
+                    <span className="block truncate text-[10px] text-tr-danger" title={error.full}>{error.short}</span>
+                  ) : (
+                    <span className="block text-[10px] text-[var(--color-tr-muted)]">{DEFAULT_LINE}</span>
+                  )}
+                </span>
+                <button type="button"
+                  onClick={() => onResume(r.project)}
+                  disabled={busy}
+                  className="shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40">
+                  {busy ? "Resuming…" : "Resume"}
+                </button>
+                <button type="button" title="dismiss — it stays wakeable from its project row"
+                  onClick={() => onDismiss(r)}
+                  className="shrink-0 px-1 text-[12px] text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
+                  ×
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
