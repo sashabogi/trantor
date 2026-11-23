@@ -59,14 +59,36 @@ export function workspacePane(ctx, workspace, preferredCwd) {
   return "";
 }
 
+// #13922: the herdr home(s) of the process RUNNING the crew CLI, when it itself sits in a pane —
+// HERDR_WORKSPACE_ID names it, and a pane id embeds it (w2:p4Y lives in w2, #7247 forensics).
+// Closing such a workspace kills this very shell and every sibling pane in it (the 11-20 netcup
+// incident: one workspace.close from inside a seat's test run took the whole crew down).
+function callerHerdrHomes(ctx) {
+  const env = ctx.env || {};
+  const pane = String(env.HERDR_PANE_ID || "").trim();
+  return new Set([String(env.HERDR_WORKSPACE_ID || "").trim(), pane ? pane.split(":")[0] : ""].filter(Boolean));
+}
+
+function refusal(what) {
+  console.error(`  ✗ refusing to close herdr ${what}: it hosts this very process (own HERDR pane/workspace env). Close it from outside the crew, or set TRANTOR_CLOSE_OWN_WORKSPACE=1 to override.`);
+}
+
 export function closeWorkspace(ctx, id) {
-  if (ctx.dry) { console.log(`[dry] herdr workspace close ${id}`); return; }
-  herdrCall(ctx, ["workspace", "close", id]);
+  if (callerHerdrHomes(ctx).has(id) && String(ctx.env?.TRANTOR_CLOSE_OWN_WORKSPACE || "") !== "1") {
+    refusal(`workspace ${id}`);
+    return false;
+  }
+  if (ctx.dry) { console.log(`[dry] herdr workspace close ${id}`); return true; }
+  return herdrCall(ctx, ["workspace", "close", id]).ok;
 }
 
 export function closePane(ctx, id) {
-  if (ctx.dry) { console.log(`[dry] herdr pane close ${id}`); return; }
-  herdrCall(ctx, ["pane", "close", id]);
+  if (id && String(ctx.env?.HERDR_PANE_ID || "").trim() === id && String(ctx.env?.TRANTOR_CLOSE_OWN_WORKSPACE || "") !== "1") {
+    refusal(`pane ${id}`);
+    return false;
+  }
+  if (ctx.dry) { console.log(`[dry] herdr pane close ${id}`); return true; }
+  return herdrCall(ctx, ["pane", "close", id]).ok;
 }
 
 export function reportAgent(ctx, pane, agent) {
@@ -128,8 +150,8 @@ function prepareWorkspace(ctx, prune) {
     // killed its own orchestrator that way. The row stays: the workspace is still live.
     if (id === tracked.reuse || orchSpaces.has(id)) continue;
     console.log(`  → closing stale stacked crew workspace for ${ctx.project} (${id})`);
-    closeWorkspace(ctx, id);
-    dropState(ctx, ctx.project, "herdrws", "", id);
+    // #13922: a refused close (the caller's own home) leaves the workspace live, so its row stays.
+    if (closeWorkspace(ctx, id)) dropState(ctx, ctx.project, "herdrws", "", id);
   }
   if (tracked.stale.length) prune();
   if (ctx.dry) return tracked.reuse;
@@ -169,8 +191,8 @@ function replacementPane(ctx, workspace, spec, hostPane, resolve) {
     runSeat(ctx, pane, (seat.persona || seat.agent), runnerCommand(ctx, seat.agent, seat.model, seat.effort, seat.persona));
   }
   if (old) {
-    closePane(ctx, old);
-    dropState(ctx, ctx.project, "herdr", (seat.persona || seat.agent));
+    // #13922: a refused/failed close leaves the old pane live, so its row stays with it.
+    if (closePane(ctx, old)) dropState(ctx, ctx.project, "herdr", (seat.persona || seat.agent));
   }
   return { ...seat, pane };
 }
