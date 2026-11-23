@@ -1,0 +1,9 @@
+# Card 13970 read-only findings (2026-11-23)
+
+Base `f1d41e0eb99d6c3f4fcf91dbe518ac69eccc795a` is an ancestor of this seat's HEAD.
+
+Herdr 0.9.5 is installed. `herdr api schema` is read-only and reports protocol 22/schema version 1. Its JSON schema allows `agent_session_id` to be string or null in report parameter structures and exposes `pane.report_agent_session`, `pane.clear_agent_authority`, and `pane.release_agent`. The published CLI docs describe `report-agent-session` with optional `--agent-session-id`; `release-agent` ends lifecycle authority. The docs do not say that either clears native identity. Public Herdr issue #4463 (reported against 0.9.1 and discusses an unchanged session field) says null report, release-agent, and clear-agent-authority did not remove `agent_session`; this is not enough to establish current 0.9.5 semantics. I did not connect to or mutate any herdr server.
+
+Repository: `bin/crew/herdr.mjs` has `paneAlive`, based on `pane process-info`; card specifically asks a `pane read` failure to mean dead. `bin/crew/open.mjs` calls `reportOrchestrator` only after starting an agent, not when reattaching to a running agent. Desktop `herdr_pane_read` already shells `herdr pane read`, and its status decisions live in Rust (`desktop/src-tauri/src/local_sessions.rs`, `panes.rs`, `watchers.rs`, succession paths). A project-scoped helper needs to enumerate tracked `orch` and `herdr` rows in `crew-windows.txt`/state and opt out those panes.
+
+Blocking uncertainty: no 0.9.5 evidence found that a supported per-pane command clears the native `agent_session` recorded by the Claude integration. Editing Herdr's private `session.json` or relying on undocumented null semantics would invent behavior and is unsafe. Ask card assigner to provide the supported operation or authorize the direction (e.g. change Herdr global resume setting, which is not per-pane).
