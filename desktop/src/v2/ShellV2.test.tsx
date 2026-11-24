@@ -52,10 +52,10 @@ describe("ShellV2", () => {
     expect(host.querySelector('[role="group"][aria-label="Mode"]')).not.toBeNull();
   });
 
-  it("routes each fleet screen to its placeholder", async () => {
+  it("routes each fleet screen to its own heading", async () => {
     await mount();
     const cases: [string, string][] = [["Inbox", "Inbox"], ["Agents", "Agents"], ["Usage and costs", "Usage and costs"],
-      ["Extensions", "Extensions"], ["Settings", "Settings"], ["All projects", "All projects"]];
+      ["Extensions", "Extensions and tools"], ["Settings", "Settings"], ["All projects", "All projects"]];
     for (const [label, title] of cases) {
       await click(`nav button[aria-label="${label}"]`);
       expect(heading(), label).toBe(title);
