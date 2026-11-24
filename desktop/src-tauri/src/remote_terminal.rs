@@ -112,6 +112,11 @@ pub(crate) fn ssh_attach_args(ssh_target: &str, surface: &str) -> Result<Vec<Str
     }
     Ok(vec![
         "-tt".into(),
+        // #13987 drill: a shared ControlMaster connection outlives our killed mux client, so the remote attach stayed held; own the connection.
+        "-o".into(),
+        "ControlMaster=no".into(),
+        "-o".into(),
+        "ControlPath=none".into(),
         "-o".into(),
         "BatchMode=yes".into(),
         "-o".into(),
@@ -154,9 +159,23 @@ mod tests {
     fn remote_attach_uses_batch_mode_and_a_forced_pty() {
         assert_eq!(
             ssh_attach_args("crew@netcup", "w3:p2").unwrap(),
-            ["-tt", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "crew@netcup", "herdr", "agent", "attach", "w3:p2"]
+            [
+                "-tt", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=5", "crew@netcup", "herdr", "agent", "attach", "w3:p2",
+            ]
         );
         assert!(ssh_attach_args("crew@netcup", "w3:p2;rm").is_err());
+    }
+
+    #[test]
+    fn remote_attach_owns_its_ssh_connection() {
+        // #13987 drill: killing a mux client left `herdr agent attach` alive on netcup, so the re-attach was refused.
+        let args = ssh_attach_args("crew@netcup", "w3:p2").unwrap();
+        let opts: Vec<&str> = args.windows(2).filter(|w| w[0] == "-o").map(|w| w[1].as_str()).collect();
+        assert!(opts.contains(&"ControlMaster=no"));
+        assert!(opts.contains(&"ControlPath=none"));
+        let target_at = args.iter().position(|a| a == "crew@netcup").unwrap();
+        assert!(args.iter().position(|a| a == "ControlPath=none").unwrap() < target_at);
     }
 
     #[test]
