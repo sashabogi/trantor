@@ -49,3 +49,6 @@
 
 /* #13984 drill: classic lenses embedded in 2.0 drop their own title + lens row; the 2.0 ProjectFrame owns both. */
 [data-v2-embed] :is(.tr-pane, [data-testid="graph-lens"]) > header:first-child { display: none; }
+
+/* #13987 drill: no second terminal view inside the 2.0 chat. */
+[data-v2-chat] div:has(> button[title^="The orchestrator's live terminal"]) { display: none; }

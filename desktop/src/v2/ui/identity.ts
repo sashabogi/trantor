@@ -88,3 +88,16 @@ export function modelHue(model: string): string {
   if (/qwen/.test(m)) return "#8AA8FF";
   return "#C4C8CE";
 }
+
+/** The agent brand a model id belongs to, for an avatar whose name does not say (#13984 drill). */
+export function brandOfModel(model: string): string | undefined {
+  const m = model.toLowerCase();
+  if (/claude|opus|sonnet|haiku|fable/.test(m)) return "claude";
+  if (/gpt|codex|openai|^o\d/.test(m)) return "codex";
+  if (/glm|zai/.test(m)) return "glm";
+  if (/kimi|moonshot/.test(m)) return "kimi";
+  if (/deepseek/.test(m)) return "deepseek";
+  if (/qwen/.test(m)) return "qwen";
+  if (/gemini/.test(m)) return "gemini";
+  return undefined;
+}

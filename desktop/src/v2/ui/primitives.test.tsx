@@ -22,10 +22,14 @@ afterEach(() => { act(() => root.unmount()); host.remove(); });
 const render = (node: ReactNode) => act(() => { root.render(node); });
 
 describe("Avatar", () => {
-  it("shows the monogram and names the presence for screen readers", () => {
+  it("wears the vendor's mark when the seat has one, a monogram otherwise", () => {
+    render(<Avatar name="sasha" />);
+    expect(host.querySelector('[role="img"]')?.textContent).toBe("SA");
+    render(<Avatar name="orchestrator" llm="claude" />);
+    expect(host.querySelector('[data-brand="Claude"]')).not.toBeNull();
     render(<Avatar name="codex-8" presence="needs-you" />);
     const img = host.querySelector('[role="img"]');
-    expect(img?.textContent).toBe("C8");
+    expect(img?.querySelector('[data-brand="Codex"]')).not.toBeNull();
     expect(img?.getAttribute("aria-label")).toBe("codex-8, needs you");
     expect(host.querySelector('[data-presence="needs-you"]')).not.toBeNull();
   });

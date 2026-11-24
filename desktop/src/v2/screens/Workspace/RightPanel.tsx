@@ -1,4 +1,5 @@
 // The project panel: Files, Git, Sessions and the orchestrator Chat, all classic components in 2.0 chrome (#13987).
+import { saveTrayOpen } from "../../../features/chat/prefs";
 import { useEffect, useState, type ReactNode } from "react";
 import { Clock, FileText, GitBranch, MessageCircle } from "lucide-react";
 import { Chat, DEFAULT_CHAT_DEPS, type ChatDeps } from "../../../features/chat/Chat";
@@ -61,10 +62,16 @@ export function RightPanel({ project, seat, hasOrchestrator, changed, onNavigate
           : <Empty>Git works on a seat's worktree. Select a seat on this machine.</Empty>)}
         {tab === "sessions" && <SessionsMode project={project} onOpenClaude={s => { setSession(s); setTab("chat"); void rightPanelApi.set(project, "chat"); }} />}
         {tab === "chat" && (
-          <Chat project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
-            onClose={() => pick(session ? "sessions" : "files")} />
+          <ChatNoTray><Chat project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
+            onClose={() => pick(session ? "sessions" : "files")} /></ChatNoTray>
         )}
       </div>
     </aside>
   );
+}
+
+// #13987 drill: Chat's read-only terminal tray is a second view of the pane already on the left, and opening it blanked that one.
+export function ChatNoTray({ children }: { children: ReactNode }) {
+  useState(() => { saveTrayOpen(false); return null; });
+  return <div data-v2-chat className="flex min-h-0 flex-1 flex-col">{children}</div>;
 }
