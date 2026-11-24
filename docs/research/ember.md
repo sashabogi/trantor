@@ -274,3 +274,117 @@ Composer `Try several`: tick 2 to 4 models (or `+` on one model for repeats); on
 10. **Remote is a PWA served by the Mac with three honest transports** (Tailscale recommended, same Wi-Fi, public link), each listed with its exact trade-offs, off by default, pair per device. Phone can lower a chat's permission level but cannot raise it to Run everything. A good rule for Trantor's phone view: the phone may tighten, never loosen.
 11. **Quiet by default, loud when it matters.** Notifications only when the app is backgrounded, optional spoken alerts that name the item, status-line timers on waiting items. Counters "N needs you / N working" in the chat list header are the whole attention model.
 12. **IDE-to-orchestrator ramp for Trantor:** (a) Observe: Dashboard + read-only review. (b) Ask/Plan: proposals only. (c) Agent with approvals, edits reversible. (d) Standing rules grown from approvals. (e) Parallel seats on isolated worktrees with a human merge gate. (f) Unattended runs only after the rules list shows the user's own earned yeses. Ember does (a)-(e) in one app and deliberately leaves merge and the protected branch to the human.
+
+
+---
+
+# Focused source-control (Forge) pass (2026-11-23, read-only)
+
+Screenshots (179, not in the repo) live at `~/.agent-bus/research/ember-forge-2026-11-23/shots/` on the operator's Mac.
+
+
+Read-only study of Ember 0.140.0, project tab "crebral-cortex · main". Nothing was committed, staged, pushed, pulled, fetched, discarded or run. Screenshots live in /private/tmp/claude-501/-Users-sashabogojevic-development-trantor/67c90c38-30c5-4731-9aea-527f3fb9e185/scratchpad/ember-forge/shots/. The repo under test had 4,318 untracked/changed files, which also stress-tested the UI.
+
+Overview: Forge is a git panel built on VS Code's built-in Git. It shows up in two places: compact collapsible sections inside the Source Control sidebar (Changes, Graph, Forge, Recent Commits, Agent Review), and a full "Forge" editor tab (Changes / History). Key shortcut: Opt+Cmd+G opens Forge. Everything is aware of the chats: unreviewed AI edits, branches a chat is working on, "Written with Ember" commits.
+
+## 1. Source Control sidebar
+
+### Changes section (00-initial.png, 49-picker-closed.png, 50a.png)
+- Section header toolbar, left to right. Tooltips (02a to 02f): Commit (tick), Generate Commit Message (sparkle), Refresh, Agent Review: Check for Bugs (magnifier), Open Forge: git for this worktree (Opt+Cmd+G) (Forge flame), More Actions... (...).
+- Commit box: placeholder `Message (⌘Enter to commit on "main")`, so the target branch is named in the box itself. Below it a full-width Commit split-button.
+- Commit dropdown arrow (03-commit-dropdown.png), read only: Commit, Commit (Amend), Commit & Push, Commit & Sync. Closed with Escape.
+- Group header "Changes" with a count pill (4317) and three group-level icons: Open Changes (04a... tooltip "Open Changes"), Discard All Changes, Stage All Changes (04b/04c). The count pill is orange.
+- File rows (01, 05a to 05c): file-type icon, name in bold, dimmed parent folder, status letter at right (M modified orange-yellow, U untracked green; staged-group letters A/D/R per help). Hover reveals three row icons: Open File, Discard Changes, Stage Changes (tooltips verbatim). Letters are colour-coded.
+- Why good: the branch is named in the commit box, one-click commit variants (amend, push, sync) sit in one menu, and the status letter column scans fast.
+
+### Graph section (06-graph-expanded.png, 07a to 07f, 08, 09, 09b)
+- Toolbar tooltips: "Auto" refs picker (hover says "main, origin/main", i.e. what refs the graph shows), Go to Current History Item (target icon), Fetch From All Remotes, Pull, Push, Refresh, More (...).
+- Graph is a compact one-lane list: hollow circle = HEAD, filled dots, a vertical line, subject in bold on HEAD. Pills at the end of a row: `main` (accent-blue with target icon = local HEAD ref) and a purple cloud pill (origin/main remote ref).
+- Hover on a commit (09-graph-commit-hover.png) shows a card: author, relative date plus absolute date ("4 days ago (November 19, 2026 at 12:52 PM)"), full subject, "8 files changed, 1287 insertions(+)", short hash with copy icon, and "Open on GitHub". A small file icon appears on the hovered row.
+- Why good: the sidebar graph is deliberately tiny (one lane, current branch) with real sync buttons; the heavy graph is in the Forge tab.
+
+### Forge section (11-forge-section.png, 12a to 12d)
+- Row: Forge flame, branch pill `main · this tab` (pill outline and dot show branch state; tooltip "main · this tab"), and an "Open Forge" button at the right (appears as a flame circle; hover shows "Open Forge").
+- Below it, a sync split-button with a small dropdown arrow at left, and "Fetched 30m ago" (hover shows the exact timestamp 11/23/2026, 11:08:57 PM).
+- Ahead/behind is shown as up/down counts on the sync button (per help: "Push ↑2", "Pull ↓", "Pull first" when both). Our repo was in sync so the push menu was not populated here; the same menu was read in the Forge tab (section 2).
+- Help documents extra rows that appear conditionally: PR line with CI mark (check passed, X failed, clock running), paused merge/rebase with Continue / Abort / Open in Forge, "Unreviewed edits from chats: N" with a "Review changes" button, and a warning "<chat title> is running on this branch" (help-screenshot 54-help-forge-p4.png).
+- Why good: it answers "what branch, how far from remote, when fetched, is anything mid-flight, is an AI working here" in four lines.
+
+### Recent Commits (13-recent-commits.png, 14-recent-hover.png)
+- Last 20 commits: avatar, subject, relative date ("4d ago"); multi-author commits show stacked avatars. Click opens the commit in Forge; drag a commit into the chat to attach it; "Show all in Forge" link at the bottom. Commits written by Ember's chats get an Ember mark.
+
+### Agent Review (15, 16, 17a, 17b, 18, 19a, 19b)
+- Header "AGENT REVIEW read-only". Button "Check for bugs" (hover reads "Agent Review: Check for Bugs" in the toolbar variant). Line below: "Review changes against main for issues."
+- Scope disclosure (collapsible) contains: Optional instructions textarea (placeholder "e.g. focus on the auth changes"); "Diff against" dropdown listing every local branch (main checked, archive/..., fix/..., hotfix/..., pr/..., prototype/..., seat/...); "Look for" segmented toggle Bugs | Security with caption "Bugs, broken logic and unhandled cases"; "Approach" segmented toggle Quick | Deep with caption "Balances quality and speed"; and a "Ultra review (cloud, billed)..." button whose tooltip is "A multi-agent review of this branch in Claude's cloud. Billed: Ember asks before it starts."
+- The button text changes to "Check security" when Look for is Security. While running there is Stop review; afterwards Run again, with the model and duration ("Opus 5.5 · read-only · 1m 02s").
+- Why good: scope is tucked away, defaults are sane, expensive modes are labelled as expensive.
+
+## 2. Forge tab
+
+### Top bar (20-forge-changes.png, 21a to 21j, 22-sync-menu.png)
+- Flame icon (tooltip "Forge"), branch pill `main · this tab` (state dot, "this tab" or "worktree" location label), Fetch button (tooltip "fetched 32m ago"), arrow (tooltip "More sync actions"), "fetched Nm ago" text, and the Changes · History switch on the right.
+- Sync menu (22-sync-menu.png, read only): Fetch, Pull (merge), Pull (rebase), Push, Force push with lease..., and a greyed "Summarize what I'm pushing" (becomes active with unpushed commits; a chat sums them up). Closed with Escape.
+- Help: the primary button adapts to need: Publish branch, Pull, Push, Pull first, or Fetch.
+- A pull request line sits under the top bar when a PR exists (documented, 54-help-forge-p6.png): "PR #42 → main", checks 5/6 with clock, "approved by priya", "squash only", buttons View checks / Open on GitHub / Merge #42. Merge disabled with a reason for drafts, conflicts, failing or running checks, review needed. If checks fail or changes are requested the main button becomes "Fix with Claude"; with no PR it offers "Open PR". Not reachable in our repo (no PR on main).
+
+### Changes view (20, 24-forge-list.png, 25-forge-modified-diff.png, 23a to 23e)
+- Left: "N changed files" plus a List / Tree toggle (tooltip-less text button that flips label; List by default here, Tree groups by folder with counts, e.g. ".agent-bus-out 10 / duo-step3/unit 2"). Sections "STAGED · 0" and "CHANGES · 4,318", each with section buttons: staged shows Unstage all; changes shows "Discard all" (tooltip "Discard all unstaged changes") and "Stage all" (tooltip "Stage all changes").
+- Rows: path (folder dim, filename bold), status letter right. Row hover icons: Discard changes (revert arrow), Stage (+), tooltips "Discard changes" and "Stage". Folder rows in Tree view have the same pair at group level. Space stages the selected row, Delete discards (help).
+- Right diff pane header: status letter and path, "Unstaged" / "Staged" badge, and three icons with tooltips "Open changes in editor", "Open file", "File history".
+- Diff: unified (single column, two gutters old/new line numbers, +/- marks, green added, clay removed, collapsed unchanged ranges). I saw no split/unified toggle in the pane; side-by-side is reached through "Open changes in editor" (a real VS Code diff editor).
+- Hunk header row: `@@ -317,8 +317,11 @@ final class AudioRecorder {` with, at its right edge, "Discard hunk" and "Stage hunk" buttons (tooltips seen in 21h/21i), plus an "Add to chat" link whose tooltip is "Attach this hunk to the open chat" (28b, 42e). Dragging a hunk header into the chat does the same.
+- Line staging: per help, click changed lines (Shift-click for a range) then "Stage lines"/"Unstage lines"/"Discard lines" appear. Clicking a line in our untracked-file diff did not change state visibly; I did not push further to avoid mutating anything.
+- Right-click on the diff (29-diff-contextmenu.png) opened a context menu; dismissed with Escape.
+- Commit form (29d-cleared.png, 30a to 30c): "Summary (required)" input with a live character counter (0), "Description" textarea, checkbox "Amend last commit", "Draft with Claude" button, and "Commit to main". Commit button is disabled with tooltip "Stage something first" when nothing is staged. "Undo last commit" link appears under the form while the last commit is unpushed (help). Cmd+Enter commits.
+- Unreviewed AI edits card above the commit form: "Unreviewed edits from chats · 2 files from <chat>" with a "Review changes" link (help screenshots).
+- Why good: everything needed to commit is on one screen with the diff; destructive actions say what they affect; AI drafting and AI-edit review are inline rather than modal.
+
+### History view (31-history.png, 33-tb1 to 33-tb7, 34-actions-menu.png, 35, 36, 37, 38, 39, 40, 41, 42)
+- Left list: search box "Search: text, author:, file:" (focus shows the placeholder only; help says also message:), scope dropdown, Graph toggle, then commit rows (subject, avatar + author, relative age, pills `main` and `origin/main`, seat/* branch pills, multi-author avatars).
+- Search syntax: plain text, or `author:`, `file:`, `message:`. Typing `file:AudioRecorder` filtered the list live; `author:...` likewise (36, 36b). Graph lanes hide while a search is active. Cleared with the x.
+- Scope dropdown (37-scope-dropdown.png): Current branch (default), All branches. Escape closes.
+- Graph on (38-graph-on.png, 39-graph-allbranches.png, 40-graph-lanes-zoom.png): lane rails run down the left of the list; each commit is a dot on its lane, lanes coloured per branch (orange main, blue archive/codex-8..., purple seat/codex-9), merge/fork shown as lane bends. Branch pills sit on the row (e.g. `seat/codex-8`, `archive/codex-8...`, `main` + `origin/main`). A branch label with a small dot means a chat is working on it; dot colour = state (working, needs you, waiting, ready).
+- Commit detail pane (44-restored.png): title, avatar+author, age, +73 −42 stats, short hash chip, Parent hash, message body with "Show more", then "3 changed files" with Tree/List toggle and an "Open all in editor" icon (tooltip "Open every changed file in one diff in the editor"), file rows with +/− counts and letters, and the diff beside it. Row hover shows "Add to chat". Tree toggle (41-history-tree.png) groups files under folders with counts.
+- Seven toolbar icons on the commit header (tooltips verbatim, 33-tb1 to 33-tb7): Open on remote (shows the full GitHub commit URL); Explain ("Open a new chat that explains this commit"); Add to chat ("Attach this commit to the open chat (or drag it there)"); Check for bugs ("Agent Review looks over this commit's changes for bugs"; becomes "Check for bugs through HEAD", "Agent Review looks over this commit and every commit after it, up to HEAD"); Create branch here... ("Create a branch at fb5427a"); Actions ("More actions on this commit"). The seventh visible slot is the review-through-HEAD variant, which swaps with Check for bugs on modifier or hover.
+- Actions menu (34-actions-menu.png, read only): Check out this commit..., Create branch here..., Compare main with fb5427a, Copy commit id, Copy message, Copy link. Right-click on a row gives the same menu (help).
+- Compare mode (help screenshots): "Compare <ref> with <commit>" opens a bar showing split point, "Only on <branch>" commit lists on both sides, swap sides, and the changed files with diffs.
+- File and line history: from a diff's File history icon or the editor; list of commits that touched the file, "Show commit" jumps back into History.
+
+## 3. Branch picker (45-branch-picker.png, 46a to 46c, 47-row-menu.png, 47b, 48b)
+- Opens from the branch pill: search box "Switch to a branch...", a sort toggle at its right (tooltip "Sort: Date created, newest first"), sections "Local" and "Remote".
+- Rows: branch name (mono), then right-aligned info: age ("4d ago"), or "its own worktree" with an orange "Open tab" action, or for `main` the live chat note `chat "crebral-cortex · Built-in AI via Anthropic App Attest..." · idle`. Hover tooltip on a row: "seat/codex-6 · its own worktree". Hover shows a "..." button (tooltip "More actions").
+- Row menu (47b): OPEN > Open tab; BRANCH > Copy name, Delete...; WITH main > Review against this branch, Merge into main, Rebase main onto this, Compare main with this. Help adds Open chat, Open PR, Rename...
+- Footer actions: "Create branch..." and "Start a chat on a branch...". Scrolling shows older locals and the Remote list (origin/pr/..., origin/prototype/...).
+- Switching with dirty files asks "Leave them on branch" (stash) or "Bring them to branch" (help). Switching while a chat is working asks first (Open in its own tab, Switch when Claude finishes, Stop Claude and switch now).
+- Why good: the picker shows where each branch lives and who is on it, which matters with worktrees and AI sessions.
+
+## 4. Pull requests and Watch PR
+No PR or "watch" UI was reachable without signing in (our branch is main). Read from Ember Help instead (54-help-forge-*, 55-watchpr-p0 to p4):
+- The PR line is described above. Merge asks first and is blocked for drafts, conflicts, failed/running checks, or missing review; fork PRs are not treated as the branch's.
+- "Watch a pull request": a chat watches one open GitHub PR about once a minute and fixes failing checks, resolves merge conflicts and addresses new review comments until green. It never merges, closes, approves, labels or edits the PR. Start with `/babysit` or `/babysit 123` in chat, the Command Palette "Watch PR...", the chat's "Watch PR" offer after a push, or "Fix with Claude" on the PR line. Needs the `gh` CLI signed in and an `origin` remote. Status line shows "Watching #123 · CI running / Fixing 2 failed checks / Resolving conflicts / Addressing 1 comment / Green / Stuck", with Pause, Continue, Stop. Stuck = same problem survives 3 attempts or 10 turns with no green. Waits while checks or the chat run so fixes do not stack. Settings: `ember.babysit.updateStrategy` merge (default) or rebase (force-push only with `--force-with-lease`, enforced on the commands, plain `--force` never), `ember.babysit.replyToComments` off by default. CI logs and comments go to the chat as data, not instructions.
+
+## 5. Agent Review and findings (57-ar-p0 to p7, 59-rc-p0 to p3 help pages)
+- Review your branch: Scope, Check for bugs; Quick vs Deep (`ember.review.deepDefault`); Security review as a separate pass (`/review-security`, `/review` slash commands hand uncommitted changes to read-only subagents). Review a chat's changes checks "against what you asked" (Major finding "Asked for, not done" has no line) plus bugs, and lists "Couldn't check" items. Review every commit via `ember.review.onCommit`. Includes untracked files, honours .emberignore and CLAUDE.md/rules.
+- What a finding looks like: a card with a pill (MAJOR gold, MINOR blue, FIXED green dimmed), `file:line`, a bold title ("Open redirect through a backslash path"), one explanatory sentence, and buttons "Fix with Claude" (sends to a chat, marked "Sent to the chat") and "Dismiss". "Fix all" at the top. Click file:line to open it in the diff. Same findings appear in the Problems panel and as editor squiggles.
+- Under a line: on the review page a finding about a line is drawn as a card directly under that line in the diff (59-rc-p0.png), with the same Fix with Claude / Dismiss buttons.
+- Dismissal is remembered per repository by file + wording + the lines around; reappears if code changes; Critical is never silenced.
+- Empty state: "Nothing to review: no changes against main" with "Pick another base" / "Review the last commit"; "No issues found" means something was read.
+- Review page for a chat: changed files left (+/- counts), diff centre with line numbers (added green, removed clay, "15 unchanged lines" fold), Agent Review right; Keep file / Undo file, Keep all / Undo all; "Pending" vs "Everything" switch; "Open side by side".
+
+## 6. Merge conflicts (61-conf-p0 to p2 and 54-help-forge-p17/p18)
+Not reachable (no merge in progress). Per help: a banner shows what is paused (merge, rebase, cherry-pick, revert) and how many files conflict. Per file: Take ours, Take theirs, or Merge editor; then Mark resolved (or stage); then Continue (git makes the commit or continues the rebase). Or Abort (asks first, restores pre-start state), or "Resolve with Claude" (opens a chat that edits the conflicted files; its edits wait for your review). The sidebar shows the same Continue/Abort. In Source Control, "Resolve Conflicts with Ember" starts an Agent chat with all conflicted files attached; Claude keeps both sides' intent, removes markers, runs quick checks, and never stages or commits. When git fails, a card shows a short title, one sentence, a fix button, "Show git's output", "Ask Claude", and x to dismiss.
+
+Other behaviours worth noting: Discard copies to the Trash first so work is recoverable; Undo last commit restages and restores the message; "Generate Commit Message" uses Haiku by default and never names Claude (`ember.git.keepClaudeOut`); `ember.forge.enabled` can turn Forge off and fall back to plain VS Code SCM.
+
+## What Trantor's own source-control screen should take from this (our words)
+1. One screen, three zones: a sidebar summary (branch, sync state, last fetch, anything mid-flight), a full tab with Changes and History, and the diff always beside the list. Keep the sidebar tiny and push depth to the tab.
+2. Name the target on the commit button ("Commit to main") and keep amend, push, sync as variants of one split-button. Disable it with the reason ("Stage something first").
+3. Make staging granular and obvious: file, hunk, and line, with the hover buttons labelled by tooltip. Show staged and unstaged as separate groups with Stage all / Unstage all / Discard all, and always confirm destructive actions by naming what is lost. Copy discarded work to a recoverable place.
+4. History: one search box with `author:`, `file:`, `message:`, a Current branch / All branches switch, and an optional lane graph that hides during search. Commit detail with stats, parent, and a short fixed toolbar (open remote, add to chat, review, branch from here, more).
+5. A branch picker that shows where each branch lives (main checkout, its own worktree, another tab) and which agent is on it, with an Open action per row. This maps directly onto Trantor seats and worktrees: show seat name and state per branch.
+6. Treat agent work as first-class in git: "unreviewed edits from agents" card with a review action, a warning when an agent is running on the branch, and a prompt before switching branches under a working agent (wait, or stop and switch).
+7. Review findings as cards under the line they concern (severity pill, file:line, one-sentence reason, fix and dismiss), with dismissal remembered per repo and re-raised when the code changes. Offer Bugs vs Security and Quick vs Deep, and label costly modes.
+8. Pull request line with checks, review state and merge method, merge disabled with its reason. A "watch this PR" loop that fixes checks, conflicts and comments but never merges, with Pause/Continue/Stop and a "stuck after N tries" rule. This is the closest fit to a Trantor seat task.
+9. Conflicts: a banner with per-file Take ours / Take theirs / Merge editor / Mark resolved, plus Continue and Abort, and an optional hand-off to an agent that never stages or commits.
+10. Errors as a card: short title, one plain sentence, one fix button, show output, ask an agent, dismiss.
+Avoid: no split/unified toggle was visible in the diff (side-by-side only via the editor), and the Forge History toolbar swaps Check for bugs and "through HEAD" in place, which hid the seventh icon until hover. Make both discoverable.
