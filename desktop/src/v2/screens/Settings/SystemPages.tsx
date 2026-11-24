@@ -1,0 +1,92 @@
+// Hub, Identity, Phone, Accounts and Agents: the classic panes and probes in 2.0 chrome (#13994).
+import { useEffect, useState } from "react";
+import { HubClient, hubForProject, knownProjects } from "../../../shared/api/client";
+import { AccountsPane } from "../../../features/settings/providers/AccountsPane";
+import { AgentsPane } from "../../../features/settings/agents/AgentsPane";
+import { PairPhone } from "../../../features/settings/PairPhone";
+import { RelayChat } from "../../../features/settings/RelayChat";
+import { Avatar } from "../../ui/Avatar";
+import { Chip } from "../../ui/Chip";
+import { Section } from "../../ui/Section";
+
+type HubRow = { url: string; projects: string[]; ok: boolean | null };
+
+function useHubRows(): HubRow[] {
+  const [rows, setRows] = useState<HubRow[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void knownProjects().then(async ps => {
+      const byUrl = new Map<string, string[]>();
+      for (const p of ps) {
+        const u = await hubForProject(p);
+        byUrl.set(u, [...(byUrl.get(u) ?? []), p]);
+      }
+      const next: HubRow[] = [...byUrl.entries()].map(([url, projects]) => ({ url, projects, ok: null }));
+      if (!alive) return;
+      setRows(next);
+      // Reachability is a live fact, so each hub is probed rather than assumed (#13994).
+      for (const r of next) {
+        new HubClient(r.url).peers()
+          .then(() => alive && setRows(cur => cur.map(x => x.url === r.url ? { ...x, ok: true } : x)))
+          .catch(() => alive && setRows(cur => cur.map(x => x.url === r.url ? { ...x, ok: false } : x)));
+      }
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  return rows;
+}
+
+export function HubPage() {
+  const rows = useHubRows();
+  return (
+    <Section title="Hub and machines" sub="A project lives on exactly one hub. Pins are written by trantor hub set.">
+      <div className="flex flex-col gap-2.5">
+        {rows.map(h => (
+          <div key={h.url} className="rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
+            <div className="flex items-center gap-2.5">
+              <span className="v2-mono text-[12.5px]">{h.url.replace(/^https?:\/\//, "")}</span>
+              <Chip tone={h.ok === null ? "neutral" : h.ok ? "ok" : "bad"}>{h.ok === null ? "checking" : h.ok ? "reachable" : "unreachable"}</Chip>
+              <span className="ml-auto text-[11px] text-[var(--v2-muted)]">{h.url.includes("127.0.0.1") || h.url.includes("localhost") ? "this machine" : "remote"}</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">{h.projects.map(p => <Chip key={p} mono>{p}</Chip>)}</div>
+          </div>
+        ))}
+        {!rows.length && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">No pins yet. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
+      </div>
+    </Section>
+  );
+}
+
+export function IdentityPage({ me }: { me: string }) {
+  return (
+    <Section title="Identity and keys" sub="Every request this app makes is signed as you.">
+      <div className="flex items-center gap-4">
+        <Avatar name={me || "?"} size={44} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[14px] font-medium">{me || "reading identity…"}</div>
+          <div className="mt-0.5 text-[12px] text-[var(--v2-muted)]">
+            The key lives in ~/.agent-bus/keys and never leaves the Rust side; the webview never sees it. Change it with RELAY_OWNER_IDENTITY.
+          </div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+export function PhoneCard({ hubBase }: { hubBase: string }) {
+  return (
+    <Section title="Phone" sub="The companion app enrolls itself from a QR: one invite, single use, ten minutes."
+      actions={<Chip title="Per-permission switches for the phone have no hub setting to write yet">permission switches not wired</Chip>}>
+      <PairPhone hubBase={hubBase} />
+      <RelayChat />
+    </Section>
+  );
+}
+
+export function AccountsPage({ project }: { project: string }) {
+  return <Section title="Accounts and providers" sub="Provider logins, keys and live connection state. Keys are verified live, then saved to the keychain."><AccountsPane project={project} /></Section>;
+}
+
+export function AgentsPage() {
+  return <Section title="Agents and harnesses" sub="Installed agents, the default agent and launch commands."><AgentsPane /></Section>;
+}
