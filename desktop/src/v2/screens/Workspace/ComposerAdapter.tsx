@@ -4,6 +4,7 @@ import { useEffect, useState, type ComponentProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Composer } from "../../../features/chat/Composer";
 import { modelLabel } from "../../../features/chat/modelLabel";
+import { brandOfModel, modelLabel as vendorModelLabel } from "../../ui/identity";
 import { normalizeAttachments, type PromptVerdict } from "../../../features/chat/streaming";
 import { parseAutonomy } from "./useWorkspaceData";
 import { useAttachments } from "../../ui/useAttachments";
@@ -30,6 +31,17 @@ export const PERMISSION_CHOICES: readonly Choice[] = [
   { value: "auto", label: "Full auto", icon: "zap", tone: "warn", description: "The next session starts skipping permission prompts, and hands off on its own." },
 ];
 export const PERMISSION_HEADING = "For new sessions and handoffs";
+
+/** A readable model name for whichever vendor is orchestrating (#14018); Claude keeps the classic label. */
+export function shownModel(model: string | undefined): string {
+  if (!model) return "model unknown";
+  return brandOfModel(model) === "claude" ? modelLabel(model).full.replace(/ \(.*\)$/, "") : vendorModelLabel(model);
+}
+
+/** Model, effort and the launch pair are Claude Code's commands; another harness gets none until its own are verified (#14018). */
+export function isClaudeHosted(model: string | undefined): boolean {
+  return !model || brandOfModel(model) === "claude";
+}
 
 /** The picker value the running model corresponds to; "default" is never claimed, since the id cannot say. */
 export function modelChoiceOf(model: string): string | null {
@@ -99,6 +111,7 @@ export function ComposerAdapter(p: ClassicProps) {
       .then(() => line(`/model ${v}`));
     p.onDispatch("model", v);
   };
+  const claude = isClaudeHosted(p.model);
   const frac = p.context.frac;
   const shown = note ?? mode.error ?? harness.error;
   const modeProps = mode.supported ? { mode: mode.mode, modeChoices: mode.choices, onModeChange: mode.set } : {};
@@ -108,9 +121,9 @@ export function ComposerAdapter(p: ClassicProps) {
       <Composer2 value={value} onChange={v => { setValue(v); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
         permissionHeading={PERMISSION_HEADING}
         label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
-        agent="orchestrator" model={{ id: p.model || "unknown", label: p.model ? modelLabel(p.model).full.replace(/ \(.*\)$/, "") : "model unknown" }}
-        modelChoices={MODEL_CHOICES} modelValue={modelChoiceOf(p.model || "")} onModelChange={pickModel}
-        effort={effort} effortChoices={EFFORT_CHOICES} onEffortChange={pickEffort}
+        agent="orchestrator" model={{ id: p.model || "unknown", label: shownModel(p.model) }}
+        modelChoices={claude ? MODEL_CHOICES : undefined} modelValue={modelChoiceOf(p.model || "")} onModelChange={pickModel}
+        effort={claude ? effort : undefined} effortChoices={EFFORT_CHOICES} onEffortChange={pickEffort}
         permission={harness.auto ? "auto" : "ask"} permissionChoices={PERMISSION_CHOICES} onPermissionChange={next => harness.set(next === "auto")}
         contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason} />
     </div>
