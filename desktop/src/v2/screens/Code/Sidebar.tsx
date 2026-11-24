@@ -4,10 +4,10 @@ import { useEffect, useState } from "react";
 import { Maximize2 } from "lucide-react";
 import type { Card, HubClient } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
-import { FileTree } from "../../../features/code/FileTree";
 import { searchFiles } from "../../../features/code/fileApi";
 import { aheadLabel } from "../../../features/code/gitApi";
 import { Avatar } from "../../ui/Avatar";
+import { ExplorerTree } from "../../ui/ExplorerTree";
 import { IconButton } from "../../ui/IconButton";
 import { PRESENCE_LABEL, seatLabel } from "../../ui/identity";
 import { ChangesList } from "./ChangesList";
@@ -81,7 +81,7 @@ export type SidebarProps = {
 
 function Body(p: SidebarProps) {
   const cards = useTasks(p.client, p.project);
-  if (p.view === "explorer") return <div className="min-h-0 flex-1 overflow-y-auto"><FileTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} /></div>;
+  if (p.view === "explorer") return <div className="min-h-0 flex-1 overflow-y-auto"><ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} /></div>;
   if (p.view === "search") return <SearchPane project={p.project} scope={p.scope} onOpen={p.onOpenFile} />;
   if (p.view === "agents") return <AgentsPane seats={p.seats} scope={p.scope} onPick={p.onPickSeat} />;
   if (p.view === "cards") return <CardsPane cards={cards} />;

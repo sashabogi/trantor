@@ -1,7 +1,7 @@
-// The Explorer on the left of the Workspace: the classic FileTree, collapsible to a rail, resizable (#13987 drill).
+// The Explorer on the left of the Workspace: the 2.0 ExplorerTree with git status letters, collapsible to a rail, resizable (#13987 drill).
 import type { RefObject } from "react";
 import { ChevronsLeft, Files } from "lucide-react";
-import { FileTree } from "../../../features/code/FileTree";
+import { ExplorerTree } from "../../ui/ExplorerTree";
 import { IconButton } from "../../ui/IconButton";
 import { FILES_COLUMN, FILES_MIN_WIDTH, FILES_RAIL_WIDTH, type useFilesColumn } from "./chatColumnState";
 import { ResizeHandle } from "./ResizeHandle";
@@ -32,7 +32,7 @@ export function FilesColumn({ col, workspace, project, scope, scopeName, onOpenF
           <ChevronsLeft size={14} aria-hidden />
         </IconButton>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto"><FileTree project={project} seat={scope} onOpen={onOpenFile} /></div>
+      <div className="min-h-0 flex-1 overflow-y-auto"><ExplorerTree project={project} seat={scope} onOpen={onOpenFile} /></div>
     </aside>
   );
 }

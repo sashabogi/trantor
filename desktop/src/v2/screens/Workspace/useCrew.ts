@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { availableAgent, crewApi, startFailureReason, type CrewApi, type CrewCatalog } from "../../../features/workspace/crewControlApi";
 import type { AgentStatus } from "../../../features/settings/agents/agentSettings";
 
-export type Notice = { text: string; failed: boolean } | null;
+/** `quiet`: a muted line that stays until dismissed (no red, no auto-clear). */
+export type Notice = { text: string; failed: boolean; quiet?: boolean } | null;
 
 export type Crew = {
   /** Agents that are installed, enabled and have quota: what Add seat and Swap can offer. */
@@ -18,19 +19,23 @@ export type Crew = {
 
 export function useCrew(project: string, onChanged: () => void, api: CrewApi = crewApi): Crew {
   const [catalog, setCatalog] = useState<CrewCatalog | null>(null);
-  const [notice, setNotice] = useState<Notice>(null);
+  // #13987 drill: the screen is not remounted on a project switch, so a notice is owned by the project that raised it.
+  const [owned, setOwned] = useState<{ project: string; notice: Notice }>({ project, notice: null });
+  const notice = owned.project === project ? owned.notice : null;
+  const setNotice = useCallback((n: Notice) => setOwned({ project, notice: n }), [project]);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true;
+    setCatalog(null);
     api.catalog(project).then(c => { if (alive) setCatalog(c); })
-      .catch(e => { if (alive) setNotice({ text: `Seat catalog unavailable: ${String(e)}`, failed: true }); });
+      .catch(e => { if (alive) setNotice({ text: `Seat catalog unavailable for ${project}: ${e instanceof Error ? e.message : String(e)}`, failed: false, quiet: true }); });
     return () => { alive = false; };
-  }, [api, project]);
+  }, [api, project, setNotice]);
   useEffect(() => {
-    if (!notice || notice.failed) return;
+    if (!notice || notice.failed || notice.quiet) return;
     const t = setTimeout(() => setNotice(null), 5000);
     return () => clearTimeout(t);
-  }, [notice]);
+  }, [notice, setNotice]);
 
   const run = useCallback(async (seat: string, verb: string, go: () => Promise<{ ok: boolean; reason?: string }>) => {
     setBusy(true);
@@ -48,7 +53,7 @@ export function useCrew(project: string, onChanged: () => void, api: CrewApi = c
       setBusy(false);
       onChanged();
     }
-  }, [api, project, onChanged]);
+  }, [api, project, onChanged, setNotice]);
 
   const launchOf = (seat: string) => catalog?.agents.find(a => a.id === seat)?.launch ?? seat;
   return {

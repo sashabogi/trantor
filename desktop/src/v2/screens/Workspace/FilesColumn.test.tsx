@@ -141,7 +141,7 @@ describe("opening a file", () => {
   it("sets a file intent for the project checkout and goes to Code", async () => {
     localStorage.setItem(FILES_OPEN_KEY, "true");
     await mountScreen();
-    const row = [...host.querySelectorAll<HTMLElement>("button")].find(b => b.textContent?.includes("README.md"));
+    const row = [...host.querySelectorAll<HTMLElement>('[role="treeitem"]')].find(b => b.textContent?.includes("README.md"));
     expect(row).toBeDefined();
     await click(row ?? null);
     expect(navigated).toEqual(["code"]);
