@@ -57,8 +57,8 @@ function Control({ onClick, label, title, className, children }: {
 function EffortBars({ effort }: { effort: Effort }) {
   return (
     <>
-      {[6, 10, 14, 18].map((h, i) => (
-        <span key={h} data-lit={i <= effort || undefined} className="w-[3px] rounded-[1px]"
+      {[4, 6, 8, 10].map((h, i) => (
+        <span key={h} data-lit={i <= effort || undefined} className="w-[2px] rounded-[1px]"
           style={{ height: h, background: i <= effort ? "var(--v2-accent)" : "var(--v2-track)" }} />
       ))}
     </>
@@ -96,23 +96,31 @@ export function Composer2(p: Composer2Props) {
       {att && <AttachmentRow chips={att.chips} onRemove={att.remove} />}
       {att?.error && <div role="status" className="text-[11px] text-[var(--v2-warn)]">{att.error}</div>}
       <div className="flex items-center gap-1.5">
-        <Control onClick={p.onAgentClick} title="Who answers: the orchestrator, a seat, or a new agent"
-          className="inline-flex flex-none items-center gap-[5px] whitespace-nowrap rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] py-[3px] pr-2 pl-[3px] text-[11.5px] font-medium text-[var(--v2-text)]">
-          <Avatar name={p.agent} size={18} />{seatLabel(p.agent)}{p.onAgentClick && <ChevronDown size={9} aria-hidden />}
-        </Control>
-        <Control onClick={p.onModelClick} title={`Model: ${p.model.id}`}
-          className="inline-flex flex-none items-center gap-1 whitespace-nowrap rounded-md border-0 bg-transparent px-1 py-[3px] text-[11.5px] font-medium text-[var(--v2-text-2)]">
-          <span aria-hidden className="h-[9px] w-[9px] rounded-full" style={{ background: modelHue(p.model.id) }} />{p.model.label}
-        </Control>
-        <Control onClick={p.onEffortChange && nextEffort} label={`Effort: ${effortName}`} title={`Effort: ${effortName} (low · medium · high · max)`}
-          className="inline-flex h-5 items-end gap-[2px] rounded border-0 bg-transparent px-1">
-          <EffortBars effort={p.effort} />
-        </Control>
-        <Control onClick={p.onPermissionChange && nextPermission} label={`Permission: ${perm.short}`} title={perm.title}
-          className={`inline-flex h-[26px] w-[26px] items-center justify-center rounded-full border-0 ${
-            p.permission === "auto" ? "bg-[var(--v2-warn-soft)] text-[var(--v2-warn)]" : "bg-transparent text-[var(--v2-text-2)]"}`}>
-          <PermissionIcon permission={p.permission} />
-        </Control>
+        {/* #13984 drill: two chips, like every agent composer: who answers and its permission, then model and effort. */}
+        <div data-group="agent" className="inline-flex min-w-0 flex-none items-center rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] text-[11.5px] font-medium py-[2px] pr-[3px] pl-[3px]">
+          <Control onClick={p.onAgentClick} title="Who answers: the orchestrator, a seat, or a new agent"
+            className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border-0 bg-transparent pr-1 text-[var(--v2-text)]">
+            <Avatar name={p.agent} size={18} />{seatLabel(p.agent)}{p.onAgentClick && <ChevronDown size={9} aria-hidden />}
+          </Control>
+          <span aria-hidden className="px-[3px] text-[var(--v2-muted)]">·</span>
+          <Control onClick={p.onPermissionChange && nextPermission} label={`Permission: ${perm.short}`} title={perm.title}
+            className={`inline-flex h-[20px] w-[22px] items-center justify-center rounded-full border-0 ${
+              p.permission === "auto" ? "bg-[var(--v2-warn-soft)] text-[var(--v2-warn)]" : "bg-transparent text-[var(--v2-text-2)]"}`}>
+            <PermissionIcon permission={p.permission} />
+          </Control>
+        </div>
+        <div data-group="model" className="inline-flex min-w-0 flex-none items-center rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] text-[11.5px] font-medium py-[2px] pr-[4px] pl-[8px]">
+          <Control onClick={p.onModelClick} title={`Model: ${p.model.id}`}
+            className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border-0 bg-transparent text-[var(--v2-text)]">
+            <span aria-hidden className="h-[8px] w-[8px] rounded-full" style={{ background: modelHue(p.model.id) }} />{p.model.label}
+          </Control>
+          <span aria-hidden className="px-[5px] text-[var(--v2-muted)]">·</span>
+          <Control onClick={p.onEffortChange && nextEffort} label={`Effort: ${effortName}`} title={`Effort: ${effortName} (low · medium · high · max)`}
+            className="inline-flex h-[20px] items-center gap-[5px] whitespace-nowrap rounded-full border-0 bg-transparent pr-[5px] text-[var(--v2-text-2)]">
+            <span aria-hidden className="inline-flex items-end gap-[1.5px]"><EffortBars effort={p.effort} /></span>
+            <span className="capitalize">{effortName}</span>
+          </Control>
+        </div>
         <span className="flex-1" />
         {p.contextPct != null && <Ring pct={p.contextPct} />}
         {att && <input ref={picker} type="file" accept="image/*" multiple hidden aria-label="Choose images to attach"

@@ -72,7 +72,7 @@ export function ComposerAdapter(p: ClassicProps) {
       {shown && <div role="status" className="text-[11.5px] text-[var(--v2-warn)]">{shown}</div>}
       <Composer2 value={value} onChange={v => { setValue(v); if (note) setNote(null); }} onSend={send}
         label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
-        agent="orchestrator" model={{ id: p.model || "unknown", label: p.model ? modelLabel(p.model).short : "model unknown" }}
+        agent="orchestrator" model={{ id: p.model || "unknown", label: p.model ? modelLabel(p.model).full.replace(/ \(.*\)$/, "") : "model unknown" }}
         effort={effort} onEffortChange={pickEffort}
         permission={permission} onPermissionChange={next => harness.set(next !== "ask")}
         contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason} />
