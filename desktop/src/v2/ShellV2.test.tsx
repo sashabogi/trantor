@@ -24,6 +24,8 @@ beforeEach(() => {
     if (command === "known_projects") return ["crebral-cortex", "trantor"];
     if (command === "hub_for_project") return "http://127.0.0.1:4477";
     if (command === "identity_name") return "sasha";
+    // #13987 drill: the chat column now always mounts Chat, which polls handoff state.
+    if (command === "handoff_states") return [];
     if (command === "local_sessions") return [{ project: "trantor", status: "working" }];
     if (command === "hub_request") return { status: 200, body: EMPTY };
     if (command === "plugin:event|listen") return 1;

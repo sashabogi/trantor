@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DrillMode } from "../../../features/drill/DrillMode";
 import type { ScreenProps } from "../../routes";
+import { ChatColumn } from "./ChatColumn";
+import { useChatColumn } from "./chatColumnState";
 import { Inspector } from "./Inspector";
 import { usePanes } from "./panes";
 import { SeatGrid } from "./SeatGrid";
@@ -66,6 +68,8 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   const [tab, setTab] = useState<WorkTab>("terminal");
   const [recording, setRecording] = useState(false);
   const messageRef = useRef<HTMLInputElement | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const chatCol = useChatColumn();
   const me = useIdentity();
   const mayDo = useMayDo(project);
   const crew = useCrew(project, data.refresh);
@@ -96,7 +100,7 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div ref={workspaceRef} className="flex min-h-0 flex-1">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />
@@ -104,8 +108,10 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
           mayDo={mayDo} crew={crew} onNavigate={onNavigate} onMessage={message} />}
         {body}
       </div>
-      <RightPanel project={project} seat={selected} hasOrchestrator={seats.some(s => s.isOrchestrator)}
-        changed={diff.diff?.files.length ?? 0} onNavigate={onNavigate} />
+      <ChatColumn col={chatCol} workspace={workspaceRef}>
+        <RightPanel project={project} seat={selected} orchestrator={seats.find(s => s.isOrchestrator)}
+          changed={diff.diff?.files.length ?? 0} onNavigate={onNavigate} onClose={() => chatCol.setOpen(false)} />
+      </ChatColumn>
       {recording && (me
         ? <DrillMode me={me} onClose={() => setRecording(false)} />
         : <div role="alert" className="fixed bottom-14 right-4 z-40 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-2 text-[12px] text-[var(--v2-muted)]">Waiting for the signed identity before a drill can start.</div>)}
