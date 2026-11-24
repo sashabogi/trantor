@@ -71,6 +71,13 @@ describe("Composer2", () => {
     expect(q('svg[role="img"] text')?.textContent).toBe("48");
   });
 
+  it("hides controls a harness does not support", () => {
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ showEffort: false, showPermission: false }} />));
+    expect(q('[aria-label^="Effort:"]')).toBeNull();
+    expect(q('[aria-label^="Permission:"]')).toBeNull();
+    expect(q('[data-group="model"]')?.textContent).toBe("opus 5.5");
+  });
+
   it("renders read-only labels without handlers, hides the ring without data, and explains a blocked send", () => {
     act(() => root.render(<Harness onSend={vi.fn()} extra={{ onEffortChange: undefined, contextPct: null, onAttach: undefined, disabledReason: "Seat is offline" }} />));
     expect(q('[aria-label="Effort: high"]')?.tagName).toBe("SPAN");

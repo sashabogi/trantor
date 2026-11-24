@@ -49,11 +49,15 @@ function fakeClient(calls: Calls, holds: FileHold[] = []) {
 let host: HTMLDivElement;
 let root: Root;
 let ipc: { command: string; args: unknown }[];
+let hostedAgent: string;
 beforeEach(() => {
   ipc = [];
+  hostedAgent = "";
   mockIPC((command, args) => {
     ipc.push({ command, args });
-    if (command === "herdr_seats") return "[]";
+    if (command === "herdr_seats") return JSON.stringify(hostedAgent
+      ? [{ project: "trantor", agent: hostedAgent, surface: "pane-1", kind: "orch" }]
+      : []);
     if (command === "identity_name") return "sasha";
     if (command === "autonomy_get") return JSON.stringify({ resolved: { harness: "prompt", push: false, commit: true } });
     if (command === "git_panel") return JSON.stringify({ branch: "seat/codex-8", upstream: null, ahead: 1, behind: null, status: [], counts: [], log: [] });
@@ -158,6 +162,37 @@ describe("sending", () => {
     expect(ipc.find(c => c.command === "pane_send")?.args).toEqual({ target: "pane-1", text: "ship it" });
     expect(onSent).toHaveBeenCalled();
     expect(host.querySelector("textarea")?.value).toBe("");
+  });
+
+  it("uses the hosted Codex agent's mark, model label and inline session controls", async () => {
+    hostedAgent = "codex";
+    const props: ComponentProps<typeof Composer> = {
+      project: "trantor", target: "pane-1", live: true, liveWhy: "", model: "gpt-5.6-sol", modelSource: "reported", working: false,
+      userTexts: [], context: { tokens: 10, window: 100, frac: 0.1 }, fontStep: "m", onFontStep: () => {}, onSent: () => {},
+      onLongRunChange: () => {}, onDispatch: () => {},
+    };
+    await act(async () => { root.render(<ComposerAdapter {...props} />); });
+    expect(host.querySelector('[data-brand="Codex"]')).not.toBeNull();
+    expect(host.querySelector('[data-group="model"]')?.textContent).toContain("GPT 5.6 Sol");
+    await click(host.querySelector('[aria-label="Effort: high"]'));
+    expect(ipc.find(c => c.command === "pane_send")?.args).toEqual({ target: "pane-1", text: "/model --reasoning max" });
+    await click(host.querySelector('[aria-label="Permission: asks first"]'));
+    expect(ipc.filter(c => c.command === "pane_send").pop()?.args).toEqual({ target: "pane-1", text: "/permissions :workspace" });
+    expect(ipc.some(c => c.command === "autonomy_set")).toBe(false);
+  });
+
+  it("hides effort and permission when the hosted harness has no confirmed controls", async () => {
+    hostedAgent = "kimi";
+    const props: ComponentProps<typeof Composer> = {
+      project: "trantor", target: "pane-1", live: true, liveWhy: "", model: "kimi-k2.7-code", modelSource: "reported", working: false,
+      userTexts: [], context: { tokens: 10, window: 100, frac: 0.1 }, fontStep: "m", onFontStep: () => {}, onSent: () => {},
+      onLongRunChange: () => {}, onDispatch: () => {},
+    };
+    await act(async () => { root.render(<ComposerAdapter {...props} />); });
+    expect(host.querySelector('[data-brand="Kimi"]')).not.toBeNull();
+    expect(host.querySelector('[data-group="model"]')?.textContent).toContain("Kimi K2.7 Code");
+    expect(host.querySelector('[aria-label^="Effort:"]')).toBeNull();
+    expect(host.querySelector('[aria-label^="Permission:"]')).toBeNull();
   });
 });
 

@@ -77,6 +77,34 @@ export function projectGradient(name: string): string {
   return `linear-gradient(135deg, ${a}, ${b})`;
 }
 
+const MODEL_BRANDS = {
+  gpt: "GPT",
+  codex: "Codex",
+  glm: "GLM",
+  kimi: "Kimi",
+  deepseek: "DeepSeek",
+  qwen: "Qwen",
+  gemini: "Gemini",
+} as const;
+
+export function modelLabel(id: string): string {
+  const bare = id.slice(id.lastIndexOf("/") + 1);
+  const claude = /^claude-([a-z]+)-(\d+)(?:-(\d+))?$/.exec(bare);
+  if (claude) {
+    const family = claude[1][0].toUpperCase() + claude[1].slice(1);
+    return `${family} ${claude[2]}${claude[3] ? `.${claude[3]}` : ""}`;
+  }
+  const matched = /^(gpt|codex|glm|kimi|deepseek|qwen|gemini)[-_]?(.+)$/i.exec(bare);
+  if (!matched) return id;
+  const brand = dictGet(MODEL_BRANDS, matched[1].toLowerCase());
+  if (!brand) return id;
+  const detail = matched[2].split(/[-_]/).filter(Boolean).map(part => {
+    if (/^v\d/i.test(part) || /^\d/.test(part)) return part.toUpperCase();
+    return part[0].toUpperCase() + part.slice(1);
+  }).join(" ");
+  return detail ? `${brand} ${detail}` : id;
+}
+
 /** The brand dot beside a model name in the composer and the plans bar. */
 export function modelHue(model: string): string {
   const m = model.toLowerCase();

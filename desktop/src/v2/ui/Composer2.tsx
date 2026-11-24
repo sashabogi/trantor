@@ -35,8 +35,10 @@ export type Composer2Props = {
   onModelClick?: () => void;
   effort: Effort;
   onEffortChange?: (effort: Effort) => void;
+  showEffort?: boolean;
   permission: Permission;
   onPermissionChange?: (permission: Permission) => void;
+  showPermission?: boolean;
   /** Context window used, 0 to 100; null hides the ring (not reported yet). */
   contextPct: number | null;
   onAttach?: () => void;
@@ -102,24 +104,28 @@ export function Composer2(p: Composer2Props) {
             className="inline-flex items-center gap-[3px] rounded-full border-0 bg-transparent">
             <Avatar name={p.agent} llm={brandOfModel(p.model.id)} size={20} />{p.onAgentClick && <ChevronDown size={9} aria-hidden />}
           </Control>
-          <span aria-hidden className="px-[2px] text-[var(--v2-muted)]">·</span>
-          <Control onClick={p.onPermissionChange && nextPermission} label={`Permission: ${perm.short}`} title={perm.title}
-            className={`inline-flex h-[20px] w-[22px] items-center justify-center rounded-full border-0 ${
-              p.permission === "auto" ? "bg-[var(--v2-warn-soft)] text-[var(--v2-warn)]" : "bg-transparent text-[var(--v2-text-2)]"}`}>
-            <PermissionIcon permission={p.permission} />
-          </Control>
+          {(p.showPermission ?? true) && <>
+            <span aria-hidden className="px-[2px] text-[var(--v2-muted)]">·</span>
+            <Control onClick={p.onPermissionChange && nextPermission} label={`Permission: ${perm.short}`} title={perm.title}
+              className={`inline-flex h-[20px] w-[22px] items-center justify-center rounded-full border-0 ${
+                p.permission === "auto" ? "bg-[var(--v2-warn-soft)] text-[var(--v2-warn)]" : "bg-transparent text-[var(--v2-text-2)]"}`}>
+              <PermissionIcon permission={p.permission} />
+            </Control>
+          </>}
         </div>
         <div data-group="model" className="inline-flex min-w-0 shrink items-center rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] text-[11.5px] font-medium py-[2px] pr-[4px] pl-[8px]">
           <Control onClick={p.onModelClick} title={`Model: ${p.model.id}`}
             className="inline-flex min-w-0 items-center gap-[5px] whitespace-nowrap rounded-full border-0 bg-transparent text-[var(--v2-text)]">
             <span aria-hidden className="h-[8px] w-[8px] flex-none rounded-full" style={{ background: modelHue(p.model.id) }} /><span className="truncate">{p.model.label}</span>
           </Control>
-          <span aria-hidden className="px-[5px] text-[var(--v2-muted)]">·</span>
-          <Control onClick={p.onEffortChange && nextEffort} label={`Effort: ${effortName}`} title={`Effort: ${effortName} (low · medium · high · max)`}
-            className="inline-flex h-[20px] flex-none items-center gap-[5px] whitespace-nowrap rounded-full border-0 bg-transparent pr-[5px] text-[var(--v2-text-2)]">
-            <span aria-hidden className="inline-flex items-end gap-[1.5px]"><EffortBars effort={p.effort} /></span>
-            <span className="capitalize">{effortName}</span>
-          </Control>
+          {(p.showEffort ?? true) && <>
+            <span aria-hidden className="px-[5px] text-[var(--v2-muted)]">·</span>
+            <Control onClick={p.onEffortChange && nextEffort} label={`Effort: ${effortName}`} title={`Effort: ${effortName} (low · medium · high · max)`}
+              className="inline-flex h-[20px] flex-none items-center gap-[5px] whitespace-nowrap rounded-full border-0 bg-transparent pr-[5px] text-[var(--v2-text-2)]">
+              <span aria-hidden className="inline-flex items-end gap-[1.5px]"><EffortBars effort={p.effort} /></span>
+              <span className="capitalize">{effortName}</span>
+            </Control>
+          </>}
         </div>
         <span className="min-w-0 flex-1" />
         {p.contextPct != null && <Ring pct={p.contextPct} />}

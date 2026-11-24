@@ -1,6 +1,6 @@
 // #v2-F: monograms and colours match the artboard swatches.
 import { describe, expect, it } from "vitest";
-import { modelHue, monogram, projectGradient, seatLabel, seatPalette } from "./identity";
+import { modelHue, modelLabel, monogram, projectGradient, seatLabel, seatPalette } from "./identity";
 
 describe("monogram", () => {
   it("reads seat names the way the artboards print them", () => {
@@ -26,6 +26,23 @@ describe("monogram", () => {
     expect(seatLabel("claude:trantor-duty")).toBe("trantor-duty");
     expect(seatPalette("MacBook-Pro-M1:trantor")).toEqual({ bg: "#3A2A24", fg: "#E39A7E" });
     expect(seatLabel("sasha@mac")).toBe("sasha@mac");
+  });
+});
+
+describe("modelLabel", () => {
+  it("gives every supported vendor a short readable model name", () => {
+    expect(modelLabel("claude-opus-5-5")).toBe("Opus 5.5");
+    expect(modelLabel("gpt-5.6-sol")).toBe("GPT 5.6 Sol");
+    expect(modelLabel("zai-coding-plan/glm-5.3")).toBe("GLM 5.3");
+    expect(modelLabel("kimi-k2.7-code")).toBe("Kimi K2.7 Code");
+    expect(modelLabel("deepseek/deepseek-v4-pro")).toBe("DeepSeek V4 Pro");
+    expect(modelLabel("qwen3-coder")).toBe("Qwen 3 Coder");
+    expect(modelLabel("gemini-3-pro")).toBe("Gemini 3 Pro");
+  });
+
+  it("falls back to the exact id instead of inventing a name", () => {
+    expect(modelLabel("vendor/custom-model")).toBe("vendor/custom-model");
+    expect(modelLabel("opus")).toBe("opus");
   });
 });
 
