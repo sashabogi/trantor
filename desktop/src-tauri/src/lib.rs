@@ -32,6 +32,7 @@ mod files;
 mod chat;
 mod watchers;
 mod panes;
+mod pane_mode;
 mod file_ops;
 mod settings;
 mod remote;

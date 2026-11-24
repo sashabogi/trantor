@@ -116,6 +116,58 @@ describe("Composer2", () => {
     expect(host.querySelector("[data-lit]")).toBeNull();
   });
 
+  // #14022: the live mode sits above the permission level, built only from the choices given.
+  const MODES: readonly Choice[] = [
+    { value: "default", label: "Agent", short: "Agent", icon: "hand", description: "Asks before edits." },
+    { value: "plan", label: "Plan", short: "Plan", icon: "plan", description: "Plans first." },
+  ];
+  const modeMenu = () => {
+    act(() => q('[data-group="agent"] button')?.click());
+    return [...host.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitemradio"]')];
+  };
+
+  it("renders a Mode section above the permission level, from the choices, with the read mode on the chip", () => {
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ mode: "plan", modeChoices: MODES, onModeChange: () => Promise.resolve() }} />));
+    expect(q('[data-group="agent"] button')?.getAttribute("aria-label")).toBe("orchestrator, mode: Plan, permission: Ask me");
+    expect(q('[data-group="agent"] button')?.textContent).toContain("Plan");
+    const rows = modeMenu();
+    const headings = [...host.querySelectorAll('[role="menu"] div')].map(d => d.textContent);
+    expect(headings.indexOf("Mode")).toBeLessThan(headings.indexOf("Permission level for orchestrator"));
+    expect(rows.map(r => r.textContent)).toEqual(["AgentAsks before edits.", "PlanPlans first.", "Ask mePrompts wait for you.", "Full autoRuns without asking."]);
+    expect(rows.map(r => r.getAttribute("aria-checked"))).toEqual(["false", "true", "true", "false"]);
+  });
+
+  it("calls the mode handler once, shows the row busy, and ignores clicks until it settles", async () => {
+    let settle = () => {};
+    const onModeChange = vi.fn((_: string) => new Promise<void>(r => { settle = r; }));
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ mode: "default", modeChoices: MODES, onModeChange }} />));
+    const rows = modeMenu();
+    act(() => rows[1].click());
+    expect(rows[1].getAttribute("aria-busy")).toBe("true");
+    expect(rows[1].querySelector('[aria-label="Switching"]')).not.toBeNull();
+    act(() => rows[1].click());
+    act(() => rows[0].click());
+    expect(onModeChange).toHaveBeenCalledTimes(1);
+    expect(onModeChange).toHaveBeenCalledWith("plan");
+    await act(async () => { settle(); await Promise.resolve(); });
+    expect(q('[role="menu"]')).toBeNull();
+  });
+
+  it("says Mode unknown when the mode could not be read and keeps the menu usable", () => {
+    const onModeChange = vi.fn(() => Promise.resolve());
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ mode: null, modeChoices: MODES, onModeChange }} />));
+    expect(q('[data-group="agent"] button')?.textContent).toContain("Mode unknown");
+    const rows = modeMenu();
+    act(() => rows[0].click());
+    expect(onModeChange).toHaveBeenCalledWith("default");
+  });
+
+  it("renders no Mode section without mode props", () => {
+    act(() => root.render(<Harness onSend={vi.fn()} />));
+    expect(modeMenu()).toHaveLength(2);
+    expect([...host.querySelectorAll('[role="menu"] div')].map(d => d.textContent)).not.toContain("Mode");
+  });
+
   it("renders read-only labels without handlers, hides the ring without data, and explains a blocked send", () => {
     act(() => root.render(<Harness onSend={vi.fn()} extra={{ onEffortChange: undefined, onModelChange: undefined, contextPct: null, onAttach: undefined, disabledReason: "Seat is offline" }} />));
     expect(q('[data-group="model"]')?.tagName).toBe("SPAN");

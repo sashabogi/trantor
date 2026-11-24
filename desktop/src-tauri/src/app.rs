@@ -207,6 +207,8 @@ pub fn run() {
             ghost::ghost_cancel,
             pane_send,
             pane_keys,
+            pane_mode::pane_mode_get,
+            pane_mode::pane_mode_set,
             ask_answer,
             asks::ask_watch,
             asks::ask_target,

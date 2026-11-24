@@ -8,6 +8,7 @@ import { normalizeAttachments, type PromptVerdict } from "../../../features/chat
 import { parseAutonomy } from "./useWorkspaceData";
 import { useAttachments } from "../../ui/useAttachments";
 import { Composer2, type Choice } from "../../ui/Composer2";
+import { useAgentMode } from "./useAgentMode";
 
 type ClassicProps = ComponentProps<typeof Composer>;
 
@@ -22,10 +23,13 @@ export const EFFORT_CHOICES: readonly Choice[] = [
   { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" },
   { value: "xhigh", label: "Extra high" }, { value: "max", label: "Max" },
 ];
+// #14022 trace: harness = the --dangerously-skip-permissions flag on the NEXT orchestrator launch or
+// resume (bin/crew/open.mjs), baton = who fires the handoff at the context warn line. Neither touches a running session.
 export const PERMISSION_CHOICES: readonly Choice[] = [
-  { value: "ask", label: "Ask me", icon: "lock", description: "Permission prompts wait for you in the pane, and a handoff asks first." },
-  { value: "auto", label: "Full auto", icon: "zap", tone: "warn", description: "Skips permission prompts, risky commands included, and hands off on its own." },
+  { value: "ask", label: "Ask me", icon: "lock", description: "The next session starts with permission prompts, and a handoff asks you first." },
+  { value: "auto", label: "Full auto", icon: "zap", tone: "warn", description: "The next session starts skipping permission prompts, and hands off on its own." },
 ];
+export const PERMISSION_HEADING = "For new sessions and handoffs";
 
 /** The picker value the running model corresponds to; "default" is never claimed, since the id cannot say. */
 export function modelChoiceOf(model: string): string | null {
@@ -69,6 +73,7 @@ export function ComposerAdapter(p: ClassicProps) {
   const [note, setNote] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const harness = useHarness(p.project);
+  const mode = useAgentMode(p.target, p.working);
   const attachments = useAttachments();
   const blockedQuestion = p.blockedAsk?.questions[0]?.question ?? null;
   const disabledReason = !p.live ? p.liveWhy : !p.target ? "There is no pane to send to" : null;
@@ -83,6 +88,7 @@ export function ComposerAdapter(p: ClassicProps) {
       setNote(r.note);
       if (r.clear) { setValue(""); attachments.clear(); }
       p.onSent();
+      mode.read();
     });
   };
   const pickEffort = (v: string) => { setEffort(v); void line(`/effort ${v}`); p.onDispatch("effort", v); };
@@ -94,11 +100,13 @@ export function ComposerAdapter(p: ClassicProps) {
     p.onDispatch("model", v);
   };
   const frac = p.context.frac;
-  const shown = note ?? harness.error;
+  const shown = note ?? mode.error ?? harness.error;
+  const modeProps = mode.supported ? { mode: mode.mode, modeChoices: mode.choices, onModeChange: mode.set } : {};
   return (
     <div className="flex flex-col gap-1.5 border-t border-[var(--v2-edge)] px-3 pb-3 pt-2.5">
       {shown && <div role="status" className="text-[11.5px] text-[var(--v2-warn)]">{shown}</div>}
-      <Composer2 value={value} onChange={v => { setValue(v); if (note) setNote(null); }} onSend={send}
+      <Composer2 value={value} onChange={v => { setValue(v); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
+        permissionHeading={PERMISSION_HEADING}
         label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
         agent="orchestrator" model={{ id: p.model || "unknown", label: p.model ? modelLabel(p.model).full.replace(/ \(.*\)$/, "") : "model unknown" }}
         modelChoices={MODEL_CHOICES} modelValue={modelChoiceOf(p.model || "")} onModelChange={pickModel}

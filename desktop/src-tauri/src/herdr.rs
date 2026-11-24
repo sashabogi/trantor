@@ -56,8 +56,7 @@ fn request_within(req: &serde_json::Value, read_timeout: Duration) -> Result<Str
     Ok(buf)
 }
 
-/// Deliver operator text to the agent occupying `target` (a pane id like "w2:p8", or a
-/// live agent name). Text goes through verbatim — newlines stay newlines in the draft.
+/// Deliver operator text verbatim to the agent occupying `target` (pane id "w2:p8" or agent name).
 /// herdr 0.9.5 sends the text plus Enter BEFORE reporting success, and `wait` holds the
 /// answer until the agent shows working/blocked activity (#13913): `Delivered` means herdr
 /// observed the pickup itself, `TimedOut` means the bytes landed but nobody took them yet.
@@ -152,6 +151,28 @@ pub fn agent_status(target: &str) -> Option<String> {
         .get("agent_status")?
         .as_str()
         .map(str::to_string)
+}
+
+/// Which agent herdr detected in `target` ("claude", "codex", ...) and its lifecycle state, from
+/// one `agent.get` (#14022: the mode menu only speaks Claude Code's Shift+Tab cycle).
+pub(crate) fn agent_kind_and_status(target: &str) -> (Option<String>, Option<String>) {
+    let req = serde_json::json!({
+        "id": "trantor:agent.get",
+        "method": "agent.get",
+        "params": { "target": target },
+    });
+    match request_within(&req, Duration::from_millis(1500)) {
+        Ok(raw) => kind_and_status_from_agent_get(&raw),
+        Err(_) => (None, None),
+    }
+}
+
+fn kind_and_status_from_agent_get(raw: &str) -> (Option<String>, Option<String>) {
+    let agent = serde_json::from_str::<serde_json::Value>(raw.trim())
+        .ok()
+        .and_then(|v| v.get("result")?.get("agent").cloned());
+    let field = |k: &str| agent.as_ref().and_then(|a| a.get(k)?.as_str().map(str::to_string));
+    (field("agent"), field("agent_status"))
 }
 
 /// Status AND reported session id from ONE `agent.get` roundtrip (#10007): local_sessions polls
@@ -410,6 +431,16 @@ mod tests {
         // A non-id reference kind (e.g. a path) is not a session id.
         let path_kind = AGENT_GET_WITH_SESSION.replace("\"kind\":\"id\"", "\"kind\":\"path\"");
         assert_eq!(session_from_agent_get(&path_kind), None);
+    }
+
+    #[test]
+    fn kind_and_status_read_the_captured_agent_get() {
+        assert_eq!(
+            kind_and_status_from_agent_get(AGENT_GET_WITH_SESSION),
+            (Some("claude".into()), Some("idle".into()))
+        );
+        assert_eq!(kind_and_status_from_agent_get(NOT_FOUND), (None, None));
+        assert_eq!(kind_and_status_from_agent_get("not json"), (None, None));
     }
 
     #[test]

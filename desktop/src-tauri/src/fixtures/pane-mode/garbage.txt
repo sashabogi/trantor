@@ -1,0 +1,5 @@
+$ ls
+Cargo.toml  src
+$ echo plan mode on is just text here
+plan mode on is just text here
+$ 

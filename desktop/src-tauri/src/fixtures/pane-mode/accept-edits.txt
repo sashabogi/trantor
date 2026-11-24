@@ -1,0 +1,18 @@
+╭─── Claude Code v2.1.326 ──────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                         │
+│                 Welcome back!                      │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ──────────────────────────────────────────────────────────────── │
+│                     ▐▛███▜▌                        │ Recent activity                                                  │
+│                    ▝▜█████▛▘                       │ No recent activity                                               │
+│                      ▘▘ ▝▝                         │                                                                  │
+│   Opus 5.5 · Claude Max                            │                                                                  │
+│   /private/var/folders/2p/T/modecap-ar7nng_u       │                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  Safe mode: customizations are off. Restart without --safe-mode to turn them back on
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "fix typecheck errors"
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⚠ Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION marker · restart with CLAUDE_CODE_FORCE_SESSION_PE…
+  ⏵⏵ accept edits on (shift+tab to cycle)                                     ● high · /effort

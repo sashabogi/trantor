@@ -1,13 +1,15 @@
 // The composer's two chips open menus that show every option with what it does (#13984 drill: a click used to cycle blind).
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, ChevronDown, Lock, ShieldCheck, Zap } from "lucide-react";
+import { Check, ChevronDown, ClipboardList, Hand, Loader2, Lock, Pencil, ShieldCheck, Sparkles, Zap } from "lucide-react";
 
 export type Choice = {
   value: string;
   label: string;
   /** One line on what picking it does. */
   description?: string;
-  icon?: "lock" | "shield" | "zap";
+  icon?: "lock" | "shield" | "zap" | "hand" | "pencil" | "plan" | "sparkles";
+  /** The chip's face when this choice is current ("Plan"); falls back to `label`. */
+  short?: string;
   /** Amber: the option that removes a safeguard. */
   tone?: "warn";
 };
@@ -17,6 +19,10 @@ const PILL = "inline-flex min-w-0 items-center rounded-full border border-[var(-
 export function ChoiceIcon({ choice, size = 13 }: { choice?: Choice; size?: number }) {
   if (choice?.icon === "zap") return <Zap size={size} aria-hidden />;
   if (choice?.icon === "shield") return <ShieldCheck size={size} aria-hidden />;
+  if (choice?.icon === "hand") return <Hand size={size} aria-hidden />;
+  if (choice?.icon === "pencil") return <Pencil size={size} aria-hidden />;
+  if (choice?.icon === "plan") return <ClipboardList size={size} aria-hidden />;
+  if (choice?.icon === "sparkles") return <Sparkles size={size} aria-hidden />;
   return <Lock size={size} aria-hidden />;
 }
 
@@ -60,18 +66,21 @@ export function MenuHeading({ children }: { children: ReactNode }) {
 }
 
 /** One option row: icon, name, what it does, and a check on the current one. */
-export function ChoiceRow({ choice, current, onPick, leading }: {
+export function ChoiceRow({ choice, current, onPick, leading, busy = false }: {
   choice: Choice; current: boolean; onPick: () => void; leading?: ReactNode;
+  /** #14022: this pick is being applied; the row spins instead of checking. */
+  busy?: boolean;
 }) {
   return (
-    <button type="button" role="menuitemradio" aria-checked={current} onClick={onPick}
+    <button type="button" role="menuitemradio" aria-checked={current} aria-busy={busy || undefined} onClick={onPick}
       className={`v2-hover flex w-full items-start gap-2 rounded-[8px] border-0 px-2 py-1.5 text-left ${current ? "bg-[var(--v2-raised)]" : "bg-transparent"}`}>
       <span className={`mt-[2px] flex-none ${choice.tone === "warn" ? "text-[var(--v2-warn)]" : "text-[var(--v2-text-2)]"}`}>{leading}</span>
       <span className="min-w-0 flex-1">
         <span className="block text-[12.5px] font-medium text-[var(--v2-text)]">{choice.label}</span>
         {choice.description && <span className="block text-[11.5px] leading-snug text-[var(--v2-muted)]">{choice.description}</span>}
       </span>
-      {current && <Check size={13} aria-hidden className="mt-[3px] flex-none text-[var(--v2-accent)]" />}
+      {busy ? <Loader2 size={13} aria-label="Switching" className="mt-[3px] flex-none animate-spin text-[var(--v2-muted)]" />
+        : current && <Check size={13} aria-hidden className="mt-[3px] flex-none text-[var(--v2-accent)]" />}
     </button>
   );
 }

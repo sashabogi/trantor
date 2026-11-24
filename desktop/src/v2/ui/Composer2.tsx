@@ -1,4 +1,4 @@
-import { useId, useRef, type KeyboardEvent } from "react";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, Paperclip } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./IconButton";
@@ -31,10 +31,18 @@ export type Composer2Props = {
   effort?: string | null;
   effortChoices?: readonly Choice[];
   onEffortChange?: (value: string) => void;
+  /** #14022: the hosted agent's live mode as read back; null = it has modes but the read failed. Omit with no modes. */
+  mode?: string | null;
+  /** Data-driven per harness: what this session's mode cycle offers. */
+  modeChoices?: readonly Choice[];
+  /** Settles when the switch has been read back or refused; the parent reports a refusal. */
+  onModeChange?: (value: string) => Promise<void>;
   /** Omit where there is no permission level to show. */
   permission?: string;
   permissionChoices?: readonly Choice[];
   onPermissionChange?: (value: string) => void;
+  /** The permission section's heading, when the default "Permission level for X" would mislead (#14022). */
+  permissionHeading?: string;
   /** Opens the settings page behind the permission menu's last row. */
   onPermissionSettings?: () => void;
   /** Context window used, 0 to 100; null hides the ring (not reported yet). */
@@ -57,38 +65,72 @@ function EffortBars({ lit, total }: { lit: number; total: number }) {
   );
 }
 
-/** Who answers and what it may do without asking; the menu lists every permission level with what it means. */
+/** The live mode rows: one switch at a time, the row in flight spins and further clicks are ignored (#14022). */
+function ModeRows({ p, close, busy, setBusy }: {
+  p: Composer2Props; close: () => void; busy: string | null; setBusy: (v: string | null) => void;
+}) {
+  const pick = (value: string) => {
+    if (busy) return;
+    if (value === p.mode) { close(); return; }
+    setBusy(value);
+    const done = () => { setBusy(null); close(); };
+    p.onModeChange?.(value).then(done, done);
+  };
+  return (<>
+    <MenuHeading>Mode{p.mode == null ? " · not read yet" : ""}</MenuHeading>
+    {p.modeChoices?.map(c => (
+      <ChoiceRow key={c.value} choice={c} current={c.value === p.mode} busy={busy === c.value}
+        leading={<ChoiceIcon choice={c} size={14} />} onPick={() => pick(c.value)} />
+    ))}
+  </>);
+}
+
+/** Who answers, its live mode, and what it may do without asking; the menu lists both with what they mean. */
 function AgentChip(p: Composer2Props) {
   const who = seatLabel(p.agent);
+  // Held here, not in the menu, so closing and reopening mid-switch cannot start a second one.
+  const [busy, setBusy] = useState<string | null>(null);
   const current = p.permissionChoices?.find(c => c.value === p.permission);
   const canPick = !!current && !!p.onPermissionChange;
-  const label = current ? `${who}, permission: ${current.label}` : `Answers: ${who}`;
+  const hasMode = p.mode !== undefined && !!p.modeChoices?.length && !!p.onModeChange;
+  const modeNow = p.modeChoices?.find(c => c.value === p.mode);
+  const modeName = modeNow ? modeNow.short ?? modeNow.label : "Mode unknown";
+  const parts = [who, hasMode ? `mode: ${modeName}` : null, current ? `permission: ${current.label}` : null].filter(Boolean);
+  const label = parts.length > 1 ? parts.join(", ") : `Answers: ${who}`;
   return (
-    <ChipMenu group="agent" label={label} title={current ? `${who} · ${current.label}. Click to change.` : `Answers: ${who}`}
-      menuLabel="Permission level" className="py-[2px] pr-[6px] pl-[3px]"
+    <ChipMenu group="agent" label={label} title={parts.length > 1 ? `${parts.join(" · ")}. Click to change.` : `Answers: ${who}`}
+      menuLabel={hasMode ? "Mode and permission" : "Permission level"} className="py-[2px] pr-[6px] pl-[3px]"
       chip={<>
         <Avatar name={p.agent} llm={brandOfModel(p.model.id)} size={20} />
+        {hasMode && <span className={`ml-[5px] whitespace-nowrap ${modeNow ? "text-[var(--v2-text)]" : "text-[var(--v2-muted)]"}`}>{modeName}</span>}
         {current && <>
           <span aria-hidden className="px-[3px] text-[var(--v2-muted)]">·</span>
           <span className={`inline-flex items-center ${current.tone === "warn" ? "text-[var(--v2-warn)]" : "text-[var(--v2-text-2)]"}`}><ChoiceIcon choice={current} /></span>
         </>}
       </>}>
-      {canPick ? close => (<>
-        <MenuHeading>Permission level for {who}</MenuHeading>
-        {p.permissionChoices?.map(c => (
-          <ChoiceRow key={c.value} choice={c} current={c.value === p.permission} leading={<ChoiceIcon choice={c} size={14} />}
-            onPick={() => { close(); if (c.value !== p.permission) p.onPermissionChange?.(c.value); }} />
-        ))}
-        {p.onPermissionSettings && (
-          <button type="button" role="menuitem" onClick={() => { close(); p.onPermissionSettings?.(); }}
-            className="v2-hover mt-1 block w-full rounded-[8px] border-0 border-t border-[var(--v2-edge)] bg-transparent px-2 py-1.5 text-left">
-            <span className="block text-[12.5px] text-[var(--v2-text-2)]">Permission settings…</span>
-            <span className="block text-[11.5px] text-[var(--v2-muted)]">Settings › Autonomy: the level new work starts at, and your rules</span>
-          </button>
-        )}
+      {canPick || hasMode ? close => (<>
+        {hasMode && <ModeRows p={p} close={close} busy={busy} setBusy={setBusy} />}
+        {canPick && <PermissionRows p={p} who={who} close={close} />}
       </>) : undefined}
     </ChipMenu>
   );
+}
+
+function PermissionRows({ p, who, close }: { p: Composer2Props; who: string; close: () => void }) {
+  return (<>
+    <MenuHeading>{p.permissionHeading ?? `Permission level for ${who}`}</MenuHeading>
+    {p.permissionChoices?.map(c => (
+      <ChoiceRow key={c.value} choice={c} current={c.value === p.permission} leading={<ChoiceIcon choice={c} size={14} />}
+        onPick={() => { close(); if (c.value !== p.permission) p.onPermissionChange?.(c.value); }} />
+    ))}
+    {p.onPermissionSettings && (
+      <button type="button" role="menuitem" onClick={() => { close(); p.onPermissionSettings?.(); }}
+        className="v2-hover mt-1 block w-full rounded-[8px] border-0 border-t border-[var(--v2-edge)] bg-transparent px-2 py-1.5 text-left">
+        <span className="block text-[12.5px] text-[var(--v2-text-2)]">Permission settings…</span>
+        <span className="block text-[11.5px] text-[var(--v2-muted)]">Settings › Autonomy: the level new work starts at, and your rules</span>
+      </button>
+    )}
+  </>);
 }
 
 /** The model and how hard it thinks; the menu lists the models and the effort levels by name. */

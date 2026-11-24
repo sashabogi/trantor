@@ -1,0 +1,99 @@
+// @vitest-environment happy-dom
+// #14022: the orchestrator composer's Mode menu reads the live mode off the pane and switches it through
+// the native closed loop. Fakes sit only at the Tauri IPC boundary.
+import { act, type ComponentProps } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import type { InvokeArgs } from "@tauri-apps/api/core";
+import { ComposerAdapter } from "./ComposerAdapter";
+// SAFETY: React's test-only flag enables act warnings for this DOM fixture.
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+type Answer = { mode: string; prompt_showing?: boolean; seen?: string[] } | Promise<never> | null;
+type Calls = Array<{ cmd: string; args?: InvokeArgs }>;
+type Reply = (cmd: string, args?: InvokeArgs) => Answer | undefined;
+
+let host: HTMLDivElement;
+let root: Root;
+let calls: Calls;
+beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); calls = []; });
+afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); clearMocks(); });
+
+function ipc(reply: Reply) {
+  mockIPC((cmd, args) => { calls.push({ cmd, args }); return reply(cmd, args); });
+}
+const claudeAt = (mode: string, onSet?: Reply): Reply => (cmd, args) => {
+  if (cmd === "pane_mode_get") return { mode, prompt_showing: false };
+  if (cmd === "pane_mode_set") return onSet?.(cmd, args);
+  return null;
+};
+
+const props = (over: Partial<ComponentProps<typeof ComposerAdapter>> = {}): ComponentProps<typeof ComposerAdapter> => ({
+  project: "trantor", target: "w4:p1", live: true, liveWhy: "", model: "claude-opus-5-5", modelSource: "reported",
+  working: false, userTexts: [], context: { tokens: null, window: 200000, frac: null }, fontStep: "m",
+  onFontStep: () => {}, onSent: () => {}, onLongRunChange: () => {}, onDispatch: () => {}, ...over,
+});
+const flush = () => act(async () => { await new Promise(r => setTimeout(r, 0)); });
+async function mount(over?: Partial<ComponentProps<typeof ComposerAdapter>>) {
+  await act(async () => { root.render(<ComposerAdapter {...props(over)} />); });
+  await flush();
+}
+const chip = () => host.querySelector<HTMLButtonElement>('[data-group="agent"] button');
+const rows = () => [...host.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitemradio"]')];
+const headings = () => [...host.querySelectorAll('[role="menu"] div')].map(d => d.textContent);
+const open = () => act(async () => { chip()?.click(); });
+const pick = (label: string) => act(async () => { rows().find(r => r.textContent?.startsWith(label))?.click(); });
+
+describe("ComposerAdapter mode menu", () => {
+  it("shows the read mode and offers only the modes every session has, above the relabelled launch section", async () => {
+    ipc(claudeAt("default"));
+    await mount();
+    expect(chip()?.getAttribute("aria-label")).toBe("orchestrator, mode: Agent, permission: Ask me");
+    await open();
+    expect(rows().map(r => r.querySelector("span span")?.textContent)).toEqual(
+      ["Agent", "Agent, accept edits", "Plan", "Ask me", "Full auto"]);
+    expect(headings()).toContain("For new sessions and handoffs");
+    expect(calls.filter(c => c.cmd === "pane_mode_get")[0]?.args).toEqual({ target: "w4:p1" });
+  });
+
+  it("switches through pane_mode_set once and then offers the modes the cycle showed", async () => {
+    ipc(claudeAt("plan", () => ({ mode: "default", seen: ["plan", "auto", "default"] })));
+    await mount();
+    expect(chip()?.textContent).toContain("Plan");
+    await open();
+    await pick("Agent");
+    await flush();
+    expect(calls.filter(c => c.cmd === "pane_mode_set").map(c => c.args)).toEqual([{ target: "w4:p1", mode: "default" }]);
+    expect(chip()?.textContent).toContain("Agent");
+    await open();
+    expect(rows().map(r => r.querySelector("span span")?.textContent)).toContain("Auto");
+    expect(rows().map(r => r.querySelector("span span")?.textContent)).not.toContain("Bypass permissions");
+  });
+
+  it("puts a refused switch in the status line", async () => {
+    ipc(claudeAt("default", () => Promise.reject("A prompt is waiting in the pane; answer it first. Nothing was pressed.")));
+    await mount();
+    await open();
+    await pick("Plan");
+    await flush();
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(
+      "Mode not changed: A prompt is waiting in the pane; answer it first. Nothing was pressed.");
+  });
+
+  it("says Mode unknown when the parser cannot tell", async () => {
+    ipc(claudeAt("unknown"));
+    await mount();
+    expect(chip()?.textContent).toContain("Mode unknown");
+  });
+
+  it("renders no Mode section for a pane that is not Claude Code, or with no pane", async () => {
+    ipc(cmd => cmd === "pane_mode_get" ? Promise.reject("not a Claude Code pane") : null);
+    await mount();
+    expect(chip()?.getAttribute("aria-label")).toBe("orchestrator, permission: Ask me");
+    await act(async () => { root.render(<ComposerAdapter {...props({ target: null })} />); });
+    await flush();
+    await open();
+    expect(headings()).not.toContain("Mode");
+  });
+});
