@@ -41,6 +41,7 @@ mod local_sessions;
 mod succession;
 mod drafts;
 mod git_panel;
+mod git_scope;
 mod remote_seat;
 mod update;
 mod app;
@@ -69,6 +70,8 @@ use succession::*;
 use drafts::*;
 #[allow(unused_imports)]
 use git_panel::*;
+#[allow(unused_imports)]
+use git_scope::*;
 #[allow(unused_imports)]
 use remote_seat::*;
 #[allow(unused_imports)]

@@ -1,6 +1,6 @@
 // Commit detail (#13988): title, the seven icon actions, author line, card evidence, and the diff.
-// A single commit's own patch has no reader yet (no git show command), so that body says so; the
-// seat's unlanded work against main is a real patch and renders in full.
+// A single commit's files and patch come from git_show on either checkout (#13988 drill); the seat's
+// unlanded work against main is the seat_diff patch.
 import { useState } from "react";
 import { Copy, ExternalLink, GitBranchPlus, MessageSquarePlus, MoreHorizontal, ScanSearch, Sparkles, Users } from "lucide-react";
 import type { Card } from "../../../shared/api/client";
@@ -10,9 +10,8 @@ import { IconButton } from "../../ui/IconButton";
 import { seatLabel } from "../../ui/identity";
 import { MenuItem, Popover } from "../../shell/Popover";
 import { DiffPane, type ChipFile } from "./DiffPane";
-import type { HistoryRow } from "./model";
-import { NotWiredBlock } from "./parts";
-import type { SeatBranchDiff } from "./usePatch";
+import type { HistoryRow, Letter } from "./model";
+import { useCommitShow, type CommitPatch, type SeatBranchDiff } from "./usePatch";
 import type { Navigate } from "../../routes";
 
 const DONE = new Set(["done", "archived"]);
@@ -40,9 +39,21 @@ function Actions({ title, sha, acts }: { title: string; sha: string; acts: Acts 
   );
 }
 
-function SingleCommit({ row, cards, acts, onNavigate }: { row: HistoryRow; cards: Card[]; acts: Acts; onNavigate: Navigate }) {
+function showLetter(status: string): Letter {
+  return status.startsWith("A") ? "A" : status.startsWith("D") ? "D" : status.startsWith("R") ? "R" : "M";
+}
+
+function CommitBody({ show, acts }: { show: CommitPatch; acts: Acts }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const chips: ChipFile[] = show.files.map(f => ({ path: f.path, letter: showLetter(f.status), plus: f.plus, minus: f.minus }));
+  const current = selected && chips.some(c => c.path === selected) ? selected : chips[0]?.path ?? null;
+  return <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={show.state} onAddToChat={acts.addToChat} empty="This commit changes no file text." />;
+}
+
+function SingleCommit({ row, project, scope, cards, acts, onNavigate }: { row: HistoryRow; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate }) {
   const who = row.seat ?? row.author;
   const card = row.card === null ? null : cards.find(c => c.id === row.card) ?? null;
+  const show = useCommitShow(project, scope, row.sha);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex flex-col gap-2 border-b border-[var(--v2-edge)] px-4 py-3">
@@ -63,7 +74,7 @@ function SingleCommit({ row, cards, acts, onNavigate }: { row: HistoryRow; cards
           </div>
         )}
       </div>
-      <div className="p-4"><NotWiredBlock title="This commit's own diff is not readable yet" line="Showing one commit's files and patch needs a git show command. The seat's whole branch against main is under 'not on main yet' in the list." /></div>
+      <CommitBody key={row.sha} show={show} acts={acts} />
     </div>
   );
 }
@@ -83,7 +94,9 @@ export function UnlandedDetail({ branch, count, diff, acts }: { branch: string |
   );
 }
 
-export function CommitDetail({ row, cards, acts, onNavigate }: { row: HistoryRow | null; cards: Card[]; acts: Acts; onNavigate: Navigate }) {
+export function CommitDetail({ row, project, scope, cards, acts, onNavigate }: {
+  row: HistoryRow | null; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate;
+}) {
   if (!row) return <div className="flex flex-1 items-center justify-center px-6 text-[12.5px] text-[var(--v2-muted)]">Pick a commit to read it.</div>;
-  return <SingleCommit row={row} cards={cards} acts={acts} onNavigate={onNavigate} />;
+  return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} />;
 }

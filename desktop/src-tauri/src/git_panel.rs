@@ -168,7 +168,8 @@ pub(crate) fn seat_diff(project: String, agent: String) -> Result<String, String
 }
 
 // ── git panel (#5775) ──────────────────────────────────────────────────────────────────────────
-// One read snapshot and three mutations (stage/unstage, commit, push) against the SEAT's worktree.
+// One read snapshot and three mutations (stage/unstage, commit, push) against the SEAT's worktree;
+// git_scope.rs lets the snapshot, stage and commit act on the main checkout too (#13988 drill).
 // Additive: seat_diff above stays frozen and shares no mutable state with it.
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -431,23 +432,26 @@ pub(crate) async fn upstream_state(worktree: &Path) -> Result<(Option<String>, U
     Ok((None, UpstreamStatus { has_upstream: false, ahead, behind: None }))
 }
 
-pub(crate) async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Result<GitPanel, String> {
-    let worktree = seat_worktree(bus, project, agent)?;
-
-    let branch = run_git_text_io(&worktree, &["branch", "--show-current"])
+/// The panel snapshot for one checkout (a seat worktree or, #13988 drill, the main checkout).
+pub(crate) async fn git_panel_at(worktree: &Path, limit: u32) -> Result<GitPanel, String> {
+    let branch = run_git_text_io(worktree, &["branch", "--show-current"])
         .await?
         .trim()
         .to_string();
 
-    let (upstream, upstream_status) = upstream_state(&worktree).await?;
+    let (upstream, upstream_status) = upstream_state(worktree).await?;
 
     let status =
-        parse_porcelain_v1(&run_git_text_io(&worktree, &["status", "--porcelain=v1", "-z"]).await?);
-    let counts = parse_numstat(&run_git_text_io(&worktree, &["diff", "--numstat", "HEAD"]).await?);
+        parse_porcelain_v1(&run_git_text_io(worktree, &["status", "--porcelain=v1", "-z"]).await?);
+    let counts = parse_numstat(&run_git_text_io(worktree, &["diff", "--numstat", "HEAD"]).await?);
     let log = parse_log_pretty(
         &run_git_text_io(
-            &worktree,
-            &["log", "--max-count=15", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s"],
+            worktree,
+            &[
+                "log",
+                &format!("--max-count={limit}"),
+                "--pretty=format:%h%x1f%an%x1f%ar%x1f%s",
+            ],
         )
         .await?,
     );
@@ -463,12 +467,17 @@ pub(crate) async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &st
     })
 }
 
+/// `scope` "project" reads the main checkout (no agent); absent or "seat" reads `agent`'s worktree.
 #[tauri::command]
-pub(crate) async fn git_panel(project: String, agent: String) -> Result<String, String> {
-    serde_json::to_string(
-        &git_panel_from_bus_dir(&desktop_bus_dir(), &project, &agent).await?,
-    )
-    .map_err(|e| e.to_string())
+pub(crate) async fn git_panel(
+    project: String,
+    agent: Option<String>,
+    scope: Option<String>,
+    limit: Option<u32>,
+) -> Result<String, String> {
+    let scope = parse_scope(agent.as_deref(), scope.as_deref())?;
+    let dir = scope_dir(&project, &scope)?;
+    serde_json::to_string(&git_panel_at(&dir, log_limit(limit)).await?).map_err(|e| e.to_string())
 }
 
 /// Prove `rel` stays inside `root`, symlinks and all: the shared path guard every git/fs handler
@@ -522,40 +531,29 @@ pub(crate) fn clean_git_paths(root: &Path, paths: &[String]) -> Result<Vec<Strin
 #[tauri::command]
 pub(crate) async fn git_stage(
     project: String,
-    agent: String,
+    agent: Option<String>,
+    scope: Option<String>,
     paths: Vec<String>,
     unstage: bool,
 ) -> Result<(), String> {
-    let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;
-    git_mutation_guard(&agent).await?;
-    let paths = clean_git_paths(&worktree, &paths)?;
-    let mut args: Vec<&str> = if unstage {
-        // `restore --staged`, not `reset -q HEAD --`: the modern spelling, and it un-stages a
-        // file even before the first commit, which `reset HEAD` cannot do.
-        vec!["restore", "--staged", "--"]
-    } else {
-        vec!["add", "--"]
-    };
-    args.extend(paths.iter().map(String::as_str));
-    git_run(&worktree, &args).await
+    let scope = parse_scope(agent.as_deref(), scope.as_deref())?;
+    let dir = scope_dir_for_mutation(&project, &scope).await?;
+    git_stage_at(&dir, &paths, unstage).await
 }
 
 #[tauri::command]
-pub(crate) async fn git_commit(project: String, agent: String, message: String) -> Result<String, String> {
-    let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;
-    git_mutation_guard(&agent).await?;
-    let msg = message.trim();
-    if msg.is_empty() {
-        return Err("commit message is empty".into());
-    }
-    // Commits what is STAGED, nothing more — the panel's staging list is the whole contract, and
-    // a surprise `git add -A` under a human's finger is how unrelated seat work gets swept in.
-    git_run(&worktree, &["commit", "-q", "-m", msg]).await?;
-    run_git_text_io(&worktree, &["rev-parse", "--short", "HEAD"])
-        .await
-        .map(|s| s.trim().to_string())
+pub(crate) async fn git_commit(
+    project: String,
+    agent: Option<String>,
+    scope: Option<String>,
+    message: String,
+) -> Result<String, String> {
+    let scope = parse_scope(agent.as_deref(), scope.as_deref())?;
+    let dir = scope_dir_for_mutation(&project, &scope).await?;
+    git_commit_at(&dir, &message).await
 }
 
+/// Seat-only by design (#13988 drill): pushing the main checkout goes through the orchestrator.
 #[tauri::command]
 pub(crate) async fn git_push(project: String, agent: String) -> Result<String, String> {
     let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;

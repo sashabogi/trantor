@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::UNIX_EPOCH;
 
+#[path = "sessions_opencode.rs"]
+mod opencode;
+use opencode::*;
+
 static SESSION_INDEX: std::sync::Mutex<Option<HashMap<String, SessionRecord>>> =
     std::sync::Mutex::new(None);
 
@@ -542,197 +546,6 @@ fn cached_record(harness: &str, id: &str) -> Option<SessionRecord> {
         .and_then(|index| index.get(&format!("{harness}:{id}")).cloned())
 }
 
-fn open_code_row(value: &Value) -> Option<SessionRecord> {
-    let id = value.get("id")?.as_str()?.to_string();
-    let cwd = value
-        .get("directory")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let messages = value
-        .get("messages")
-        .and_then(|messages| match messages {
-            Value::Array(items) => Some(items.clone()),
-            Value::String(raw) => serde_json::from_str::<Vec<Value>>(raw).ok(),
-            _ => None,
-        })
-        .unwrap_or_default();
-    let display_text = |message: &Value| {
-        let role = message.get("role").and_then(Value::as_str)?;
-        let content = message.get("text").unwrap_or(&Value::Null);
-        real_message_text(message, role, content)
-    };
-    let mut first_user = String::new();
-    let mut first_assistant = String::new();
-    for message in messages.iter() {
-        let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
-        if let Some(text) = display_text(message) {
-            if role == "user" && first_user.is_empty() {
-                first_user = text;
-            } else if role == "assistant" && first_assistant.is_empty() {
-                first_assistant = text;
-            }
-        }
-    }
-    // The store-field fallback carries the LAST ROW'S REAL ROLE (#5842 residual): the runner's
-    // message envelope lands as a user row, and attributing it "assistant" silently skipped the
-    // injection check that filters it from lastMessage.
-    let last_role = value
-        .get("last_role")
-        .and_then(Value::as_str)
-        .unwrap_or("assistant");
-    let last_message = messages
-        .iter()
-        .rev()
-        .find_map(display_text)
-        .or_else(|| {
-            value
-                .get("last_message")
-                .and_then(Value::as_str)
-                .and_then(|text| {
-                    real_message_text(&Value::Null, last_role, &Value::String(text.into()))
-                })
-        })
-        .unwrap_or_default();
-    // The title ladder (#5842): real user text, then the store's own first-user field (still
-    // injection-filtered — the crew boot prompt pools there), then real assistant text, then the
-    // last real message, then "untitled". The session id is NEVER a title, and OpenCode's own
-    // `title` field is never trusted raw: it is exactly where the boot prompt pooled.
-    let stored_first_user = value
-        .get("first_user")
-        .and_then(Value::as_str)
-        .and_then(|text| real_message_text(&Value::Null, "user", &Value::String(text.into())));
-    let title = if !first_user.is_empty() {
-        first_user
-    } else if let Some(text) = stored_first_user {
-        text
-    } else if !first_assistant.is_empty() {
-        first_assistant
-    } else if !last_message.is_empty() {
-        last_message.clone()
-    } else {
-        "untitled".to_string()
-    };
-    Some(SessionRecord {
-        row: SessionRow {
-            id,
-            harness: "opencode".into(),
-            title,
-            last_message,
-            message_count: value
-                .get("message_count")
-                .and_then(Value::as_u64)
-                .unwrap_or_default() as usize,
-            model: value
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            branch: branch_from_cwd(&cwd),
-            updated_at: value
-                .get("updated_at")
-                .and_then(Value::as_u64)
-                .unwrap_or_default(),
-            cwd,
-        },
-        transcript: None,
-    })
-}
-
-const OPEN_CODE_LIST_SQL: &str = r#"
-SELECT s.id,
-       s.directory,
-       s.title,
-       COALESCE(json_extract(s.model, '$.id'), '') AS model,
-       s.time_updated AS updated_at,
-       (SELECT COUNT(*) FROM message m
-         WHERE m.session_id = s.id
-           AND json_extract(m.data, '$.role') IN ('user', 'assistant')) AS message_count,
-       COALESCE((SELECT json_group_array(json_object(
-                            'role', rows.role,
-                            'text', rows.text,
-                            'isMeta', rows.is_meta))
-                   FROM (SELECT json_extract(m.data, '$.role') AS role,
-                                json_extract(p.data, '$.text') AS text,
-                                json_extract(m.data, '$.isMeta') AS is_meta
-                           FROM message m JOIN part p ON p.message_id = m.id
-                          WHERE m.session_id = s.id
-                            AND json_extract(m.data, '$.role') IN ('user', 'assistant')
-                            AND json_extract(p.data, '$.type') = 'text'
-                          ORDER BY m.time_created, p.time_created) AS rows), '[]') AS messages,
-       COALESCE((SELECT json_extract(p.data, '$.text')
-                   FROM message m JOIN part p ON p.message_id = m.id
-                  WHERE m.session_id = s.id
-                    AND json_extract(m.data, '$.role') = 'user'
-                    AND json_extract(p.data, '$.type') = 'text'
-                  ORDER BY m.time_created, p.time_created LIMIT 1), s.title) AS first_user,
-       COALESCE((SELECT json_extract(p.data, '$.text')
-                    FROM message m JOIN part p ON p.message_id = m.id
-                   WHERE m.session_id = s.id
-                     AND json_extract(m.data, '$.role') IN ('user', 'assistant')
-                     AND json_extract(p.data, '$.type') = 'text'
-                   ORDER BY m.time_created DESC, p.time_created DESC LIMIT 1), '') AS last_message,
-       COALESCE((SELECT json_extract(m.data, '$.role')
-                    FROM message m JOIN part p ON p.message_id = m.id
-                   WHERE m.session_id = s.id
-                     AND json_extract(m.data, '$.role') IN ('user', 'assistant')
-                     AND json_extract(p.data, '$.type') = 'text'
-                   ORDER BY m.time_created DESC, p.time_created DESC LIMIT 1), 'assistant') AS last_role
-  FROM session s
- ORDER BY s.time_updated DESC;
-"#;
-
-fn sqlite_json(sql: &str) -> Result<Value, String> {
-    let db = home_dir().join(".local/share/opencode/opencode.db");
-    if !db.exists() {
-        return Ok(Value::Array(Vec::new()));
-    }
-    let output = Command::new("/usr/bin/sqlite3")
-        .args(["-readonly", "-json"])
-        .arg(&db)
-        .arg(sql)
-        .output()
-        .map_err(|e| format!("{}: {e}", db.display()))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-    }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("OpenCode session store: {e}"))
-}
-
-fn sql_string(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn collect_open_code(project_scope: Option<(&str, &str)>) -> Result<Vec<SessionRecord>, String> {
-    let sql = if let Some((project, scope)) = project_scope {
-        let cwds = project_cwds(project, scope);
-        let where_clause = cwds
-            .iter()
-            .map(|cwd| {
-                let cwd = cwd.to_string_lossy();
-                format!(
-                    "(s.directory = {} OR s.directory LIKE {})",
-                    sql_string(&cwd),
-                    sql_string(&format!("{cwd}/%")),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(" OR ");
-        OPEN_CODE_LIST_SQL.replace(
-            "  FROM session s\n ORDER",
-            &format!("  FROM session s\n WHERE {where_clause}\n ORDER"),
-        )
-    } else {
-        OPEN_CODE_LIST_SQL.to_string()
-    };
-    Ok(sqlite_json(&sql)?
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(open_code_row)
-        .collect())
-}
-
 fn is_same_or_child(path: &str, root: &Path) -> bool {
     let path = Path::new(path);
     path == root || path.starts_with(root)
@@ -763,16 +576,47 @@ fn sessions_list_sync(project: String, scope: String) -> Result<String, String> 
         return Err("scope must be worktree, project, or all".into());
     }
     let project_scope = (scope != "all").then_some((project, scope.as_str()));
-    let mut records = collect_file_sessions(project_scope);
-    records.extend(collect_open_code(project_scope)?);
+    let (records, warnings) = merge_store_reads(vec![
+        ("files", Ok(collect_file_sessions(project_scope))),
+        ("opencode", collect_open_code(project_scope)),
+    ]);
     cache_records(&records);
-    let mut rows = records
+    let mut sessions = records
         .into_iter()
         .map(|record| record.row)
         .filter(|row| in_scope(row, project, &scope))
         .collect::<Vec<_>>();
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    serde_json::to_string(&rows).map_err(|e| e.to_string())
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    serde_json::to_string(&SessionsListing { sessions, warnings }).map_err(|e| e.to_string())
+}
+
+/// One harness store that could not be read: its sessions are absent, everyone else's are not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct StoreWarning {
+    store: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SessionsListing {
+    sessions: Vec<SessionRow>,
+    warnings: Vec<StoreWarning>,
+}
+
+/// Each store is read on its own; a failed one becomes a warning, never the whole call's error
+/// (#13987 drill: one unreadable OpenCode database blanked the list to "0 sessions").
+fn merge_store_reads(
+    reads: Vec<(&str, Result<Vec<SessionRecord>, String>)>,
+) -> (Vec<SessionRecord>, Vec<StoreWarning>) {
+    let mut records = Vec::new();
+    let mut warnings = Vec::new();
+    for (store, read) in reads {
+        match read {
+            Ok(found) => records.extend(found),
+            Err(message) => warnings.push(StoreWarning { store: store.to_string(), message }),
+        }
+    }
+    (records, warnings)
 }
 
 #[tauri::command]
@@ -848,35 +692,6 @@ fn transcript_messages(record: &SessionRecord) -> Result<Vec<TranscriptMessage>,
         }
     }
     Ok(messages)
-}
-
-fn open_code_transcript(id: &str) -> Result<Vec<TranscriptMessage>, String> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-        return Err("invalid OpenCode session id".into());
-    }
-    let quoted = id.replace('\'', "''");
-    let sql = format!(
-        r#"SELECT json_extract(m.data, '$.role') AS role,
-                  json_extract(p.data, '$.text') AS text
-             FROM message m JOIN part p ON p.message_id = m.id
-            WHERE m.session_id = '{quoted}'
-              AND json_extract(m.data, '$.role') IN ('user', 'assistant')
-              AND json_extract(p.data, '$.type') = 'text'
-            ORDER BY m.time_created, p.time_created;"#,
-    );
-    Ok(sqlite_json(&sql)?
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|value| {
-            let role = value.get("role")?.as_str()?;
-            let text = value.get("text")?.as_str()?.trim().to_string();
-            (!text.is_empty()).then(|| TranscriptMessage {
-                role: role.to_string(),
-                text,
-            })
-        })
-        .collect())
 }
 
 fn session_transcript_sync(project: String, harness: String, id: String) -> Result<String, String> {

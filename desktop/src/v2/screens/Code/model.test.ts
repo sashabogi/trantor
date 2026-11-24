@@ -5,7 +5,6 @@ import { pairHunk, parseUnifiedDiff } from "./diff";
 import { countConflicts, parseConflicts, resolveChunks } from "./conflicts";
 import { closeTab, openTab } from "./useTabs";
 import { SOURCE_TAB } from "./TabBar";
-import { checkoutStatus } from "./useScopeGit";
 
 describe("parseCardRef", () => {
   it("reads the first #card in a subject", () => {
@@ -110,12 +109,5 @@ describe("conflict markers", () => {
   });
   it("keeps the markers on a conflict nobody picked", () => {
     expect(resolveChunks(parseConflicts(text), new Map())).toBe(text);
-  });
-});
-
-describe("checkout status", () => {
-  it("maps project_changes codes onto porcelain columns", () => {
-    expect(checkoutStatus("??", "n.ts")).toEqual({ path: "n.ts", x: "?", y: "?" });
-    expect(checkoutStatus("M", "a.ts")).toEqual({ path: "a.ts", x: " ", y: "M" });
   });
 });

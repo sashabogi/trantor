@@ -22,11 +22,17 @@ user+assistant conversation is in `sessions/.../context.jsonl`.
 
 ## Normalized row
 
-`sessions_list(project, scope)` returns rows sorted newest first:
+`sessions_list(project, scope)` returns `{ sessions, warnings }`. `sessions` holds rows sorted
+newest first:
 
 ```text
 id, harness, title, lastMessage, messageCount, model, branch, updatedAt, cwd
 ```
+
+Each store is read on its own (#13987). A missing or zero-byte store, and a query with no matching
+rows (`sqlite3 -json` prints nothing then), is no sessions. A store that cannot be read adds
+`{ store, message }` to `warnings` and contributes no rows; it never fails the whole call. The UI
+lists what was read and shows one quiet line per warning.
 
 - `title` is the first non-empty user message. OpenCode's generated `session.title` is
   only the fallback when no user text part exists.

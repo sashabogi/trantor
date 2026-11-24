@@ -61,7 +61,7 @@ function HistoryBody(p: { project: string; snap: ScopeSnapshot; cards: Card[]; s
       <HistoryView rows={rows} branch={p.snap.branch} unlanded={ahead} selected={key} onSelect={p.onSelect} seatBacked={p.snap.seatBacked} />
       {key === UNLANDED_KEY && ahead
         ? <UnlandedDetail branch={p.snap.branch} count={ahead} diff={diff} acts={p.acts} />
-        : <CommitDetail row={row} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} />}
+        : <CommitDetail row={row} project={p.project} scope={p.snap.scope} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} />}
     </div>
   );
 }

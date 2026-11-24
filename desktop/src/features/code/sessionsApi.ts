@@ -40,8 +40,23 @@ export function sessionMatches(row: SessionRow, query: string): boolean {
     .some(value => value.toLowerCase().includes(needle));
 }
 
-export async function sessionsList(project: string, scope: SessionScope): Promise<SessionRow[]> {
-  return JSON.parse(await invoke<string>("sessions_list", { project, scope }));
+/** A harness store that could not be read: its sessions are missing, everyone else's are listed. */
+export type StoreWarning = { store: string; message: string };
+export type SessionsListing = { sessions: SessionRow[]; warnings: StoreWarning[] };
+
+/** #13987 drill: the listing carries per-store warnings; a bare array is the older shape. */
+export function parseSessionsListing(raw: string): SessionsListing {
+  const parsed: SessionRow[] | Partial<SessionsListing> = JSON.parse(raw);
+  if (Array.isArray(parsed)) return { sessions: parsed, warnings: [] };
+  return { sessions: parsed.sessions ?? [], warnings: parsed.warnings ?? [] };
+}
+
+export function storeLabel(store: string): string {
+  return store === "claude" || store === "codex" || store === "opencode" || store === "kimi" ? harnessLabel(store) : store;
+}
+
+export async function sessionsList(project: string, scope: SessionScope): Promise<SessionsListing> {
+  return parseSessionsListing(await invoke<string>("sessions_list", { project, scope }));
 }
 
 export async function sessionTranscript(

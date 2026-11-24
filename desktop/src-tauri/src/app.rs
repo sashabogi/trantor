@@ -175,6 +175,7 @@ pub fn run() {
             git_stage,
             git_commit,
             git_push,
+            git_show,
             machine_ssh,
             remote_seat_snapshot,
             remote_file_patch,

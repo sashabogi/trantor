@@ -8,8 +8,10 @@ import {
   sessionMatches,
   sessionsList,
   sessionTranscript,
+  storeLabel,
   type SessionRow,
   type SessionScope,
+  type StoreWarning,
   type TranscriptMessage,
 } from "./sessionsApi";
 
@@ -82,14 +84,16 @@ export function SessionsMode({ project, onOpenClaude }: {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<StoreWarning[]>([]);
   const [selected, setSelected] = useState<SessionRow | null>(null);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError(null);
+    setWarnings([]);
     sessionsList(project, scope)
-      .then(rows => { if (alive) setSessions(rows); })
+      .then(listing => { if (alive) { setSessions(listing.sessions); setWarnings(listing.warnings); } })
       .catch(reason => { if (alive) setError(String(reason)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -132,6 +136,11 @@ export function SessionsMode({ project, onOpenClaude }: {
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {loading && <div className="px-2 py-3 text-[12px] text-tr-muted">Reading harness stores…</div>}
         {error && <div className="tr-mono px-2 py-3 text-[11px] text-tr-fail">{error}</div>}
+        {warnings.map(w => (
+          <div key={w.store} data-store-warning={w.store} title={w.message} className="truncate px-2 pb-1.5 text-[10.5px] text-tr-muted">
+            {storeLabel(w.store)} sessions could not be read, so they are not listed.
+          </div>
+        ))}
         {!loading && !error && visible.length === 0 && (
           <div className="px-2 py-3 text-[12px] text-tr-muted">No sessions match this scope and search.</div>
         )}

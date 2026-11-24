@@ -16,6 +16,22 @@ const PANEL = {
   log: [{ sha: "abc1234", author: "sashabogi", when: "2 hours ago", subject: "#13970 Restore opted-in projects" }],
 };
 
+// #13988 drill: the main checkout answers git_panel by scope "project", with real staging.
+const CHECKOUT = {
+  branch: "main", upstream: "origin/main", ahead: 2, behind: 1,
+  status: [{ path: "bin/a.mjs", x: " ", y: "M" }, { path: "src/staged.ts", x: "M", y: " " }],
+  counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }],
+  log: [{ sha: "fedcba9", author: "orchestrator", when: "5 minutes ago", subject: "#13988 Land the checkout panel" }],
+};
+const SHOW = {
+  sha: "fedcba9000000000000000000000000000000000", truncated: false,
+  files: [{ path: "src/landed.ts", status: "M", plus: 1, minus: 1 }],
+  patch: "diff --git a/src/landed.ts b/src/landed.ts\n--- a/src/landed.ts\n+++ b/src/landed.ts\n@@ -1,1 +1,1 @@\n-before\n+after landing\n",
+};
+type IpcArgs = { project?: string; agent?: string; scope?: string; sha?: string; paths?: string[]; unstage?: boolean; message?: string };
+type Call = { command: string; args: IpcArgs };
+let calls: Call[] = [];
+
 const client = new HubClient("http://hub.test", async ({ path }) => {
   if (path.startsWith("/peers")) return { status: 200, body: JSON.stringify(PEERS) };
   return { status: 200, body: JSON.stringify({ tasks: [], entries: [], messages: [] }) };
@@ -24,11 +40,15 @@ const client = new HubClient("http://hub.test", async ({ path }) => {
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  calls = [];
   mockIPC((command, args) => {
-    // SAFETY: mockIPC types args as unknown; the git commands are invoked with an object carrying agent.
-    const agent = (args as { agent?: string } | undefined)?.agent;
-    if (command === "project_changes") return JSON.stringify([{ seat: null, path: "bin/a.mjs", status: "M", plus: 4, minus: 1 }]);
-    if (command === "git_panel") return JSON.stringify(agent === "codex-8" ? PANEL : null);
+    // SAFETY: mockIPC types args as unknown; the git commands are invoked with an object of named args.
+    const named = (args ?? {}) as IpcArgs;
+    calls.push({ command, args: named });
+    const agent = named.agent;
+    if (command === "git_panel") return JSON.stringify(agent === "codex-8" ? PANEL : named.scope === "project" ? CHECKOUT : null);
+    if (command === "git_show") return JSON.stringify(SHOW);
+    if (command === "git_stage" || command === "git_commit") return named.scope === "project" ? "1234abc" : null;
     if (command === "file_diff") return "diff --git a/bin/a.mjs b/bin/a.mjs\n--- a/bin/a.mjs\n+++ b/bin/a.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\n";
     if (command === "seat_diff") return JSON.stringify({ branch: "seat/codex-8", base: "deadbee", files: [], patch: "", truncated: false });
     if (command === "plugin:event|listen") return 1;
@@ -50,7 +70,7 @@ describe("CodeScreen", () => {
     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain("Source control");
     expect(host.querySelector('aside[aria-label="Source control"]')).toBeNull();
     expect(host.querySelector('button[aria-label="Show the source control sidebar"]')).not.toBeNull();
-    expect(host.querySelector('button[aria-label="Source control, 1 change"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Source control, 2 changes"]')).not.toBeNull();
     await click('button[aria-label="Explorer"]');
     expect(host.querySelector('aside[aria-label="Explorer"]')).not.toBeNull();
   });
@@ -79,5 +99,60 @@ describe("CodeScreen", () => {
     expect(commit?.textContent).toContain("#13970");
     expect(commit?.textContent).toContain("codex-8");
     expect(host.querySelector('[data-sha="unlanded"]')?.textContent).toContain("3 commits not on main yet");
+    await click('[data-sha="abc1234"]');
+    expect(calls.find(c => c.command === "git_show")?.args).toMatchObject({ project: "trantor", agent: "codex-8", sha: "abc1234" });
+    expect(host.querySelector("[data-diff-scroll]")?.textContent).toContain("after landing");
+  });
+});
+
+const button = (text: string) => [...host.querySelectorAll("button")].find(b => b.textContent?.includes(text));
+
+describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
+  it("shows the real branch, ahead and behind, the main checkout mark, and refuses push with the reason", async () => {
+    await mount();
+    expect(host.querySelector('button[title="Switch branch"]')?.textContent).toContain("main");
+    expect(host.querySelector('[data-testid="checkout-ahead"]')?.textContent).toContain("↑2 ↓1");
+    expect(host.querySelector('[data-testid="checkout-ahead"] [data-main-checkout]')).not.toBeNull();
+    const push = button("Push ↑2");
+    expect(push?.disabled).toBe(true);
+    expect(push?.title).toBe("On the main checkout, pushing and discarding go through the orchestrator");
+    const discard = host.querySelector<HTMLButtonElement>('button[aria-label="Discard bin/a.mjs"]');
+    expect(discard?.disabled).toBe(true);
+    expect(discard?.title).toBe("On the main checkout, pushing and discarding go through the orchestrator");
+    expect(calls.find(c => c.command === "git_panel")?.args).toEqual({ project: "trantor", scope: "project" });
+    expect(calls.some(c => c.command === "git_push")).toBe(false);
+  });
+
+  it("stages, unstages and commits on the checkout by scope, never by an agent", async () => {
+    await mount();
+    const commit = button("Commit 1 file to main");
+    expect(commit?.querySelector("[data-main-checkout]")).not.toBeNull();
+    await click('button[aria-label="Unstage src/staged.ts"]');
+    expect(calls.find(c => c.command === "git_stage")?.args).toEqual({ project: "trantor", scope: "project", paths: ["src/staged.ts"], unstage: true });
+    await click('button[aria-label="Stage bin/a.mjs"]');
+    expect(calls.filter(c => c.command === "git_stage")[1]?.args).toEqual({ project: "trantor", scope: "project", paths: ["bin/a.mjs"], unstage: false });
+    const input = host.querySelector<HTMLInputElement>("#v2-commit-msg");
+    await act(async () => {
+      if (!input) return;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "#13988 land it");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { button("Commit 1 file to main")?.click(); });
+    await flush();
+    expect(calls.find(c => c.command === "git_commit")?.args).toEqual({ project: "trantor", scope: "project", message: "#13988 land it" });
+  });
+
+  it("lists the checkout's history and shows the selected commit's own files and diff", async () => {
+    await mount();
+    await click('[role="group"][aria-label="View"] button:last-child');
+    const row = host.querySelector('[data-sha="fedcba9"]');
+    expect(row?.textContent).toContain("Land the checkout panel");
+    expect(row?.textContent).toContain("#13988");
+    expect(host.querySelector('[data-sha="unlanded"]')).toBeNull();
+    expect(host.querySelector("[data-not-wired]")).toBeNull();
+    await flush();
+    expect(calls.find(c => c.command === "git_show")?.args).toEqual({ project: "trantor", scope: "project", sha: "fedcba9" });
+    expect(host.querySelector('[aria-label="Changed files"]')?.textContent).toContain("src/landed.ts");
+    expect(host.querySelector("[data-diff-scroll]")?.textContent).toContain("after landing");
   });
 });

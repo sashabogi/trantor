@@ -2,11 +2,13 @@
 // how long ago git was read, and the Changes / History switch.
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, GitBranch } from "lucide-react";
-import { gitPush } from "../../../features/code/gitApi";
+import { aheadLabel, gitPush } from "../../../features/code/gitApi";
 import { Button } from "../../ui/Button";
 import { Seg } from "../../ui/Seg";
 import { BranchPicker, type PickerActions } from "./BranchPicker";
 import { readAgo, type SeatInfo } from "./model";
+import { MainCheckoutMark } from "./parts";
+import { CHECKOUT_REFUSAL } from "./scopeGitApi";
 import type { ScopeSnapshot } from "./useScopeGit";
 
 export type ScmView = "changes" | "history";
@@ -27,7 +29,7 @@ function useDismiss(open: boolean, onClose: () => void) {
 function PushButton({ project, snap, onDone, onError }: { project: string; snap: ScopeSnapshot | null; onDone: () => void; onError: (m: string) => void }) {
   const [busy, setBusy] = useState(false);
   const ahead = snap?.ahead ?? 0;
-  const reason = !snap ? "Reading git" : !snap.seatBacked ? "Push acts on a seat's worktree. Pick a seat in the branch picker." : ahead === 0 ? "Nothing to push" : busy ? "Pushing" : null;
+  const reason = !snap ? "Reading git" : !snap.seatBacked ? CHECKOUT_REFUSAL : ahead === 0 ? "Nothing to push" : busy ? "Pushing" : null;
   const push = () => {
     if (!snap?.scope) return;
     setBusy(true);
@@ -56,6 +58,12 @@ export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMut
         </button>
         {open && <BranchPicker seats={seats} scope={scope} acts={acts} onClose={() => setOpen(false)} />}
       </div>
+      {snap && !snap.seatBacked && (
+        <span className="inline-flex items-center text-[11.5px] text-[var(--v2-muted)]" data-testid="checkout-ahead"
+          title={snap.upstream ? `Against ${snap.upstream}` : "No upstream: ahead counts commits not on main"}>
+          {aheadLabel(snap)}<MainCheckoutMark />
+        </span>
+      )}
       <Button variant="ghost" disabledReason="Fetch needs a git fetch command. Not wired yet.">Fetch</Button>
       <PushButton project={project} snap={snap} onDone={onMutated} onError={onError} />
       {snap && <span className="text-[11.5px] text-[var(--v2-muted)]" title="When git was last read for this view">read {readAgo(snap.readAt, now)}</span>}

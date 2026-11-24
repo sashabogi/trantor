@@ -1,15 +1,15 @@
 // Staged and unstaged files with the commit box (#13988). Stage, unstage and commit go through the
-// classic git_* commands on a seat's worktree; the checkout has no such commands, so it lists only.
+// git_* commands on either checkout; discard stays off on both (#13988 drill).
 import { useState, type ReactNode } from "react";
 import { Minus, Plus, Undo2 } from "lucide-react";
-import { bucketStatus, gitCommit, gitStage, isUnmerged, lineCountFor, stageableChanges, type GitStatusEntry } from "../../../features/code/gitApi";
+import { bucketStatus, isUnmerged, lineCountFor, stageableChanges, type GitStatusEntry } from "../../../features/code/gitApi";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
-import { Counts, PathLabel, SectionLabel, StatusLetter } from "./parts";
+import { Counts, MainCheckoutMark, PathLabel, SectionLabel, StatusLetter } from "./parts";
 import { fileChipLabel, type Letter } from "./model";
+import { CHECKOUT_REFUSAL, scopeCommit, scopeStage } from "./scopeGitApi";
 import type { ScopeSnapshot } from "./useScopeGit";
 
-const NO_STAGE = "Staging acts on a seat's worktree. Pick a seat in the branch picker.";
 const NO_DISCARD = "Discard needs a git restore command that copies to Trash first. Not wired yet.";
 
 export type ChangesListProps = {
@@ -45,11 +45,10 @@ function CommitBox({ project, snap, staged, onDone, onError }: {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const target = snap.branch ?? "this checkout";
-  const reason = !snap.seatBacked ? NO_STAGE : staged === 0 ? "Nothing is staged yet" : !message.trim() ? "Write a commit message first" : busy ? "Committing" : null;
+  const reason = staged === 0 ? "Nothing is staged yet" : !message.trim() ? "Write a commit message first" : busy ? "Committing" : null;
   const commit = () => {
-    if (!snap.scope) return;
     setBusy(true);
-    gitCommit(project, snap.scope, message)
+    scopeCommit(project, snap.scope, message)
       .then(() => { setMessage(""); onDone(); })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
@@ -63,6 +62,7 @@ function CommitBox({ project, snap, staged, onDone, onError }: {
         className="w-full rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
       <Button variant="primary" onClick={commit} disabledReason={reason} className="justify-center">
         Commit {staged} {staged === 1 ? "file" : "files"} to {target}
+        {!snap.seatBacked && <MainCheckoutMark />}
       </Button>
     </div>
   );
@@ -76,12 +76,11 @@ export function ChangesList({ project, snap, selected, onSelect, onMutated, onOp
     ...buckets.untracked.map(p => ({ entry: { path: p }, letter: "U" as const })),
   ];
   const stage = (paths: string[], unstage: boolean) => {
-    if (!snap.scope || paths.length === 0) return;
-    gitStage(project, snap.scope, paths, unstage).then(() => { setError(null); onMutated(); })
+    if (paths.length === 0) return;
+    scopeStage(project, snap.scope, paths, unstage).then(() => { setError(null); onMutated(); })
       .catch(e => setError(e instanceof Error ? e.message : String(e)));
   };
   const blocked = (e: GitStatusEntry) => isUnmerged(e);
-  const stageReason = snap.seatBacked ? null : NO_STAGE;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <CommitBox project={project} snap={snap} staged={buckets.staged.length} onDone={onMutated} onError={setError} />
@@ -91,23 +90,23 @@ export function ChangesList({ project, snap, selected, onSelect, onMutated, onOp
       {buckets.staged.map(e => (
         <FileRow key={`s-${e.path}`} entry={e} letter={fileChipLabel(e.x)} snap={snap} selected={selected === e.path} onSelect={() => onSelect(e.path)}
           conflict={blocked(e)} onConflict={() => onOpenConflict?.(e.path)}
-          action={<IconButton label={`Unstage ${e.path}`} title={stageReason ?? "Unstage"} size={22} disabled={!!stageReason} onClick={() => stage([e.path], true)}><Minus size={12} aria-hidden /></IconButton>} />
+          action={<IconButton label={`Unstage ${e.path}`} title="Unstage" size={22} onClick={() => stage([e.path], true)}><Minus size={12} aria-hidden /></IconButton>} />
       ))}
       <div className="flex items-center pr-2">
         <div className="flex-1"><SectionLabel>{snap.seatBacked ? "Your changes" : "Changes"} {changes.length}</SectionLabel></div>
-        <IconButton label="Stage all" title={stageReason ?? "Stage all (conflicted files stay out)"} size={22} disabled={!!stageReason || changes.length === 0}
+        <IconButton label="Stage all" title="Stage all (conflicted files stay out)" size={22} disabled={changes.length === 0}
           onClick={() => stage(stageableChanges(snap.status), false)}><Plus size={12} aria-hidden /></IconButton>
       </div>
       {changes.length === 0 && <div className="px-3 py-1 text-[11.5px] text-[var(--v2-muted)]">No uncommitted changes.</div>}
       {changes.map(({ entry, letter }) => {
         const full = snap.status.find(s => s.path === entry.path);
         const isConflict = !!full && blocked(full);
-        const reason = stageReason ?? (isConflict ? "Staging would erase git's conflict record. Resolve it first." : null);
+        const reason = isConflict ? "Staging would erase git's conflict record. Resolve it first." : null;
         return (
           <FileRow key={`u-${entry.path}`} entry={entry} letter={letter} snap={snap} selected={selected === entry.path} onSelect={() => onSelect(entry.path)}
             conflict={isConflict} onConflict={() => onOpenConflict?.(entry.path)}
             action={<>
-              <IconButton label={`Discard ${entry.path}`} title={NO_DISCARD} size={22} disabled><Undo2 size={12} aria-hidden /></IconButton>
+              <IconButton label={`Discard ${entry.path}`} title={snap.seatBacked ? NO_DISCARD : CHECKOUT_REFUSAL} size={22} disabled><Undo2 size={12} aria-hidden /></IconButton>
               <IconButton label={`Stage ${entry.path}`} title={reason ?? "Stage"} size={22} disabled={!!reason} onClick={() => stage([entry.path], false)}><Plus size={12} aria-hidden /></IconButton>
             </>} />
         );

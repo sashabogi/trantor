@@ -5,7 +5,6 @@ import { Avatar } from "../../ui/Avatar";
 import { Chip } from "../../ui/Chip";
 import { seatLabel } from "../../ui/identity";
 import { filterHistory, parseSearch, type HistoryRow } from "./model";
-import { NotWiredBlock } from "./parts";
 
 export const UNLANDED_KEY = "unlanded";
 
@@ -59,7 +58,6 @@ export function HistoryView({ rows, branch, unlanded, selected, onSelect, seatBa
       </div>
       {result.fileUnsupported && <div className="border-b border-[var(--v2-edge)] px-3 py-1.5 text-[11px] text-[var(--v2-warn)]">file: is ignored. The log has no per-commit file lists yet.</div>}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" role="group" aria-label="Commits">
-        {!seatBacked && <div className="p-3"><NotWiredBlock title="History is not readable for the checkout" line="Reading the project checkout's log needs a git log command. Pick a seat in the branch picker to read its branch." /></div>}
         {seatBacked && unlanded ? (
           <button type="button" onClick={() => onSelect(UNLANDED_KEY)} aria-pressed={selected === UNLANDED_KEY} data-sha={UNLANDED_KEY}
             className={`border-0 border-b border-[var(--v2-edge)] px-3 py-2 text-left text-[12px] ${selected === UNLANDED_KEY ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
@@ -67,10 +65,10 @@ export function HistoryView({ rows, branch, unlanded, selected, onSelect, seatBa
             <span className="block text-[11px] text-[var(--v2-muted)]">The whole branch against its merge base</span>
           </button>
         ) : null}
-        {seatBacked && result.rows.length === 0 && <div className="px-3 py-4 text-[12px] text-[var(--v2-muted)]">{rows.length === 0 ? "No commits yet." : "No commits match."}</div>}
+        {result.rows.length === 0 && <div className="px-3 py-4 text-[12px] text-[var(--v2-muted)]">{rows.length === 0 ? "No commits yet." : "No commits match."}</div>}
         {result.rows.map((r, i) => <Row key={r.sha} row={r} branch={branch} first={i === 0} last={i === result.rows.length - 1} on={selected === r.sha} onSelect={() => onSelect(r.sha)} />)}
       </div>
-      {seatBacked && <div className="border-t border-[var(--v2-edge)] px-3 py-1.5 text-[10.5px] text-[var(--v2-muted)]">Latest {rows.length} commits on this branch</div>}
+      <div className="border-t border-[var(--v2-edge)] px-3 py-1.5 text-[10.5px] text-[var(--v2-muted)]">Latest {rows.length} commits on this branch</div>
     </div>
   );
 }

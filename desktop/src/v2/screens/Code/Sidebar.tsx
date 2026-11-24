@@ -13,7 +13,7 @@ import { PRESENCE_LABEL, seatLabel } from "../../ui/identity";
 import { ChangesList } from "./ChangesList";
 import type { SideView } from "./IconBar";
 import type { SeatInfo } from "./model";
-import { NotWiredBlock } from "./parts";
+import { MainCheckoutMark, NotWiredBlock } from "./parts";
 import type { ScopeSnapshot } from "./useScopeGit";
 
 const CLOSED = new Set(["done", "archived", "cancelled", "rejected"]);
@@ -91,7 +91,8 @@ function Body(p: SidebarProps) {
     <>
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-muted)]">
         <span className="v2-mono text-[var(--v2-text)]">{p.snap.branch ?? "project checkout"}</span>
-        {p.snap.seatBacked && <span title={p.snap.upstream ?? "no upstream: ahead counts unlanded work against main"}>{aheadLabel(p.snap)}</span>}
+        {!p.snap.seatBacked && <MainCheckoutMark />}
+        <span title={p.snap.upstream ?? "no upstream: ahead counts unlanded work against main"}>{aheadLabel(p.snap)}</span>
       </div>
       <ChangesList project={p.project} snap={p.snap} selected={p.selected} onSelect={p.onSelectChange} onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
     </>

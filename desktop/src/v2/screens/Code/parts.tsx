@@ -32,6 +32,11 @@ export function StatusLetter({ letter }: { letter: "A" | "D" | "R" | "M" | "U" }
   return <span className="v2-mono w-3 shrink-0 text-center text-[10.5px] font-semibold" style={{ color: LETTER_TONE[letter] }}>{letter}</span>;
 }
 
+/** Beside the branch name whenever git acts on the project's main checkout, not a seat (#13988 drill). */
+export function MainCheckoutMark() {
+  return <span data-main-checkout className="ml-1.5 shrink-0 rounded border border-[var(--v2-edge-2)] px-1 text-[10px] font-normal text-[var(--v2-muted)]">main checkout</span>;
+}
+
 /** "name  dir" with the file name leading, the way the artboards lay a changed row out. */
 export function PathLabel({ path }: { path: string }) {
   const cut = path.lastIndexOf("/");

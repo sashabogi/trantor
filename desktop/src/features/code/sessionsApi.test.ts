@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { harnessLabel, sessionAge, sessionMatches, type SessionRow } from "./sessionsApi";
+import { harnessLabel, parseSessionsListing, sessionAge, sessionMatches, storeLabel, type SessionRow } from "./sessionsApi";
 
 const row: SessionRow = {
   id: "s1",
@@ -25,6 +25,15 @@ describe("session history presentation", () => {
       expect(sessionMatches(row, query), query).toBe(true);
     }
     expect(sessionMatches(row, "claude-fable")).toBe(false);
+  });
+
+  it("reads the listing with per-store warnings, and the older bare array (#13987 drill)", () => {
+    const listing = parseSessionsListing(JSON.stringify({ sessions: [row], warnings: [{ store: "opencode", message: "file is not a database" }] }));
+    expect(listing.sessions.map(s => s.id)).toEqual(["s1"]);
+    expect(listing.warnings).toEqual([{ store: "opencode", message: "file is not a database" }]);
+    expect(parseSessionsListing("[]")).toEqual({ sessions: [], warnings: [] });
+    expect(storeLabel("opencode")).toBe("OpenCode");
+    expect(storeLabel("files")).toBe("files");
   });
 
   it("uses explicit harness names", () => {

@@ -1,12 +1,13 @@
-// One scope's git state for the Code screen (#13988): a seat's worktree through the classic git_panel
-// command, or the project checkout through project_changes, the only checkout read that exists.
+// One scope's git state for the Code screen (#13988): a seat's worktree or the project's main
+// checkout, both through git_panel (the checkout by scope "project", #13988 drill).
 import { useCallback, useEffect, useRef, useState } from "react";
-import { gitPanel, projectChanges, type GitLineCount, type GitLogEntry, type GitStatusEntry } from "../../../features/code/gitApi";
+import type { GitLineCount, GitLogEntry, GitStatusEntry } from "../../../features/code/gitApi";
+import { scopePanel } from "./scopeGitApi";
 
 export type ScopeSnapshot = {
   /** null is the project checkout. */
   scope: string | null;
-  /** null for the checkout: no command reads its branch name. */
+  /** null only on a detached HEAD. */
   branch: string | null;
   upstream: string | null;
   ahead: number | null;
@@ -14,7 +15,7 @@ export type ScopeSnapshot = {
   status: GitStatusEntry[];
   counts: GitLineCount[];
   log: GitLogEntry[];
-  /** git_panel only exists for seat worktrees, so only a seat has history and staging. */
+  /** a seat's worktree; false is the main checkout, which reads, stages and commits but never pushes. */
   seatBacked: boolean;
   readAt: number;
 };
@@ -26,24 +27,10 @@ export type ScopeState =
 
 const POLL_MS = 6_000;
 
-/** project_changes trims porcelain to one code, so staged and unstaged cannot be told apart there. */
-export function checkoutStatus(code: string, path: string): GitStatusEntry {
-  if (code === "??") return { path, x: "?", y: "?" };
-  if (code.length >= 2) return { path, x: code[0], y: code[1] };
-  return { path, x: " ", y: code || "M" };
-}
-
 async function read(project: string, scope: string | null): Promise<ScopeSnapshot> {
-  if (scope) {
-    const p = await gitPanel(project, scope);
-    return { scope, branch: p.branch || null, upstream: p.upstream, ahead: p.ahead, behind: p.behind,
-      status: p.status, counts: p.counts, log: p.log, seatBacked: true, readAt: Date.now() };
-  }
-  const rows = (await projectChanges(project)).filter(r => r.seat === null);
-  return { scope: null, branch: null, upstream: null, ahead: null, behind: null,
-    status: rows.map(r => checkoutStatus(r.status, r.path)),
-    counts: rows.map(r => ({ path: r.path, plus: r.plus, minus: r.minus })),
-    log: [], seatBacked: false, readAt: Date.now() };
+  const p = await scopePanel(project, scope);
+  return { scope, branch: p.branch || null, upstream: p.upstream, ahead: p.ahead, behind: p.behind,
+    status: p.status, counts: p.counts, log: p.log, seatBacked: scope !== null, readAt: Date.now() };
 }
 
 export type ScopeGit = { state: ScopeState; refresh: () => void };
