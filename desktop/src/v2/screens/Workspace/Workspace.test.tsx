@@ -63,14 +63,18 @@ beforeEach(() => {
     if (command === "plugin:event|listen") return 1;
     return null;
   });
+  // #14030: a fresh store per test. The Workspace persists the picked seat and layout, which leaked between
+  // tests where the runtime has a real localStorage, and a bare localStorage does not exist where it has none.
+  const mem = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
+    removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
+  });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
 });
-// #14030: the Workspace persists the picked seat and layout in localStorage; happy-dom shares it
-// across this file's tests, so an earlier test's clicks leaked the selection into later ones —
-// three tests failed whenever the file ran whole. Clear it so every test starts at the default.
-afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.restoreAllMocks(); localStorage.clear(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const mountScreen = async (client: HubClient, onNavigate: ComponentProps<typeof WorkspaceScreen>["onNavigate"] = () => {}) => {
   await act(async () => { root.render(withPanes(<WorkspaceScreen client={client} project="trantor" onNavigate={onNavigate} />)); });
