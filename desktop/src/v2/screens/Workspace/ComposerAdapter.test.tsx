@@ -47,6 +47,23 @@ const open = () => act(async () => { chip()?.click(); });
 const pick = (label: string) => act(async () => { rows().find(r => r.textContent?.startsWith(label))?.click(); });
 
 describe("ComposerAdapter mode menu", () => {
+  it("sends a clicked suggestion pill through pane_send once and tells Chat it was handled", async () => {
+    ipc(claudeAt("default"));
+    const handled: string[] = [];
+    await mount({ suggestion: "yes", onSuggestionHandled: () => { handled.push("handled"); } });
+    const sends = calls.filter(c => c.cmd === "pane_send");
+    expect(sends.map(c => c.args)).toEqual([{ target: "w4:p1", text: "yes" }]);
+    expect(handled).toEqual(["handled"]);
+  });
+
+  it("does not send a suggestion when there is no live pane", async () => {
+    ipc(claudeAt("default"));
+    const handled: string[] = [];
+    await mount({ suggestion: "yes", live: false, liveWhy: "not hosted", onSuggestionHandled: () => { handled.push("handled"); } });
+    expect(calls.some(c => c.cmd === "pane_send")).toBe(false);
+    expect(handled).toEqual([]);
+  });
+
   it("shows the read mode and offers only the modes every session has, above the relabelled launch section", async () => {
     ipc(claudeAt("default"));
     await mount();

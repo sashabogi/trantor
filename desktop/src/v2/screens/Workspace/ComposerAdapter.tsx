@@ -106,6 +106,15 @@ export function ComposerAdapter(p: ClassicProps) {
       mode.read();
     });
   };
+  // #13987 drill: Chat's suggestion pills did nothing in 2.0. A suggested reply IS a send, as in the classic composer.
+  useEffect(() => {
+    if (!p.suggestion || disabledReason) return;
+    void line(p.suggestion).then(d => { setNote(judge(d, blockedQuestion).note); p.onSent(); });
+    p.onSuggestionHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.suggestion]);
+  // The pills hide while there are words in the box: report the draft, as the classic composer does.
+  useEffect(() => { p.onDraftChange?.(value); }, [value]);  // eslint-disable-line react-hooks/exhaustive-deps
   const pickEffort = (v: string) => { setEffort(v); void line(`/effort ${v}`); p.onDispatch("effort", v); };
   // The pick is per project and saved before the slash command, exactly as the classic composer does it.
   const pickModel = (v: string) => {
