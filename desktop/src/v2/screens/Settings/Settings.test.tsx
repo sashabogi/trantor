@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
 import { AutonomyPage } from "./AutonomyPage";
+import { GeneralPage } from "./GeneralPages";
 import { SettingsNav } from "./SettingsNav";
 import { filterSections, SECTIONS } from "./sections";
 import { dialBlockedBy, resetPlan, type AutonomyState, type Resolved } from "./autonomyModel";
@@ -69,7 +70,8 @@ describe("dial dependencies", () => {
     await flush();
     const push = host.querySelector('[data-dial="Push after verifying"]');
     expect(push?.textContent).toContain("Only as open as Commit landed work allows");
-    expect(push?.querySelector<HTMLButtonElement>('[role="radio"]')?.disabled).toBe(true);
+    expect(push?.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(true);
+    expect(push?.querySelector('[role="switch"]')?.getAttribute("title")).toContain("Only as open as Commit landed work allows");
   });
 });
 
@@ -82,7 +84,8 @@ describe("changing a dial", () => {
     });
     act(() => root.render(<AutonomyPage client={fakeClient} project="trantor" query="" />));
     await flush();
-    const on = host.querySelector<HTMLButtonElement>('[data-dial="Push after verifying"] [role="radio"][aria-checked="false"]');
+    const on = host.querySelector<HTMLButtonElement>('[data-dial="Push after verifying"] [role="switch"][aria-checked="false"]');
+    expect(on?.closest("[data-dial]")?.querySelector("[data-switch-state]")?.textContent).toBe("Off");
     act(() => on?.click());
     await flush();
     expect(calls).toContainEqual({ cmd: "autonomy_get", args: { project: null } });
@@ -107,5 +110,31 @@ describe("changing a dial", () => {
     await flush();
     expect(host.querySelector('[data-dial="Deploy after pushing"]')).not.toBeNull();
     expect(host.querySelector('[data-dial="Commit landed work"]')).toBeNull();
+  });
+});
+
+describe("Back to classic (#13984 drill)", () => {
+  it("General carries a visible Back to classic button that calls the handler", () => {
+    const back = vi.fn();
+    act(() => root.render(<GeneralPage onBackToClassic={back} />));
+    const btn = [...host.querySelectorAll("button")].find(b => b.textContent === "Back to classic");
+    expect(btn).toBeDefined();
+    act(() => btn?.click());
+    expect(back).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("boolean dials are switches (#13984 drill)", () => {
+  it("renders role=switch with an On/Off word, and keeps the harness dial segmented", async () => {
+    mockIPC(() => JSON.stringify(stateOf({ commit: true })));
+    act(() => root.render(<AutonomyPage client={fakeClient} project="trantor" query="" />));
+    await flush();
+    const commit = host.querySelector('[data-dial="Commit landed work"]');
+    expect(commit?.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("true");
+    expect(commit?.querySelector("[data-switch-state]")?.textContent).toBe("On");
+    expect(commit?.querySelector('[role="radio"]')).toBeNull();
+    const harness = host.querySelector('[data-dial="Your session"]');
+    expect(harness?.querySelectorAll('[role="radio"]').length).toBe(2);
+    expect(harness?.querySelector('[role="switch"]')).toBeNull();
   });
 });

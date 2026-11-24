@@ -1,9 +1,11 @@
-import { useId, type KeyboardEvent, type ReactNode } from "react";
+import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUp, ChevronDown, Paperclip, Shield, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./IconButton";
 import { Ring } from "./Ring";
 import { modelHue, seatLabel } from "./identity";
+import { AttachmentRow } from "./AttachmentRow";
+import type { AttachmentsApi } from "./useAttachments";
 
 export type Effort = 0 | 1 | 2 | 3;
 export const EFFORT_LABELS = ["low", "medium", "high", "max"] as const;
@@ -38,6 +40,8 @@ export type Composer2Props = {
   /** Context window used, 0 to 100; null hides the ring (not reported yet). */
   contextPct: number | null;
   onAttach?: () => void;
+  /** Chips, drop, paste and picker (#13984 drill); omit and the paperclip stays as `onAttach` says. */
+  attachments?: AttachmentsApi;
   /** Disables sending and says why. */
   disabledReason?: string | null;
 };
@@ -71,7 +75,10 @@ export function Composer2(p: Composer2Props) {
   const id = useId();
   const text = p.value.trim();
   const blocked = !!p.disabledReason;
-  const send = () => { if (text && !blocked) p.onSend(text); };
+  const att = p.attachments;
+  const picker = useRef<HTMLInputElement>(null);
+  const hasChips = !!att?.chips.length;
+  const send = () => { if ((text || hasChips) && !blocked) p.onSend(text); };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
   };
@@ -81,11 +88,13 @@ export function Composer2(p: Composer2Props) {
   const nextPermission = () =>
     p.onPermissionChange?.(PERMISSION_ORDER[(PERMISSION_ORDER.indexOf(p.permission) + 1) % PERMISSION_ORDER.length]);
   return (
-    <div className="flex flex-col gap-2 rounded-[14px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-[10px]">
+    <div ref={att?.rootRef} className="flex flex-col gap-2 rounded-[14px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-[10px]">
       <label htmlFor={id} className="sr-only">{p.label}</label>
       <textarea id={id} rows={2} value={p.value} placeholder={p.placeholder}
-        onChange={e => p.onChange(e.target.value)} onKeyDown={onKey}
+        onChange={e => p.onChange(e.target.value)} onKeyDown={onKey} onPaste={att?.onPaste}
         className="resize-none border-0 bg-transparent p-[2px] text-[12.5px] text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
+      {att && <AttachmentRow chips={att.chips} onRemove={att.remove} />}
+      {att?.error && <div role="status" className="text-[11px] text-[var(--v2-warn)]">{att.error}</div>}
       <div className="flex items-center gap-1.5">
         <Control onClick={p.onAgentClick} title="Who answers: the orchestrator, a seat, or a new agent"
           className="inline-flex flex-none items-center gap-[5px] whitespace-nowrap rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] py-[3px] pr-2 pl-[3px] text-[11.5px] font-medium text-[var(--v2-text)]">
@@ -106,10 +115,13 @@ export function Composer2(p: Composer2Props) {
         </Control>
         <span className="flex-1" />
         {p.contextPct != null && <Ring pct={p.contextPct} />}
-        <IconButton label="Attach a file or image" title={p.onAttach ? "Attach" : "Attaching is not wired here yet"}
-          round disabled={!p.onAttach} onClick={p.onAttach}><Paperclip size={14} aria-hidden /></IconButton>
-        <button type="button" aria-label="Send" title={p.disabledReason || (text ? "Send (Enter)" : "Type a message to send")}
-          disabled={!text || blocked} onClick={send}
+        {att && <input ref={picker} type="file" accept="image/*" multiple hidden aria-label="Choose images to attach"
+          onChange={e => { att.pick(Array.from(e.target.files ?? [])); e.target.value = ""; }} />}
+        <IconButton label="Attach a file or image"
+          title={att ? "Attach images (drop or paste any file or image onto the box)" : p.onAttach ? "Attach" : "Attaching is not wired here yet"}
+          round disabled={!att && !p.onAttach} onClick={att ? () => picker.current?.click() : p.onAttach}><Paperclip size={14} aria-hidden /></IconButton>
+        <button type="button" aria-label="Send" title={p.disabledReason || (text || hasChips ? "Send (Enter)" : "Type a message to send")}
+          disabled={(!text && !hasChips) || blocked} onClick={send}
           className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border-0 bg-[var(--v2-text)] text-[var(--v2-ink)] disabled:opacity-40">
           <ArrowUp size={14} strokeWidth={2.4} aria-hidden />
         </button>

@@ -8,7 +8,9 @@ export function Popover({ open, onClose, label, align = "left", children }: {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && e.target instanceof Node && !ref.current.contains(e.target)) onClose();
+      // #13984 drill: the trigger sits in the same wrapper; a mousedown on it must not close then re-open on its click.
+      const wrap = ref.current?.parentElement;
+      if (ref.current && e.target instanceof Node && !ref.current.contains(e.target) && !wrap?.contains(e.target)) onClose();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("mousedown", onDown);

@@ -46,3 +46,6 @@
 .v2-root ::selection { background: rgba(138, 168, 255, 0.28); }
 .v2-mono { font-family: var(--v2-mono); }
 .v2-hover:hover:not(:disabled) { background: var(--v2-raised); color: var(--v2-text); }
+
+/* #13984 drill: classic lenses embedded in 2.0 drop their own title + lens row; the 2.0 ProjectFrame owns both. */
+[data-v2-embed] :is(.tr-pane, [data-testid="graph-lens"]) > header:first-child { display: none; }

@@ -6,6 +6,7 @@ import { notificationsEnabled, setNotificationsEnabled } from "../../../shared/n
 import { onboardingApi } from "../../../features/onboarding/onboardingApi";
 import { Button } from "../../ui/Button";
 import { Section } from "../../ui/Section";
+import { backToClassic } from "../../toggle";
 
 export function Row({ title, body, children }: { title: string; body: ReactNode; children: ReactNode }) {
   return (
@@ -79,8 +80,17 @@ function OnboardingRow() {
   );
 }
 
-export function GeneralPage() {
-  return <Section title="General" sub="App behaviour on this machine." flush><OpenCodeIn /><UpdateRow /><OnboardingRow /></Section>;
+/** #13984 drill: the operator found no way back; the account menu was the only door, so Settings has one too. */
+export function BackToClassicRow({ onBack = backToClassic }: { onBack?: () => void }) {
+  return (
+    <Row title="Back to classic" body="Switch this app back to the classic interface. Your projects and settings stay as they are.">
+      <Button onClick={onBack}>Back to classic</Button>
+    </Row>
+  );
+}
+
+export function GeneralPage({ onBackToClassic }: { onBackToClassic?: () => void }) {
+  return <Section title="General" sub="App behaviour on this machine." flush><OpenCodeIn /><UpdateRow /><OnboardingRow /><BackToClassicRow onBack={onBackToClassic} /></Section>;
 }
 
 export function NotificationsPage() {

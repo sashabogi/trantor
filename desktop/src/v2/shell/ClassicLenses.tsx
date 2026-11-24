@@ -12,7 +12,13 @@ import type { LensScreen, Navigate } from "../routes";
 
 export type ClassicLensProps = { client: HubClient; project: string; me: string; lens: LensScreen; onNavigate: Navigate };
 
-export function ClassicLens({ client, project, me, lens, onNavigate }: ClassicLensProps) {
+/** #13984 drill: the classic components draw their own ProjectHeader (title + lens row) under the 2.0 tabs;
+ *  theme.css hides exactly that header inside this wrapper, leaving each lens's own filters. */
+export function ClassicLens(p: ClassicLensProps) {
+  return <div data-v2-embed className="flex min-h-0 flex-1 flex-col"><ClassicLensBody {...p} /></div>;
+}
+
+function ClassicLensBody({ client, project, me, lens, onNavigate }: ClassicLensProps) {
   const [seat, setSeat] = useState<string | null>(null);
   const onLens = (l: Lens) => onNavigate(l);
   if (lens === "graph") {

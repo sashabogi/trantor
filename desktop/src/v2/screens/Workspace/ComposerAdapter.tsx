@@ -6,6 +6,7 @@ import type { Composer } from "../../../features/chat/Composer";
 import { modelLabel } from "../../../features/chat/modelLabel";
 import { normalizeAttachments, type PromptVerdict } from "../../../features/chat/streaming";
 import { parseAutonomy } from "./useWorkspaceData";
+import { useAttachments } from "../../ui/useAttachments";
 import { Composer2, EFFORT_LABELS, type Effort, type Permission } from "../../ui/Composer2";
 
 type ClassicProps = ComponentProps<typeof Composer>;
@@ -46,17 +47,19 @@ export function ComposerAdapter(p: ClassicProps) {
   const [note, setNote] = useState<string | null>(null);
   const [effort, setEffort] = useState<Effort>(2);
   const harness = useHarness(p.project);
+  const attachments = useAttachments();
   const blockedQuestion = p.blockedAsk?.questions[0]?.question ?? null;
   const disabledReason = !p.live ? p.liveWhy : !p.target ? "There is no pane to send to" : null;
   const line = (text: string) => invoke<PromptVerdict>("pane_send", { target: p.target, text })
     .then(d => d ?? { outcome: "stalled", error: "the desktop did not answer" },
       e => ({ outcome: "stalled", error: String(e) }));
   const send = (raw: string) => {
-    const text = normalizeAttachments(raw.trim());
+    // #13984 drill: chips serialize at send and clear with the words, the classic order (serializeForSend, then normalize).
+    const text = normalizeAttachments(attachments.serialize(raw).trim());
     void line(text).then(d => {
       const r = judge(d, blockedQuestion);
       setNote(r.note);
-      if (r.clear) setValue("");
+      if (r.clear) { setValue(""); attachments.clear(); }
       p.onSent();
     });
   };
@@ -72,7 +75,7 @@ export function ComposerAdapter(p: ClassicProps) {
         agent="orchestrator" model={{ id: p.model || "unknown", label: p.model ? modelLabel(p.model).short : "model unknown" }}
         effort={effort} onEffortChange={pickEffort}
         permission={permission} onPermissionChange={next => harness.set(next !== "ask")}
-        contextPct={frac == null ? null : Math.round(frac * 100)} disabledReason={disabledReason} />
+        contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason} />
     </div>
   );
 }
