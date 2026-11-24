@@ -195,6 +195,8 @@ pub fn run() {
             crew_controls::workspace_cli,
             trantor_cli_compatibility,
             agent_cli::agent_cli_compatibility,
+            agent_cli::agent_cli_update,
+            agent_cli::agent_cli_stale_sessions,
             provider_status,
             provider_verify,
             agent_settings_status,

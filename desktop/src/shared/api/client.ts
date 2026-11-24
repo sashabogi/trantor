@@ -479,6 +479,39 @@ export async function agentCliCompatibility(): Promise<AgentCliCompatibility[]> 
   return invoke<AgentCliCompatibility[]>("agent_cli_compatibility");
 }
 
+/** #14030: one updater run's report — ok is the CLI's own exit, before/after are the probed versions. */
+export type AgentCliUpdate = {
+  ok: boolean;
+  before: string | null;
+  after: string | null;
+  output: string;
+};
+
+export async function agentCliUpdate(cli: string): Promise<AgentCliUpdate> {
+  return invoke<AgentCliUpdate>("agent_cli_update", { cli });
+}
+
+/** #14030: a local session still running the binary it started with. `stale` says whether its
+ * start is known to predate the binary's change ("before_update") or cannot be known at all
+ * ("may_be_old"); `restart` says what the row offers — "handoff" (orchestrator pane),
+ * "agents" (crew seat), "none" (a plain terminal window). */
+export type AgentCliStaleSession = {
+  project: string;
+  seat: string;
+  restart: "handoff" | "agents" | "none";
+  stale: "before_update" | "may_be_old";
+};
+
+export type AgentCliStaleSessions = {
+  rows: AgentCliStaleSession[];
+  /** Seat-hosting machines this machine-local check did not look at (footer honesty). */
+  machinesNotChecked: string[];
+};
+
+export async function agentCliStaleSessions(cli: string): Promise<AgentCliStaleSessions> {
+  return invoke<AgentCliStaleSessions>("agent_cli_stale_sessions", { cli });
+}
+
 export async function knownProjects(): Promise<string[]> {
   return invoke<string[]>("known_projects");
 }

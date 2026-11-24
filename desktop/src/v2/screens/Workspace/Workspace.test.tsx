@@ -67,7 +67,10 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.restoreAllMocks(); });
+// #14030: the Workspace persists the picked seat and layout in localStorage; happy-dom shares it
+// across this file's tests, so an earlier test's clicks leaked the selection into later ones —
+// three tests failed whenever the file ran whole. Clear it so every test starts at the default.
+afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.restoreAllMocks(); localStorage.clear(); });
 
 const mountScreen = async (client: HubClient, onNavigate: ComponentProps<typeof WorkspaceScreen>["onNavigate"] = () => {}) => {
   await act(async () => { root.render(withPanes(<WorkspaceScreen client={client} project="trantor" onNavigate={onNavigate} />)); });

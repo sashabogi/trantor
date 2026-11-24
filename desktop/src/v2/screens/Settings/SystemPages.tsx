@@ -6,9 +6,11 @@ import { AgentsPane } from "../../../features/settings/agents/AgentsPane";
 import { PairPhone } from "../../../features/settings/PairPhone";
 import { RelayChat } from "../../../features/settings/RelayChat";
 import { Avatar } from "../../ui/Avatar";
+import { Button } from "../../ui/Button";
 import { Chip } from "../../ui/Chip";
 import { Section } from "../../ui/Section";
-import { useAgentCliCompatibility } from "../../shell/agentCli";
+import { useAgentCliCompatibility, useAgentCliUpdate } from "../../shell/agentCli";
+import { AgentCliSessions } from "../../shell/AgentCliBanner";
 
 type HubRow = { url: string; projects: string[]; ok: boolean | null };
 
@@ -94,6 +96,8 @@ export function AgentsPage() {
 
 // #14030: a quiet list — the banner is the loud surface. Below the minimum shows here too, but
 // as words, never a warning; newer than verified is exactly the line it deserves and no more.
+// Slice 2: a below-minimum row carries the same Update button, and the sessions still on the old
+// binary are listed here too — the app-start half of the picture, as quiet as the rest.
 function stateWords(r: AgentCliCompatibility): string {
   switch (r.state) {
     case "ok": return `within the verified range (${r.minimum}–${r.verifiedUpTo})`;
@@ -103,20 +107,38 @@ function stateWords(r: AgentCliCompatibility): string {
   }
 }
 
+function AgentCliRow({ r }: { r: AgentCliCompatibility }) {
+  const update = useAgentCliUpdate(r.cli);
+  return (
+    <div key={r.cli} data-agent-cli={r.cli}
+      className="flex items-center gap-2.5 rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
+      <span className="text-[13px] font-medium">{r.label}</span>
+      <span className="v2-mono text-[12px] text-[var(--v2-muted)]">{r.installed ?? "—"}</span>
+      <span className="ml-auto text-[11px] text-[var(--v2-muted)]">{stateWords(r)}</span>
+      {r.state === "below_minimum" && r.updateCommand && (
+        <Button onClick={update.run} disabledReason={update.busy ? "the updater is running" : null} aria-busy={update.busy || undefined}
+          title={`Runs ${r.updateCommand}`}>
+          {update.busy ? "Updating" : `Update ${r.label}`}
+        </Button>
+      )}
+      {update.result && <span className="min-w-[180px] max-w-[320px] text-right text-[11px] text-[var(--v2-muted)]"
+        title={update.result.output}>
+        {update.result.ok
+          ? `updated ${update.result.before ?? "?"} to ${update.result.after ?? "?"}`
+          : "the update did not succeed — see the banner for its output"}
+      </span>}
+    </div>
+  );
+}
+
 export function AgentClisCard() {
   const reports = useAgentCliCompatibility();
   return (
     <Section title="Agent CLIs" sub="Each agent CLI's version against the range Trantor has verified.">
       <div className="flex flex-col gap-2.5">
-        {reports.map(r => (
-          <div key={r.cli} data-agent-cli={r.cli}
-            className="flex items-center gap-2.5 rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
-            <span className="text-[13px] font-medium">{r.label}</span>
-            <span className="v2-mono text-[12px] text-[var(--v2-muted)]">{r.installed ?? "—"}</span>
-            <span className="ml-auto text-[11px] text-[var(--v2-muted)]">{stateWords(r)}</span>
-          </div>
-        ))}
+        {reports.map(r => <AgentCliRow key={r.cli} r={r} />)}
         {!reports.length && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">Reading installed agent CLIs…</p>}
+        {reports.some(r => r.cli === "claude") && <AgentCliSessions cli="claude" />}
       </div>
     </Section>
   );

@@ -181,6 +181,9 @@ because unit suites passing while seams fail is this project's most-repeated les
 6. Version-skew check: hooks vs CLI vs app versions logged at drill start; mismatch = the drill
    says so (running sessions pin old hooks until restart — the skew must be visible, not
    discovered).
+7. Agent CLI versions the release was drilled against (#14030): run `claude --version` (and every
+   other CLI in desktop/src-tauri/src/agent_cli.rs's table) and record the answers in the release
+   card note; a table's verified_up_to is raised as part of a release, never mid-build.
 
 ## 8. The fleet layer — what the salvage must NOT regress (added 2026-08-30)
 

@@ -6,11 +6,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
+import type { AgentCliCompatibility } from "../../../shared/api/client";
 import { ComposerAdapter } from "./ComposerAdapter";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-type Answer = { mode: string; prompt_showing?: boolean; seen?: string[] } | Promise<never> | null;
+type Answer = { mode: string; prompt_showing?: boolean; seen?: string[] } | Promise<never> | AgentCliCompatibility[] | null;
 type Calls = Array<{ cmd: string; args?: InvokeArgs }>;
 type Reply = (cmd: string, args?: InvokeArgs) => Answer | undefined;
 
@@ -95,5 +96,70 @@ describe("ComposerAdapter mode menu", () => {
     await flush();
     await open();
     expect(headings()).not.toContain("Mode");
+  });
+});
+
+// #14030: the Mode menu consults the Rust-owned table. Below the feature's verified range the
+// section shows one disabled row and never presses a key; above it the closed-loop read stays the
+// guard and an unreadable mode line is explained instead of a bare "Mode unknown".
+describe("ComposerAdapter Mode menu × the version table", () => {
+  const compat = (installed: string): AgentCliCompatibility => ({
+    cli: "claude", label: "Claude Code", installed, state: "ok", minimum: "2.1.215", verifiedUpTo: "2.1.326",
+    reason: null, updateCommand: "claude update",
+    features: [{ name: "Mode menu", verifiedFrom: "2.1.326", verifiedTo: "2.1.326", why: "reads the mode line", inRange: installed === "2.1.326" }],
+  });
+
+  it("below the verified range: one disabled row, and never a key pressed", async () => {
+    ipc((cmd, args) => {
+      if (cmd === "agent_cli_compatibility") return [compat("2.1.100")];
+      if (cmd === "pane_mode_get") return { mode: "default", prompt_showing: false };
+      if (cmd === "pane_mode_set") {
+        // SAFETY: this mock is the only writer of the args — it echoes the mode this test passed.
+        return { mode: (args as { mode?: string }).mode ?? "", seen: [] };
+      }
+      return null;
+    });
+    await mount();
+    await open();
+    const modeRows = rows().filter(r => /Mode switching needs/.test(r.textContent ?? ""));
+    expect(modeRows).toHaveLength(1);
+    expect(modeRows[0]?.textContent).toContain("Mode switching needs Claude Code 2.1.326 or newer");
+    expect(modeRows[0]?.textContent).toContain("you have 2.1.100");
+    // The plain mode rows are gone: the section is the honest unavailable state, nothing to pick.
+    expect(rows().map(r => r.querySelector("span span")?.textContent)).not.toContain("Agent");
+    await act(async () => { modeRows[0]?.click(); });
+    await flush();
+    // No key is ever pressed below the verified range — not even a stray pane_mode_set.
+    expect(calls.filter(c => c.cmd === "pane_mode_set")).toEqual([]);
+    expect(chip()?.textContent).toContain("Mode unknown");
+  });
+
+  it("inside the verified range: no change — the closed loop reads and switches as before", async () => {
+    ipc(cmd => {
+      if (cmd === "agent_cli_compatibility") return [compat("2.1.326")];
+      if (cmd === "pane_mode_get") return { mode: "plan", prompt_showing: false };
+      if (cmd === "pane_mode_set") return { mode: "default", seen: ["plan", "default"] };
+      return null;
+    });
+    await mount();
+    expect(chip()?.textContent).toContain("Plan");
+    await open();
+    expect(rows().map(r => r.querySelector("span span")?.textContent)).toContain("Agent");
+    await pick("Agent");
+    await flush();
+    expect(calls.filter(c => c.cmd === "pane_mode_set").map(c => c.args)).toEqual([{ target: "w4:p1", mode: "default" }]);
+  });
+
+  it("above the verified range: the read stays the guard, and an unreadable mode line is explained", async () => {
+    ipc(cmd => {
+      if (cmd === "agent_cli_compatibility") return [compat("2.1.400")];
+      if (cmd === "pane_mode_get") return { mode: "unknown", prompt_showing: false };
+      return null;
+    });
+    await mount();
+    expect(chip()?.textContent).toContain("Mode unknown");
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(
+      "Claude Code 2.1.400 is newer than the version mode switching was checked on (2.1.326), and its mode line could not be read.");
+    expect(calls.filter(c => c.cmd === "pane_mode_get").length).toBeGreaterThan(0);
   });
 });

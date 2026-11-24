@@ -10,6 +10,7 @@ import { parseAutonomy } from "./useWorkspaceData";
 import { useAttachments } from "../../ui/useAttachments";
 import { Composer2, type Choice } from "../../ui/Composer2";
 import { useAgentMode } from "./useAgentMode";
+import { featureRange, useAgentCliCompatibility } from "../../shell/agentCli";
 
 type ClassicProps = ComponentProps<typeof Composer>;
 
@@ -85,7 +86,9 @@ export function ComposerAdapter(p: ClassicProps) {
   const [note, setNote] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const harness = useHarness(p.project);
-  const mode = useAgentMode(p.target, p.working);
+  // #14030: the Mode menu consults the table — below the feature's verified range it shows its
+  // honest unavailable row; above it the closed-loop read stays the guard.
+  const mode = useAgentMode(p.target, p.working, featureRange(useAgentCliCompatibility(), "Mode menu"));
   const attachments = useAttachments();
   const blockedQuestion = p.blockedAsk?.questions[0]?.question ?? null;
   const disabledReason = !p.live ? p.liveWhy : !p.target ? "There is no pane to send to" : null;
@@ -113,7 +116,7 @@ export function ComposerAdapter(p: ClassicProps) {
   };
   const claude = isClaudeHosted(p.model);
   const frac = p.context.frac;
-  const shown = note ?? mode.error ?? harness.error;
+  const shown = note ?? mode.error ?? mode.unverifiedNote ?? harness.error;
   const modeProps = mode.supported ? { mode: mode.mode, modeChoices: mode.choices, onModeChange: mode.set } : {};
   return (
     <div className="flex flex-col gap-1.5 border-t border-[var(--v2-edge)] px-3 pb-3 pt-2.5">

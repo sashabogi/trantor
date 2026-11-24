@@ -1,7 +1,11 @@
 // The hosted agent's live permission mode, read off its pane and switched by the native closed loop (#14022).
+// #14030: the table gates it — below the Mode menu's verified range the section shows one disabled
+// row and never presses a key; above it the closed-loop read stays the guard, with an honest note
+// when the mode line cannot be read on a newer Claude Code.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Choice } from "../../ui/Composer2";
+import type { FeatureRange } from "../../shell/agentCli";
 
 type ModeRead = { mode: string; prompt_showing: boolean };
 type ModeSwitch = { mode: string; seen: string[] };
@@ -34,17 +38,34 @@ export type AgentMode = {
   error: string | null;
   clearError: () => void;
   read: () => void;
+  /** #14030: set when a NEWER-than-verified Claude Code's mode line could not be read — the
+   * explanation replaces a bare "Mode unknown" in the status line. */
+  unverifiedNote: string | null;
 };
 
-export function useAgentMode(target: string | null, working: boolean): AgentMode {
+// #14030: the gate's own row — current by construction, so a click only closes the menu and no
+// key is ever pressed while the version is below the feature's verified range.
+function gatedChoice(range: FeatureRange): Choice {
+  return {
+    value: "needs-update",
+    short: "Mode unknown",
+    label: `Mode switching needs Claude Code ${range.verifiedFrom ?? "a newer version"} or newer`,
+    description: `you have ${range.installed ?? "an unreadable version"}`,
+    tone: "warn",
+  };
+}
+
+export function useAgentMode(target: string | null, working: boolean, range?: FeatureRange | null): AgentMode {
   const [supported, setSupported] = useState(false);
   const [mode, setMode] = useState<string | null>(null);
   const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const gated = range?.verdict === "below";
   const live = useRef(target);
   live.current = target;
   const note = (modes: readonly string[]) => setSeen(s => modes.every(m => s.has(m)) ? s : new Set([...s, ...modes]));
   const read = useCallback(() => {
+    if (gated) return; // #14030: below the verified range the section's answer is the row itself.
     if (!target) { setSupported(false); setMode(null); return; }
     invoke<ModeRead | null>("pane_mode_get", { target }).then(r => {
       if (live.current !== target) return;
@@ -58,7 +79,7 @@ export function useAgentMode(target: string | null, working: boolean): AgentMode
       if (NOT_HERE.test(String(e))) setSupported(false);
       setMode(null);
     });
-  }, [target]);
+  }, [target, gated]);
   useEffect(() => { setSeen(new Set()); setError(null); read(); }, [read]);
   useEffect(() => { if (!working) read(); }, [working, read]);
   useEffect(() => {
@@ -66,6 +87,7 @@ export function useAgentMode(target: string | null, working: boolean): AgentMode
     return () => window.removeEventListener("focus", read);
   }, [read]);
   const set = (value: string) => {
+    if (gated) return Promise.resolve(); // #14030: never press a key below the verified range.
     if (!target) return Promise.resolve();
     setError(null);
     return invoke<ModeSwitch | null>("pane_mode_set", { target, mode: value }).then(r => {
@@ -77,8 +99,16 @@ export function useAgentMode(target: string | null, working: boolean): AgentMode
       read();
     });
   };
+  // #14030: above the verified range the read stays the guard — an unknown mode is explained,
+  // never silently "Mode unknown". In range and unknown data: no change.
+  const unverifiedNote = range?.verdict === "above" && supported && mode === null
+    ? `Claude Code ${range.installed ?? ""} is newer than the version mode switching was checked on (${range.verifiedTo ?? "?"}), and its mode line could not be read.`
+    : null;
   return {
-    supported, mode, error, read, set, clearError: () => setError(null),
-    choices: modeChoicesFor(CLAUDE_MODES, CLAUDE_ALWAYS, seen),
+    supported: gated ? true : supported,
+    mode: gated ? "needs-update" : mode,
+    error, read, set, clearError: () => setError(null),
+    choices: gated ? [gatedChoice(range)] : modeChoicesFor(CLAUDE_MODES, CLAUDE_ALWAYS, seen),
+    unverifiedNote,
   };
 }
