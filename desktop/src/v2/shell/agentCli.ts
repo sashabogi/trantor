@@ -9,7 +9,8 @@ export function useAgentCliCompatibility(): AgentCliCompatibility[] {
   const [reports, setReports] = useState<AgentCliCompatibility[]>([]);
   useEffect(() => {
     let alive = true;
-    void agentCliCompatibility().then(found => { if (alive) setReports(found); }).catch(() => {});
+    // An app whose native side does not answer with rows must still open: no rows means no banner.
+    void agentCliCompatibility().then(found => { if (alive && Array.isArray(found)) setReports(found); }).catch(() => {});
     return () => { alive = false; };
   }, []);
   return reports;
