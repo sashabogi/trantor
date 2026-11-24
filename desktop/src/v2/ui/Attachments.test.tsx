@@ -24,7 +24,7 @@ function Harness() {
   const attachments = useAttachments();
   return (
     <Composer2 value={value} onChange={setValue} label="Message the orchestrator" agent="orchestrator"
-      model={{ id: "claude-opus-5-5", label: "opus 5.5" }} effort={2} permission="ask" contextPct={null}
+      model={{ id: "claude-opus-5-5", label: "opus 5.5" }} contextPct={null}
       attachments={attachments}
       onSend={raw => { sent.push(normalizeAttachments(attachments.serialize(raw).trim())); setValue(""); attachments.clear(); }} />
   );
@@ -136,7 +136,7 @@ describe("Composer2 without attachments", () => {
   it("keeps the paperclip disabled and renders no file input", () => {
     act(() => root.render(
       <Composer2 value="" onChange={vi.fn()} onSend={vi.fn()} label="m" agent="orchestrator" model={{ id: "x", label: "x" }}
-        effort={1} permission="ask" contextPct={null} />));
+        contextPct={null} />));
     expect(host.querySelector('input[type="file"]')).toBeNull();
     expect(host.querySelector<HTMLButtonElement>('button[aria-label="Attach a file or image"]')?.disabled).toBe(true);
   });

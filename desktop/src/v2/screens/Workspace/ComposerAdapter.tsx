@@ -7,9 +7,31 @@ import { modelLabel } from "../../../features/chat/modelLabel";
 import { normalizeAttachments, type PromptVerdict } from "../../../features/chat/streaming";
 import { parseAutonomy } from "./useWorkspaceData";
 import { useAttachments } from "../../ui/useAttachments";
-import { Composer2, EFFORT_LABELS, type Effort, type Permission } from "../../ui/Composer2";
+import { Composer2, type Choice } from "../../ui/Composer2";
 
 type ClassicProps = ComponentProps<typeof Composer>;
+
+// #13984 drill: the same options the classic composer offers, now listed with what each does.
+export const MODEL_CHOICES: readonly Choice[] = [
+  { value: "default", label: "Default", description: "Claude Code's own default for this account" },
+  { value: "opus", label: "Opus", description: "Complex work and everyday tasks" },
+  { value: "fable", label: "Fable", description: "The toughest problems" },
+  { value: "sonnet", label: "Sonnet", description: "Most efficient for simpler tasks" },
+];
+export const EFFORT_CHOICES: readonly Choice[] = [
+  { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" }, { value: "max", label: "Max" },
+];
+export const PERMISSION_CHOICES: readonly Choice[] = [
+  { value: "ask", label: "Ask me", icon: "lock", description: "Permission prompts wait for you in the pane, and a handoff asks first." },
+  { value: "auto", label: "Full auto", icon: "zap", tone: "warn", description: "Skips permission prompts, risky commands included, and hands off on its own." },
+];
+
+/** The picker value the running model corresponds to; "default" is never claimed, since the id cannot say. */
+export function modelChoiceOf(model: string): string | null {
+  const m = model.toLowerCase();
+  return MODEL_CHOICES.find(c => c.value !== "default" && m.includes(c.value))?.value ?? null;
+}
 
 type SendResult = { clear: boolean; note: string | null };
 
@@ -45,7 +67,7 @@ function useHarness(project: string) {
 export function ComposerAdapter(p: ClassicProps) {
   const [value, setValue] = useState("");
   const [note, setNote] = useState<string | null>(null);
-  const [effort, setEffort] = useState<Effort>(2);
+  const [effort, setEffort] = useState<string | null>(null);
   const harness = useHarness(p.project);
   const attachments = useAttachments();
   const blockedQuestion = p.blockedAsk?.questions[0]?.question ?? null;
@@ -63,8 +85,14 @@ export function ComposerAdapter(p: ClassicProps) {
       p.onSent();
     });
   };
-  const pickEffort = (e: Effort) => { setEffort(e); void line(`/effort ${EFFORT_LABELS[e]}`); p.onDispatch("effort", EFFORT_LABELS[e]); };
-  const permission: Permission = harness.auto ? "auto" : "ask";
+  const pickEffort = (v: string) => { setEffort(v); void line(`/effort ${v}`); p.onDispatch("effort", v); };
+  // The pick is per project and saved before the slash command, exactly as the classic composer does it.
+  const pickModel = (v: string) => {
+    void invoke("project_model_pick", { project: p.project, model: v })
+      .catch(e => setNote(`Model not saved for this project: ${String(e)}`))
+      .then(() => line(`/model ${v}`));
+    p.onDispatch("model", v);
+  };
   const frac = p.context.frac;
   const shown = note ?? harness.error;
   return (
@@ -73,8 +101,9 @@ export function ComposerAdapter(p: ClassicProps) {
       <Composer2 value={value} onChange={v => { setValue(v); if (note) setNote(null); }} onSend={send}
         label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
         agent="orchestrator" model={{ id: p.model || "unknown", label: p.model ? modelLabel(p.model).full.replace(/ \(.*\)$/, "") : "model unknown" }}
-        effort={effort} onEffortChange={pickEffort}
-        permission={permission} onPermissionChange={next => harness.set(next !== "ask")}
+        modelChoices={MODEL_CHOICES} modelValue={modelChoiceOf(p.model || "")} onModelChange={pickModel}
+        effort={effort} effortChoices={EFFORT_CHOICES} onEffortChange={pickEffort}
+        permission={harness.auto ? "auto" : "ask"} permissionChoices={PERMISSION_CHOICES} onPermissionChange={next => harness.set(next === "auto")}
         contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason} />
     </div>
   );

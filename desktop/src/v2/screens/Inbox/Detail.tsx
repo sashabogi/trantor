@@ -77,7 +77,7 @@ function MessageDetail({ client, item, cards, onSettled, onOpenCard }: Omit<Deta
           </div>
           <Composer2 value={text} onChange={setText} onSend={value => void reply(value)}
             label={`Answer ${seatLabel(item.from)}`} placeholder={`Answer ${seatLabel(item.from)} in your own words (it reads this as the answer)`}
-            agent={item.from} model={{ id: "not-reported", label: "model not reported" }} effort={2} permission="ask" contextPct={null}
+            agent={item.from} model={{ id: "not-reported", label: "model not reported" }} contextPct={null}
             disabledReason={busy ? "Sending…" : null} />
         </>
       )}

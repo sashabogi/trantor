@@ -3,7 +3,7 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Composer2, type Composer2Props, type Effort, type Permission } from "./Composer2";
+import { Composer2, type Choice, type Composer2Props } from "./Composer2";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -12,14 +12,29 @@ let root: Root;
 beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); });
 afterEach(() => { act(() => root.unmount()); host.remove(); });
 
-function Harness({ onSend, extra }: { onSend: (t: string) => void; extra?: Partial<Composer2Props> }) {
+const EFFORTS: readonly Choice[] = [
+  { value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra high" }, { value: "max", label: "Max" },
+];
+const PERMISSIONS: readonly Choice[] = [
+  { value: "ask", label: "Ask me", icon: "lock", description: "Prompts wait for you." },
+  { value: "auto", label: "Full auto", icon: "zap", tone: "warn", description: "Runs without asking." },
+];
+const MODELS: readonly Choice[] = [
+  { value: "opus", label: "Opus", description: "Complex work" }, { value: "sonnet", label: "Sonnet", description: "Simpler tasks" },
+];
+
+function Harness({ onSend, extra, picks }: { onSend: (t: string) => void; extra?: Partial<Composer2Props>; picks?: string[] }) {
   const [value, setValue] = useState("");
-  const [effort, setEffort] = useState<Effort>(2);
-  const [permission, setPermission] = useState<Permission>("guarded");
+  const [effort, setEffort] = useState<string | null>("low");
+  const [permission, setPermission] = useState("ask");
+  const log = (kind: string, set: (v: string) => void) => (v: string) => { picks?.push(`${kind}:${v}`); set(v); };
   return (
     <Composer2 value={value} onChange={setValue} onSend={t => { onSend(t); setValue(""); }}
-      label="Message the orchestrator" agent="orchestrator" model={{ id: "claude-opus-5-5", label: "opus 5.5" }}
-      effort={effort} onEffortChange={setEffort} permission={permission} onPermissionChange={setPermission}
+      label="Message the orchestrator" agent="orchestrator" model={{ id: "claude-opus-5-5", label: "Opus 5.5" }}
+      modelChoices={MODELS} modelValue="opus" onModelChange={log("model", () => {})}
+      effort={effort} effortChoices={EFFORTS} onEffortChange={log("effort", setEffort)}
+      permission={permission} permissionChoices={PERMISSIONS} onPermissionChange={log("permission", setPermission)}
       contextPct={48} onAttach={() => {}} {...extra} />
   );
 }
@@ -59,21 +74,51 @@ describe("Composer2", () => {
     expect(send?.className).toContain("rounded-full");
   });
 
-  it("cycles effort and permission, and shows the context ring with its percent", () => {
-    act(() => root.render(<Harness onSend={vi.fn()} />));
-    expect(q('[aria-label="Effort: high"]')?.querySelectorAll("[data-lit]").length).toBe(3);
-    act(() => q('[aria-label="Effort: high"]')?.click());
-    expect(q('[aria-label="Effort: max"]')).not.toBeNull();
-    act(() => q('[aria-label="Effort: max"]')?.click());
-    expect(q('[aria-label="Effort: low"]')).not.toBeNull();
-    act(() => q('[aria-label="Permission: asks before irreversible actions"]')?.click());
-    expect(q('[aria-label="Permission: full auto"]')?.title).toContain("Runs without asking");
+  it("opens a permission menu that lists every level with what it does, and sets the one clicked", () => {
+    const picks: string[] = [];
+    act(() => root.render(<Harness onSend={vi.fn()} picks={picks} />));
+    expect(q('[role="menu"]')).toBeNull();
+    act(() => q('button[aria-label="orchestrator, permission: Ask me"]')?.click());
+    const rows = [...host.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitemradio"]')];
+    expect(rows.map(r => r.textContent)).toEqual(["Ask mePrompts wait for you.", "Full autoRuns without asking."]);
+    expect(rows[0].getAttribute("aria-checked")).toBe("true");
+    act(() => rows[1].click());
+    expect(picks).toEqual(["permission:auto"]);
+    expect(q('[role="menu"]')).toBeNull();
+    expect(q('button[aria-label="orchestrator, permission: Full auto"]')).not.toBeNull();
+  });
+
+  it("sets effort to the level clicked in one step, never by cycling, and lists the models", () => {
+    const picks: string[] = [];
+    act(() => root.render(<Harness onSend={vi.fn()} picks={picks} />));
+    const chip = () => q('button[aria-label^="Model: Opus 5.5"]');
+    expect(chip()?.getAttribute("aria-label")).toBe("Model: Opus 5.5, effort: Low");
+    expect(chip()?.querySelectorAll("[data-lit]").length).toBe(1);
+    act(() => chip()?.click());
+    const levels = [...host.querySelectorAll<HTMLElement>('[role="radiogroup"][aria-label="Effort"] [role="radio"]')];
+    expect(levels.map(l => l.textContent)).toEqual(["Low", "Medium", "High", "Extra high", "Max"]);
+    act(() => levels[4].click());
+    expect(picks).toEqual(["effort:max"]);
+    expect(chip()?.getAttribute("aria-label")).toBe("Model: Opus 5.5, effort: Max");
+    expect(chip()?.querySelectorAll("[data-lit]").length).toBe(5);
+    const models = [...host.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitemradio"]')];
+    expect(models.map(m => m.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    act(() => models[1].click());
+    expect(picks).toEqual(["effort:max", "model:sonnet"]);
     expect(q('svg[role="img"] text')?.textContent).toBe("48");
   });
 
+  it("shows no effort or permission where the agent has none, instead of an invented value", () => {
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ effort: undefined, permission: undefined, modelChoices: undefined }} />));
+    expect(q('[data-group="model"]')?.textContent).toBe("Opus 5.5");
+    expect(q('[data-group="model"]')?.tagName).toBe("SPAN");
+    expect(q('[data-group="agent"]')?.getAttribute("aria-label")).toBe("Answers: orchestrator");
+    expect(host.querySelector("[data-lit]")).toBeNull();
+  });
+
   it("renders read-only labels without handlers, hides the ring without data, and explains a blocked send", () => {
-    act(() => root.render(<Harness onSend={vi.fn()} extra={{ onEffortChange: undefined, contextPct: null, onAttach: undefined, disabledReason: "Seat is offline" }} />));
-    expect(q('[aria-label="Effort: high"]')?.tagName).toBe("SPAN");
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ onEffortChange: undefined, onModelChange: undefined, contextPct: null, onAttach: undefined, disabledReason: "Seat is offline" }} />));
+    expect(q('[data-group="model"]')?.tagName).toBe("SPAN");
     expect(q('svg[aria-label^="Context"]')).toBeNull();
     expect(q('button[aria-label="Attach a file or image"]')?.hasAttribute("disabled")).toBe(true);
     type("hello");

@@ -48,7 +48,7 @@ export function ChatRail({ client, project, peers, open, onToggle, draft, onDraf
       </div>
       <div className="border-t border-[var(--v2-edge)] p-3">
         <Composer2 value={draft} onChange={onDraft} onSend={send} label={`Message ${seatLabel(name)}`} placeholder="Plan, ask or build. Add a commit or hunk with Add to chat"
-          agent={name} model={{ id: target?.model ?? "unknown", label: target?.model ?? "model unknown" }} effort={1} permission="guarded" contextPct={null}
+          agent={name} model={{ id: target?.model ?? "unknown", label: target?.model ?? "model unknown" }} contextPct={null}
           disabledReason={target ? null : `No ${seatLabel(name)} session is live in this project`} />
       </div>
     </aside>
