@@ -29,10 +29,18 @@ const SEAT_PALETTES: [RegExp, SeatPalette][] = [
 ];
 const NEUTRAL: SeatPalette = { bg: "#2A2E36", fg: "#E7E9EC" };
 
-/** "claude:trantor-duty" → "trantor-duty"; the part a person reads. */
+const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)/i;
+
+/** The seat a person reads from a session id `<seat>:<project>`: "codex-8:trantor" → "codex-8",
+ *  a host session → "orchestrator", the duty seat → its job name (#13984 drill: every avatar read TR). */
 export function seatLabel(name: string): string {
-  const i = name.lastIndexOf(":");
-  return i >= 0 ? name.slice(i + 1) : name;
+  const i = name.indexOf(":");
+  if (i < 0) return name;
+  const head = name.slice(0, i), tail = name.slice(i + 1);
+  if (/-duty$|^fleet$/.test(tail) && !/\d/.test(head)) return tail === "fleet" ? "trantor-duty" : tail;
+  if (HOSTISH.test(head)) return "orchestrator";
+  if (!/\d/.test(head) && /^[a-z]+-\d+$/i.test(tail)) return tail;
+  return head;
 }
 
 /** codex-8 → C8, orchestrator → OR, trantor-duty → TD. */
@@ -46,7 +54,7 @@ export function monogram(name: string): string {
 }
 
 export function seatPalette(name: string): SeatPalette {
-  const key = name.toLowerCase();
+  const key = `${seatLabel(name)} ${name}`.toLowerCase();
   for (const [re, palette] of SEAT_PALETTES) if (re.test(key)) return palette;
   return NEUTRAL;
 }

@@ -18,6 +18,15 @@ describe("monogram", () => {
     expect(seatLabel("codex:codex-8")).toBe("codex-8");
     expect(seatLabel("orchestrator")).toBe("orchestrator");
   });
+
+  it("reads the seat, not the project, from a hub session id", () => {
+    expect(seatLabel("codex-8:trantor")).toBe("codex-8");
+    expect(monogram("kimi-9:trantor")).toBe("K9");
+    expect(seatLabel("MacBook-Pro-M1:trantor")).toBe("orchestrator");
+    expect(seatLabel("claude:trantor-duty")).toBe("trantor-duty");
+    expect(seatPalette("MacBook-Pro-M1:trantor")).toEqual({ bg: "#3A2A24", fg: "#E39A7E" });
+    expect(seatLabel("sasha@mac")).toBe("sasha@mac");
+  });
 });
 
 describe("colours", () => {
