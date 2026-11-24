@@ -35,9 +35,15 @@ function useIdentity(): string {
 }
 
 /** The chosen seat, else the first live crew seat, else whatever leads the strip. */
-function pickSeat(seats: SeatView[], key: string | null): SeatView | undefined {
+// #13987 drill: opening a project lands on its orchestrator, not the first crew seat.
+export function pickSeat(seats: SeatView[], key: string | null): SeatView | undefined {
   return seats.find(s => s.key === key)
-    ?? liveSeats(seats).find(s => !s.isOrchestrator) ?? liveSeats(seats)[0] ?? seats[0];
+    ?? liveSeats(seats).find(s => s.isOrchestrator) ?? liveSeats(seats)[0] ?? seats[0];
+}
+
+const seatKey = (project: string) => `trantor.v2.workspace.seat.${project}`;
+function readSeat(project: string): string | null {
+  try { return localStorage.getItem(seatKey(project)); } catch { return null; }
 }
 
 function EmptyCrew() {
@@ -51,7 +57,11 @@ function EmptyCrew() {
 export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   const { RightPanel } = usePanes();
   const data = useWorkspaceData(client, project);
-  const [selKey, setSelKey] = useState<string | null>(null);
+  const [selKey, setSelKeyState] = useState<string | null>(() => readSeat(project));
+  const setSelKey = useCallback((key: string) => {
+    setSelKeyState(key);
+    try { localStorage.setItem(seatKey(project), key); } catch { /* storage blocked: the choice lasts the session */ }
+  }, [project]);
   const [layout, setLayout] = useState<Layout>(readLayout);
   const [tab, setTab] = useState<WorkTab>("terminal");
   const [recording, setRecording] = useState(false);
