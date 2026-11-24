@@ -1,13 +1,12 @@
-// The chat column's content: the orchestrator Chat is the only permanent view; Sessions, Files and Git open as a sheet over it (#13987 drill).
+// The chat column's content: the orchestrator Chat is the only permanent view; Sessions opens as a sheet over it (#13987 drill).
 import { saveTrayOpen } from "../../../features/chat/prefs";
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Chat, DEFAULT_CHAT_DEPS, type ChatDeps } from "../../../features/chat/Chat";
-import { FileTree } from "../../../features/code/FileTree";
-import { GitPanel } from "../../../features/code/GitPanel";
 import { SessionsMode } from "../../../features/code/SessionsMode";
 import type { SessionRow } from "../../../features/code/sessionsApi";
 import type { Navigate } from "../../routes";
+import { setOpenIntent } from "../../shell/openIntent";
 import { IconButton } from "../../ui/IconButton";
 import { ChatHeader, type SheetKind } from "./ChatHeader";
 import { ComposerAdapter } from "./ComposerAdapter";
@@ -16,11 +15,7 @@ import type { SeatView } from "./seatModel";
 /** Chat with the 2.0 composer swapped in; every other seam stays the production one. */
 const CHAT_DEPS: ChatDeps = { ...DEFAULT_CHAT_DEPS, Composer: ComposerAdapter };
 
-const SHEET_TITLE = { sessions: "Sessions", files: "Files", git: "Git" } as const satisfies Record<SheetKind, string>;
-
-function Empty({ children }: { children: ReactNode }) {
-  return <div className="m-4 rounded-[10px] border border-dashed border-[var(--v2-edge-2)] p-4 text-center text-[12px] leading-relaxed text-[var(--v2-muted)]">{children}</div>;
-}
+const SHEET_TITLE = { sessions: "Sessions" } as const satisfies Record<SheetKind, string>;
 
 function Sheet({ kind, onBack, children }: { kind: SheetKind; onBack: () => void; children: ReactNode }) {
   useEffect(() => {
@@ -47,10 +42,12 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
   const [session, setSession] = useState<SessionRow | null>(null);
   const scope = seat && !seat.isOrchestrator && !seat.machine ? seat.agent : null;
   const back = () => setSheet(null);
+  // #13987 drill: Git is the Code screen's Source control, not a sheet; the seat travels with the intent.
+  const openGit = () => { setOpenIntent(project, { kind: "source-control", seat: scope ?? undefined }); onNavigate("code"); };
   return (
     <section aria-label="Project panel" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <ChatHeader brand={orchestrator?.brand} sheet={sheet} onSheet={setSheet} changed={changed}
-        sessionId={session?.id ?? orchestrator?.session ?? null} onClose={onClose} />
+      <ChatHeader brand={orchestrator?.brand} sheet={sheet} onSheet={setSheet} changed={changed} project={project}
+        sessionId={session?.id ?? orchestrator?.session ?? null} onGit={openGit} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
         <ChatNoTray><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
           onClose={() => setSession(null)} /></ChatNoTray>
@@ -58,16 +55,6 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
       {sheet === "sessions" && (
         <Sheet kind="sessions" onBack={back}>
           <SessionsMode project={project} onOpenClaude={s => { setSession(s); back(); }} />
-        </Sheet>
-      )}
-      {sheet === "files" && (
-        <Sheet kind="files" onBack={back}><FileTree project={project} seat={scope} onOpen={() => onNavigate("code")} /></Sheet>
-      )}
-      {sheet === "git" && (
-        <Sheet kind="git" onBack={back}>
-          {scope
-            ? <GitPanel project={project} seat={scope} onOpenFile={() => onNavigate("code")} />
-            : <Empty>Git works on a seat's worktree. Select a seat on this machine.</Empty>}
         </Sheet>
       )}
     </section>

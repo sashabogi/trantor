@@ -10,6 +10,8 @@ import { WorkspaceScreen } from "./index";
 import { RightPanel } from "./RightPanel";
 import { DEFAULT_PANES, WorkspacePanesContext } from "./panes";
 import { OPEN_KEY, WIDTH_KEY } from "./chatColumnState";
+import { takeOpenIntent } from "../../shell/openIntent";
+import type { SeatView } from "./seatModel";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -136,15 +138,16 @@ describe("header", () => {
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
   };
 
-  it("has icon buttons and no Files/Git/Sessions/Chat tablist", async () => {
+  it("has icon buttons, no Files button and no tablist", async () => {
     await mountPanel();
     expect(host.querySelector('[role="tablist"]')).toBeNull();
-    for (const l of ["New chat", "Sessions", "Files", "Git", "More", "Close chat"]) {
+    expect(byLabel("Files")).toBeNull();
+    for (const l of ["New chat", "Sessions", "Git", "More", "Close chat"]) {
       const b = byLabel(l);
       expect(b, l).not.toBeNull();
       expect(b?.title, l).not.toBe("");
     }
-    expect(byLabel("New chat")?.disabled).toBe(true);
+    expect(byLabel("New chat")?.disabled).toBe(false);
   });
 
   it("opens Sessions as a sheet over the chat and Back returns to it", async () => {
@@ -157,10 +160,42 @@ describe("header", () => {
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("Git without a seat on this machine shows the classic empty state", async () => {
+  it("Git sets a source-control intent for the selected crew seat and opens Code", async () => {
+    const nav: string[] = [];
+    const target = { key: "codex-8", label: "codex-8", agent: "codex-8", brand: "codex", session: "codex-8:trantor", online: true, isOrchestrator: false };
+    const seat: SeatView = { ...target, presence: "working", words: "working", target };
+    await act(async () => { root.render(<RightPanel project="trantor" seat={seat} orchestrator={undefined} changed={0} onNavigate={s => { nav.push(s); }} onClose={() => {}} />); });
+    await click(byLabel("Git"));
+    expect(byLabel("Git")?.title).toBe("Open source control");
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(nav).toEqual(["code"]);
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "source-control", seat: "codex-8" });
+  });
+
+  it("Git with no crew seat selected targets the project checkout", async () => {
     await mountPanel();
     await click(byLabel("Git"));
-    expect(host.textContent).toContain("Select a seat on this machine");
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "source-control", seat: undefined });
+  });
+
+  it("New chat is a menu whose hand off item invokes the classic handoff_now after a confirm", async () => {
+    const calls: unknown[] = [];
+    mockIPC((command, args) => {
+      if (command === "handoff_now") { calls.push(args); return "ok"; }
+      if (command === "plugin:event|listen") return 1;
+      if (command === "handoff_states") return [];
+      return command === "sessions_list" || command === "herdr_seats" ? "[]" : null;
+    });
+    await mountPanel();
+    await click(byLabel("New chat"));
+    const item = () => [...host.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(i => /hand off/i.test(i.textContent ?? "")) ?? null;
+    expect(item()?.textContent).toContain("Writes a recap, opens a fresh session that takes over");
+    expect([...host.querySelectorAll('[role="menuitem"]')].some(i => i.textContent?.includes("clear"))).toBe(false);
+    await click(item());
+    expect(calls).toEqual([]);
+    await click(item());
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    expect(calls).toEqual([{ project: "trantor", reason: "clicked" }]);
   });
 
   it("the menu closes the chat", async () => {

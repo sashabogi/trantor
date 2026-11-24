@@ -1,6 +1,7 @@
 // Trantor 2.0 Code and Git (#13988): icon bar, tabs, source control with history and changes, branch
 // picker, PR and merge-conflict tabs. Real data from the classic git and file commands only.
-import { Suspense, lazy, useCallback, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { takeOpenIntent } from "../../shell/openIntent";
 import type { Card } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
 import { conflictPaths } from "../../../features/code/gitApi";
@@ -49,6 +50,17 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const openFile = (path: string) => tabs.open({ id: `file:${scope ?? ""}:${path}`, kind: "file", label: base(path), scope, path });
   const openConflict = (path: string | null) => { setConflictPath(path); tabs.open({ id: "conflict", kind: "conflict", label: "Merge conflicts", scope }); };
   const pick = (seat: string | null) => { setScope(seat); setKey(null); tabs.activate("source"); };
+  // #13987 drill: the Workspace files column and Git icon leave a note here; take it once per project.
+  const { open: openTab, activate: activateTab } = tabs;
+  useEffect(() => {
+    const intent = takeOpenIntent(project);
+    if (!intent) return;
+    const seat = intent.seat ?? null;
+    setScope(seat);
+    setKey(null);
+    if (intent.kind === "file") openTab({ id: `file:${seat ?? ""}:${intent.path}`, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
+    else activateTab("source");
+  }, [project, openTab, activateTab]);
   const picker: PickerActions = {
     onCheckout: () => pick(null),
     onSeat: seat => pick(seat),

@@ -5,7 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { DrillMode } from "../../../features/drill/DrillMode";
 import type { ScreenProps } from "../../routes";
 import { ChatColumn } from "./ChatColumn";
-import { useChatColumn } from "./chatColumnState";
+import { useChatColumn, useFilesColumn } from "./chatColumnState";
+import { FilesColumn } from "./FilesColumn";
+import { setOpenIntent } from "../../shell/openIntent";
 import { Inspector } from "./Inspector";
 import { usePanes } from "./panes";
 import { SeatGrid } from "./SeatGrid";
@@ -70,6 +72,7 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   const messageRef = useRef<HTMLInputElement | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const chatCol = useChatColumn();
+  const filesCol = useFilesColumn();
   const me = useIdentity();
   const mayDo = useMayDo(project);
   const crew = useCrew(project, data.refresh);
@@ -88,6 +91,11 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
     requestAnimationFrame(() => messageRef.current?.focus());
   };
 
+  // The same scoping the Files sheet used: a crew seat on this machine shows its worktree, anything else the project checkout.
+  const scope = selected && !selected.isOrchestrator && !selected.machine ? selected.agent : null;
+  // #13987 drill: a chosen file used to be dropped on navigate; the intent carries it to the Code screen.
+  const openFile = (path: string) => { setOpenIntent(project, { kind: "file", path, seat: scope ?? undefined }); onNavigate("code"); };
+
   let body;
   if (data.seats === null) body = <div className="m-5 text-[12.5px] text-[var(--v2-muted)]">Reading seats</div>;
   else if (!selected) body = <EmptyCrew />;
@@ -101,6 +109,8 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
 
   return (
     <div ref={workspaceRef} className="flex min-h-0 flex-1">
+      <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
+        scopeName={scope ?? "project checkout"} onOpenFile={openFile} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />
