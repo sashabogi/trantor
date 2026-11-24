@@ -8,7 +8,7 @@ import { CardFace, type NextStep } from "./CardFace";
 import { Drawer } from "./Drawer";
 import { Lanes } from "./Lanes";
 import { ListView } from "./ListView";
-import { buildBoard, countBy, isBusy, isFiltering, NO_FILTERS, seatsOf, type Filters } from "./model";
+import { buildBoard, countBy, isBusy, isFiltering, NO_FILTERS, seatGroups, type Filters } from "./model";
 import { Toolbar, type View } from "./Toolbar";
 
 const POLL_MS = 12_000;
@@ -71,7 +71,7 @@ export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <Toolbar view={view} onView={setView} filters={filters} onFilters={setFilters} seats={seatsOf(all)} counts={counts} />
+      <Toolbar view={view} onView={setView} filters={filters} onFilters={setFilters} seats={seatGroups(all, presence)} counts={counts} />
       <div className="px-5 pb-2 text-[11.5px] text-[var(--v2-muted)]">
         {all.length === 0 ? "No cards on this board yet." : `${all.filter(c => c.status === "done").length} of ${all.length} done${filtering ? ` · showing ${model.shown}` : ""}`}
       </div>

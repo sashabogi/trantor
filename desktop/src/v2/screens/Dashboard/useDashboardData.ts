@@ -43,13 +43,15 @@ function useMe(client: HubClient): string {
 }
 
 /** Messages to the human that are still unseen: what classic Inbox calls "needs an answer". */
-function useHumanMessages(client: HubClient, me: string): Message[] {
+type HumanMessages = { unseen: Message[]; all: Message[] };
+
+function useHumanMessages(client: HubClient, me: string): HumanMessages {
   const [, bump] = useState(0);
   useEffect(() => onSeenChange(() => bump(n => n + 1)), []);
   const all = usePoll(
     () => (me ? client.inbox(me).then(r => (r.messages ?? []).filter(m => m.to === me)) : Promise.resolve([])),
     [client, me], 30_000, NO_MESSAGES);
-  return all.filter(m => !hasSeen(m.id));
+  return { unseen: all.filter(m => !hasSeen(m.id)), all };
 }
 
 function useInterrupted(): Interrupted {
@@ -69,14 +71,14 @@ export function useDashboardData(client: HubClient) {
   const peers = usePeers(client).peers ?? [];
   const proposals = usePendingProposals(client);
   const holds = usePendingHolds(client);
-  const messages = useHumanMessages(client, me);
+  const { unseen: messages, all: allMessages } = useHumanMessages(client, me);
   const econ = usePoll<Economics | null>(() => client.economics(), [client], SLOW_MS, null);
   const machines = usePoll<MachinesHealthReport | null>(() => client.machinesHealth(), [client], SLOW_MS, null);
   const overseer = usePoll<OverseerStatus | null>(() => client.overseerStatus(), [client], SLOW_MS, null);
   const open = usePoll<LocalSession[]>(() => localSessions(), [], 30_000, []);
   const known = usePoll<string[]>(() => knownProjects(), [], 5 * SLOW_MS, []);
   const interrupted = useInterrupted();
-  return { me, cards, peers, proposals, holds, messages, econ, machines, overseer, open, known, interrupted };
+  return { me, cards, peers, proposals, holds, messages, allMessages, econ, machines, overseer, open, known, interrupted };
 }
 
 export type DashboardData = ReturnType<typeof useDashboardData>;

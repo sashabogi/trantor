@@ -1,10 +1,11 @@
 // "Needs you": the ranked queue across projects, each row with its own actions (#13986).
+import { useState } from "react";
 import { AlertTriangle, FileWarning, GitPullRequest, MessageCircleQuestion, ShieldQuestion, type LucideIcon } from "lucide-react";
 import type { Navigate } from "../../routes";
 import { Button } from "../../ui/Button";
 import { ProjectTile } from "../../ui/ProjectTile";
 import type { Decisions } from "./useDecisions";
-import { span, type QueueItem, type QueueKind } from "./model";
+import { span, type OldTesting, type QueueItem, type QueueKind } from "./model";
 
 const KIND_ICON = { hold: FileWarning, proposal: ShieldQuestion, message: MessageCircleQuestion, testing: GitPullRequest } as const satisfies Record<QueueKind, LucideIcon>;
 const KIND_LABEL = { hold: "Collision gate", proposal: "Proposal", message: "Question", testing: "Drill" } as const satisfies Record<QueueKind, string>;
@@ -45,7 +46,12 @@ function Actions({ item, d, onNavigate }: { item: QueueItem; d: Decisions; onNav
   return <Button onClick={() => onNavigate(target, item.project || undefined)}>{item.kind === "message" ? "Open" : "Review"}</Button>;
 }
 
-export function NeedsYou({ items, d, onNavigate }: { items: QueueItem[]; d: Decisions; onNavigate: Navigate }) {
+const VISIBLE_ROWS = 12;
+
+export function NeedsYou({ items, backlog, d, onNavigate }: { items: QueueItem[]; backlog: OldTesting; d: Decisions; onNavigate: Navigate }) {
+  const [all, setAll] = useState(false);
+  // #13984 drill: 311 rows buried the three that mattered; cap the list and let the rest be asked for.
+  const shown = all ? items : items.slice(0, VISIBLE_ROWS);
   return (
     <section aria-labelledby="v2-needs" className="rounded-xl border border-[var(--v2-warn-edge)] bg-[var(--v2-panel)]">
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-[14px] py-[10px]">
@@ -53,8 +59,8 @@ export function NeedsYou({ items, d, onNavigate }: { items: QueueItem[]; d: Deci
         <h2 id="v2-needs" className="m-0 text-[13px] font-semibold">Needs you <span className="v2-mono text-[var(--v2-warn)]">{items.length}</span></h2>
       </div>
       {d.error && <p role="alert" className="m-0 px-[14px] pt-2 text-[12px] text-[var(--v2-bad)]">{d.error}</p>}
-      {items.length === 0 && <p className="m-0 px-[14px] py-4 text-[12.5px] text-[var(--v2-muted)]">Nothing is waiting on you.</p>}
-      {items.map(item => {
+      {items.length === 0 && backlog.count === 0 && <p className="m-0 px-[14px] py-4 text-[12.5px] text-[var(--v2-muted)]">Nothing is waiting on you.</p>}
+      {shown.map(item => {
         const Icon = KIND_ICON[item.kind];
         return (
           <div key={item.key} data-kind={item.kind} className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-[14px] py-2.5 last:border-b-0">
@@ -69,6 +75,15 @@ export function NeedsYou({ items, d, onNavigate }: { items: QueueItem[]; d: Deci
           </div>
         );
       })}
+      {items.length > shown.length && (
+        <div className="px-[14px] py-2.5"><Button variant="quiet" onClick={() => setAll(true)}>Show {items.length - shown.length} more</Button></div>
+      )}
+      {backlog.count > 0 && (
+        <div data-kind="backlog" className="flex items-center gap-3 border-t border-[var(--v2-edge)] px-[14px] py-2.5">
+          <div className="min-w-0 flex-1 truncate text-[13px] text-[var(--v2-muted)]">{backlog.count} {backlog.count === 1 ? "card has" : "cards have"} sat in testing over a week</div>
+          <Button onClick={() => onNavigate("board", backlog.project || undefined)}>Open the Board</Button>
+        </div>
+      )}
     </section>
   );
 }

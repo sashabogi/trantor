@@ -43,6 +43,17 @@ describe("PlansBar", () => {
     expect(host.querySelector("[data-chip]")).toBeNull();
   });
 
+  it("keeps the chips in their own scrolling lane and the machine readout non-shrinking (#13984 drill)", () => {
+    act(() => root.render(<PlansBar report={report()} failure={null} machines={machines()} spinning={false} onRefresh={() => {}} onOpenUsage={() => {}} />));
+    const chips = host.querySelector<HTMLElement>("[data-bar-chips]");
+    const readout = host.querySelector<HTMLElement>("[data-bar-machines]");
+    expect(chips?.style.minWidth).toMatch(/^0(px)?$/);
+    expect(chips?.style.overflowX).toBe("auto");
+    expect(chips?.style.flexWrap).toBe("nowrap");
+    expect(readout?.style.flex).toMatch(/^(none|0 0 auto)$/);
+    expect(chips?.contains(readout)).toBe(false);
+  });
+
   it("has a labelled refresh control", () => {
     const onRefresh = vi.fn();
     act(() => root.render(<PlansBar report={report()} failure={null} machines={null} spinning={false} onRefresh={onRefresh} onOpenUsage={() => {}} />));

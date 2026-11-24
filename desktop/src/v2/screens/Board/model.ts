@@ -3,6 +3,7 @@ import type { Card } from "../../../shared/api/client";
 import type { PresenceState } from "../../../shared/presence";
 import { matchesCard } from "../../../features/search/match";
 import { dictGet } from "../../../shared/dict";
+import { seatLabel } from "../../ui/identity";
 
 /** The hub keeps `drill` on slim rows too, but the shared Card type does not declare it yet. */
 export type BoardCard = Card & { drill?: string };
@@ -143,8 +144,25 @@ export function countBy(all: Card[], presence: Map<string, PresenceState>) {
   };
 }
 
-export function seatsOf(all: Card[]): string[] {
-  return [...new Set(all.map(c => c.assignee).filter((a): a is string => !!a))].sort();
+/** One filterable seat: every assignee id that reads as the same label, with the open cards they hold. */
+export type SeatGroup = { label: string; ids: string[]; open: number; live: boolean };
+
+const OPEN = new Set(["todo", "doing", "testing", "failed", "blocked"]);
+export const SEAT_FILTER_MAX = 8;
+
+// #13984 drill: 23 avatars (every seat that ever held a card) is noise; offer only seats with open work, live first.
+export function seatGroups(all: Card[], presence: Map<string, PresenceState>): SeatGroup[] {
+  const by = new Map<string, SeatGroup>();
+  for (const c of all) {
+    if (!c.assignee || !OPEN.has(c.status || "todo")) continue;
+    const label = seatLabel(c.assignee);
+    const g = by.get(label) ?? { label, ids: [], open: 0, live: false };
+    if (!g.ids.includes(c.assignee)) g.ids.push(c.assignee);
+    g.open += 1;
+    g.live = g.live || (presence.get(c.assignee) ?? "offline") !== "offline";
+    by.set(label, g);
+  }
+  return [...by.values()].sort((a, b) => Number(b.live) - Number(a.live) || a.label.localeCompare(b.label));
 }
 
 export type DrillState = "owed" | "none" | "set" | null;

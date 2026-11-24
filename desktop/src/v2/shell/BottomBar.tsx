@@ -75,8 +75,10 @@ export function PlansBar({ report, failure, machines, spinning, onRefresh, onOpe
     : report ? { color: "var(--v2-ok)", text: "hub connected" } : { color: "var(--v2-track)", text: "connecting" };
   return (
     <footer aria-label="Plans and balances"
-      className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-t border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-3 text-[11.5px] text-[var(--v2-muted)]">
-      <div className="flex min-w-0 items-center gap-2" style={{ opacity: dim ? 0.55 : 1 }}>
+      className="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-t border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-3 text-[11.5px] text-[var(--v2-muted)]">
+      {/* #13984 drill: at 1440px the chips ran under the machine readout; they scroll in their own lane instead. */}
+      <div data-bar-chips className="v2-no-scrollbar flex items-center gap-2 whitespace-nowrap"
+        style={{ opacity: dim ? 0.55 : 1, minWidth: 0, flex: "0 1 auto", overflowX: "auto", flexWrap: "nowrap", scrollbarWidth: "none" }}>
         {failure !== null && <span role="status" className="v2-mono shrink-0 whitespace-nowrap">usage unavailable: {failure}</span>}
         {!chips.length && failure === null && <span className="shrink-0">{report ? "No plans reported yet" : "Reading plans"}</span>}
         {chips.map(c => <PlanChip key={c.key} chip={c} onOpen={onOpenUsage} />)}
@@ -84,7 +86,7 @@ export function PlansBar({ report, failure, machines, spinning, onRefresh, onOpe
       <IconButton label="Refresh plans and balances" title="Re-query every provider now" size={24} onClick={onRefresh}>
         <RefreshCw size={11} aria-hidden className={spinning ? "animate-spin" : undefined} />
       </IconButton>
-      <span className="ml-auto flex shrink-0 items-center gap-3">
+      <span data-bar-machines className="ml-auto flex items-center gap-3" style={{ flex: "none" }}>
         <Machines report={machines} />
         <span className="inline-flex items-center gap-1.5" title={failure ?? undefined}>
           <span aria-hidden className="h-[7px] w-[7px] rounded-full" style={{ background: hub.color }} />{hub.text}

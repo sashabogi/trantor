@@ -77,6 +77,11 @@ describe("UsageScreen", () => {
     expect(host.querySelector("table")?.textContent).toContain("DAY");
   });
 
+  it("opens fleet-wide even when a project is active (#13984 drill)", async () => {
+    await mount("trantor");
+    expect(host.querySelector("[data-filter]")).toBeNull();
+  });
+
   it("exports the by-agent CSV through a download", async () => {
     const created: Blob[] = [];
     URL.createObjectURL = (b: Blob | MediaSource) => { if (b instanceof Blob) created.push(b); return "blob:x"; };

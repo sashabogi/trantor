@@ -1,7 +1,7 @@
 // #13989: the board's pure rules: testing split, nesting, filters, the drill line, moves.
 import { describe, expect, it } from "vitest";
 import type { PresenceState } from "../../../shared/presence";
-import { allowedMoves, buildBoard, buildNesting, drillLine, drillState, NO_FILTERS, splitTesting, type BoardCard } from "./model";
+import { allowedMoves, buildBoard, buildNesting, drillLine, drillState, NO_FILTERS, seatGroups, splitTesting, type BoardCard } from "./model";
 
 const NOW = 1_800_000_000_000;
 const DAY = 864e5;
@@ -75,5 +75,19 @@ describe("drill line and moves", () => {
     expect(allowedMoves("testing")).toEqual(["todo", "doing", "done"]);
     expect(allowedMoves("todo")).toEqual(["doing"]);
     expect(allowedMoves("failed")).toEqual(["todo", "doing"]);
+  });
+});
+
+describe("seatGroups", () => {
+  it("lists only seats with open cards, dedupes by label, live first, with counts (#13984 drill)", () => {
+    const cards = [
+      card(1, "doing", { assignee: "idle-seat" }), card(2, "testing", { assignee: "busy-seat" }),
+      card(3, "testing", { assignee: "busy-seat" }), card(4, "done", { assignee: "gone-seat" }),
+      card(5, "todo", { assignee: "codex-8:alpha" }), card(6, "todo", { assignee: "codex-8:beta" }),
+    ];
+    const g = seatGroups(cards, presence);
+    expect(g.map(x => x.label)).toEqual(["busy-seat", "idle-seat", "codex-8"]);
+    expect(g.map(x => x.open)).toEqual([2, 1, 2]);
+    expect(g[2].ids).toEqual(["codex-8:alpha", "codex-8:beta"]);
   });
 });

@@ -1,9 +1,9 @@
 // View switch, search, seat filters and quick chips above the lanes (#13989).
+import { useState } from "react";
 import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import { Seg } from "../../ui/Seg";
-import { seatLabel } from "../../ui/identity";
-import type { Filters } from "./model";
+import { SEAT_FILTER_MAX, type Filters, type SeatGroup } from "./model";
 
 export type View = "lanes" | "list" | "dependencies" | "seat";
 const VIEWS = [
@@ -18,7 +18,7 @@ export type ToolbarProps = {
   onView: (v: View) => void;
   filters: Filters;
   onFilters: (f: Filters) => void;
-  seats: string[];
+  seats: SeatGroup[];
   counts: { needsYou: number; drillOwed: number };
 };
 
@@ -37,7 +37,10 @@ function QuickChip({ label, count, on, onClick, title, disabledReason }: {
 
 export function Toolbar({ view, onView, filters, onFilters, seats, counts }: ToolbarProps) {
   const set = (patch: Partial<Filters>) => onFilters({ ...filters, ...patch });
-  const toggleSeat = (s: string) => set({ seats: filters.seats.includes(s) ? filters.seats.filter(x => x !== s) : [...filters.seats, s] });
+  const [more, setMore] = useState(false);
+  const isOn = (g: SeatGroup) => g.ids.some(id => filters.seats.includes(id));
+  const toggleSeat = (g: SeatGroup) => set({ seats: isOn(g) ? filters.seats.filter(x => !g.ids.includes(x)) : [...filters.seats, ...g.ids] });
+  const shownSeats = more ? seats : seats.slice(0, SEAT_FILTER_MAX);
   return (
     <div className="flex flex-wrap items-center gap-2.5 px-5 py-3">
       <Seg label="View" options={VIEWS} value={view} onChange={onView} />
@@ -48,15 +51,19 @@ export function Toolbar({ view, onView, filters, onFilters, seats, counts }: Too
       {seats.length > 0 && (
         <div role="group" aria-label="Filter by seat" className="flex items-center gap-1">
           <span className="mr-0.5 text-[10.5px] text-[var(--v2-muted)]">Seat</span>
-          {seats.map(s => {
-            const on = filters.seats.includes(s);
+          {shownSeats.map(g => {
+            const on = isOn(g);
             return (
-              <button key={s} type="button" aria-pressed={on} title={seatLabel(s)} aria-label={`Filter by ${seatLabel(s)}`} onClick={() => toggleSeat(s)}
+              <button key={g.label} type="button" aria-pressed={on} title={`${g.label}, ${g.open} open ${g.open === 1 ? "card" : "cards"}`} aria-label={`Filter by ${g.label}`} onClick={() => toggleSeat(g)}
                 className={`rounded-full border-2 bg-transparent p-0 ${on ? "border-[var(--v2-accent)]" : "border-transparent opacity-80 hover:opacity-100"}`}>
-                <Avatar name={s} size={22} />
+                <Avatar name={g.ids[0]} size={22} />
               </button>
             );
           })}
+          {!more && seats.length > SEAT_FILTER_MAX && (
+            <button type="button" onClick={() => setMore(true)} title="Show the other seats with open cards"
+              className="rounded-full border border-[var(--v2-edge)] px-2 py-0.5 text-[10.5px] text-[var(--v2-muted)] hover:bg-[var(--v2-raised)]">+{seats.length - SEAT_FILTER_MAX}</button>
+          )}
         </div>
       )}
       <QuickChip label="Needs you" count={counts.needsYou} on={filters.needsYou} onClick={() => set({ needsYou: !filters.needsYou })}

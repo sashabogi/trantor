@@ -52,9 +52,10 @@ function Header({ range, onRange }: { range: RangeKey; onRange: (r: RangeKey) =>
   );
 }
 
-export function UsageScreen({ client, project }: ScreenProps) {
+export function UsageScreen({ client }: ScreenProps) {
   const [range, setRange] = useState<RangeKey>("14d");
-  const [filters, setFilters] = useState<Filters>({ ...NO_FILTERS, project: project || null });
+  // #13984 drill: opening scoped to the active project read zero for a project with no turns; start fleet-wide.
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const balances = useBalances(client);
   const data = useUsageData(client);
   const now = Date.now();

@@ -1,5 +1,6 @@
 // Pure derivations for the 2.0 Dashboard: the ranked needs-you queue, live seats, tabs (#13986).
 import type { Card, FileHold, Message, Peer, Proposal } from "../../../shared/api/client";
+import { stalenessOf } from "../../../features/inbox/staleness";
 import { hubActivity } from "../../../features/workspace/seatActivity";
 import { ONLINE_MS } from "../../../shared/presence";
 import type { Presence } from "../../ui/identity";
@@ -31,10 +32,34 @@ export function cardOfSeat(cards: Card[], project: string, seat: string): Card |
 export type QueueInput = {
   cards: Card[]; holds: FileHold[]; proposals: Proposal[]; messages: Message[];
   decided: ReadonlySet<string>;
+  /** The whole inbox, seen included, so "asked again since" can see the newer message. Defaults to `messages`. */
+  allMessages?: Message[];
+  now?: number;
 };
 
+export const OLD_TESTING_MS = 7 * 86_400_000;
+const cardAge = (c: Card) => c.updated ?? c.ts ?? 0;
+// #13984 drill: a card that has sat in testing for weeks is backlog, not a drill waiting on the operator today.
+const isOldTesting = (c: Card, now: number) => c.status === "testing" && now - cardAge(c) > OLD_TESTING_MS;
+
+/** The testing cards past a week, as one count and the project holding most of them. */
+export type OldTesting = { count: number; project: string };
+
+export function oldTesting(cards: Card[], now: number = Date.now()): OldTesting {
+  const per = new Map<string, number>();
+  let count = 0;
+  for (const c of cards) {
+    if (!isOldTesting(c, now)) continue;
+    count += 1;
+    per.set(c.project, (per.get(c.project) ?? 0) + 1);
+  }
+  const top = [...per].sort((a, b) => b[1] - a[1])[0];
+  return { count, project: top ? top[0] : "" };
+}
+
 /** Everything that is waiting on the operator, across projects, ranked: kind first, then longest-waiting. */
-export function buildQueue({ cards, holds, proposals, messages, decided }: QueueInput): QueueItem[] {
+export function buildQueue({ cards, holds, proposals, messages, decided, allMessages, now = Date.now() }: QueueInput): QueueItem[] {
+  const everyone = allMessages ?? messages;
   const items: QueueItem[] = [];
   for (const h of holds) {
     items.push({ key: `hold:${h.id}`, kind: "hold", project: h.project, seat: h.session, ts: h.ts,
@@ -46,11 +71,13 @@ export function buildQueue({ cards, holds, proposals, messages, decided }: Queue
       card: cardOfSeat(cards, p.project, p.session), proposal: p, title: `${p.session} proposes: ${p.scope}` });
   }
   for (const m of messages) {
+    // #13984 drill: the Inbox's own staleness rule, so the two screens never disagree on what is live.
+    if (stalenessOf(m, everyone, [], cards).stale) continue;
     items.push({ key: `message:${m.id}`, kind: "message", project: m.project ?? "", seat: m.from, ts: m.ts,
       card: cardOfSeat(cards, m.project ?? "", m.from), message: m, title: `${m.from}: ${m.text.split("\n")[0].slice(0, 140)}` });
   }
   for (const c of cards) {
-    if (c.status !== "testing") continue;
+    if (c.status !== "testing" || isOldTesting(c, now)) continue;
     items.push({ key: `testing:${c.id}`, kind: "testing", project: c.project, seat: c.workedBy ?? c.assignee ?? "", ts: c.updated ?? c.ts ?? 0,
       card: c, title: `#${c.id} ${c.title} is in testing, waiting for your drill` });
   }

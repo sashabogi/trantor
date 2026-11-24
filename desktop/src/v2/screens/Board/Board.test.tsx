@@ -125,6 +125,21 @@ describe("BoardScreen filters", () => {
     expect(q('[data-card="3"]')).toBeNull();
   });
 
+  it("shows 8 seat avatars and a +N that expands the rest (#13984 drill)", async () => {
+    const many = Array.from({ length: 11 }, (_, i) => row(100 + i, "todo", { assignee: `seat-${i + 1}` }));
+    CARDS.push(...many);
+    try {
+      await mount(fakeClient().client);
+      const avatars = () => host.querySelectorAll('[aria-label="Filter by seat"] button[aria-pressed]').length;
+      const plus = [...host.querySelectorAll("button")].find(b => /^\+\d+$/.test(b.textContent ?? ""));
+      expect(avatars()).toBe(8);
+      expect(plus?.textContent).toBe("+5");
+      expect(q('button[aria-label="Filter by codex-8"]')?.getAttribute("title")).toBe("codex-8, 2 open cards");
+      await click(plus ?? null);
+      expect(avatars()).toBe(13);
+    } finally { CARDS.length -= many.length; }
+  });
+
   it("List works as a table and Dependencies shows not wired", async () => {
     await mount(fakeClient().client);
     await click(buttonByText("List"));

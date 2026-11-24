@@ -4,7 +4,7 @@ import { orchestratorOpen } from "../../../features/workspace/herdr";
 import { NotWired } from "../../shell/ClassicLenses";
 import type { ScreenProps } from "../../routes";
 import { Seg } from "../../ui/Seg";
-import { buildQueue, liveSeats } from "./model";
+import { buildQueue, liveSeats, oldTesting } from "./model";
 import { NeedsYou } from "./NeedsYou";
 import { Collisions, idleMoves, Machines, StatTiles, YourMove, type Move } from "./Panels";
 import { ProjectSidebar } from "./ProjectSidebar";
@@ -26,8 +26,9 @@ export function DashboardScreen({ client, onNavigate }: ScreenProps) {
   const d = useDecisions(client);
   const [layout, setLayout] = useState<Layout>("overview");
   const queue = useMemo(
-    () => buildQueue({ cards: data.cards, holds: data.holds, proposals: data.proposals, messages: data.messages, decided: d.decided }),
-    [data.cards, data.holds, data.proposals, data.messages, d.decided]);
+    () => buildQueue({ cards: data.cards, holds: data.holds, proposals: data.proposals, messages: data.messages, allMessages: data.allMessages, decided: d.decided }),
+    [data.cards, data.holds, data.proposals, data.messages, data.allMessages, d.decided]);
+  const backlog = useMemo(() => oldTesting(data.cards), [data.cards]);
   const seats = useMemo(() => liveSeats(data.peers, data.cards), [data.peers, data.cards]);
   const autonomy = useMemo(() => new Map(Object.entries(data.overseer?.autonomy ?? {})), [data.overseer]);
   const projects = useMemo(
@@ -59,7 +60,7 @@ export function DashboardScreen({ client, onNavigate }: ScreenProps) {
         ) : (
           <div className="flex flex-col gap-4">
             <StatTiles econ={data.econ} projects={projects.length} cards={data.cards.length} live={seats.length} />
-            <NeedsYou items={queue} d={d} onNavigate={onNavigate} />
+            <NeedsYou items={queue} backlog={backlog} d={d} onNavigate={onNavigate} />
             <WorkingNow seats={seats} queue={queue} autonomy={autonomy} d={d} onNavigate={onNavigate} />
             <div className="grid grid-cols-2 gap-4">
               <YourMove moves={moves} />

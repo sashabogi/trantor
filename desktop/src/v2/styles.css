@@ -1,0 +1,3 @@
+
+/* #13984 drill: a scroll lane with no bar, for the footer chips. */
+.v2-no-scrollbar::-webkit-scrollbar { display: none; }
