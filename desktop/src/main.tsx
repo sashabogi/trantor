@@ -5,6 +5,7 @@ import { AppShell } from "./app/AppShell";
 import { runAskDrill } from "./features/chat/askDrill";
 import { parseKeyDrillPayload, runKeyDrill } from "./features/workspace/keyDrill";
 import { runHandoffDrill } from "./features/chat/handoffDrill";
+import { wantsV2 } from "./v2/toggle";
 import "./styles.css";
 
 // #6094 acceptance drill: the Rust shell emits `ask-drill` when TRANTOR_ASK_DRILL=<project> is
@@ -18,6 +19,8 @@ void listen<string>("key-drill", ev => { void runKeyDrill(parseKeyDrillPayload(e
 // the drill opens that project's Chat on a bare-shell pane and proves no handoff fires.
 void listen<string>("handoff-drill", ev => { void runHandoffDrill(ev.payload); });
 
+// #v2-F: the 2.0 shell is lazy so its theme.css never loads into the classic app.
+const ShellV2 = React.lazy(() => import("./v2/ShellV2").then(m => ({ default: m.ShellV2 })));
 ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode><AppShell /></React.StrictMode>
+  <React.StrictMode>{wantsV2() ? <React.Suspense fallback={null}><ShellV2 /></React.Suspense> : <AppShell />}</React.StrictMode>
 );

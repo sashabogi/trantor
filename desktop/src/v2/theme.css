@@ -1,0 +1,48 @@
+/* Trantor 2.0 "Graphite" tokens, from docs/design/v2 (#v2-F). Loaded only by ShellV2. */
+/* The CSP blocks remote stylesheets, so Inter and JetBrains Mono apply when installed locally (#v2-F). */
+:root {
+  --v2-bg: #0E0F12;
+  --v2-chrome: #0B0C0F;
+  --v2-panel: #121317;
+  --v2-panel-2: #16181C;
+  --v2-raised: #1E2128;
+  --v2-hover: #2A2E36;
+  --v2-edge: #22252B;
+  --v2-edge-2: #2A2E36;
+  --v2-track: #3A3F47;
+  --v2-text: #E7E9EC;
+  --v2-text-2: #C4C8CE;
+  --v2-muted: #9AA0A8;
+  --v2-accent: #8AA8FF;
+  --v2-accent-hi: #B3C6FF;
+  --v2-accent-soft: rgba(138, 168, 255, 0.16);
+  --v2-ok: #7CC49A;
+  --v2-ok-soft: rgba(124, 196, 154, 0.12);
+  --v2-warn: #F2B544;
+  --v2-warn-soft: rgba(242, 181, 68, 0.10);
+  --v2-warn-edge: #3A3220;
+  --v2-warn-ink: #1A1406;
+  --v2-bad: #E58A8A;
+  --v2-bad-soft: rgba(229, 138, 138, 0.12);
+  --v2-info: #8AA8FF;
+  --v2-ink: #0E0F12;
+  --v2-font: Inter, system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --v2-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+.v2-root {
+  height: 100%;
+  background: var(--v2-bg);
+  color: var(--v2-text);
+  font-family: var(--v2-font);
+  font-size: 13px;
+  letter-spacing: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.v2-root button { font-family: inherit; cursor: pointer; }
+.v2-root button:disabled { cursor: not-allowed; }
+.v2-root :focus-visible { outline: 2px solid var(--v2-accent); outline-offset: 1px; }
+.v2-root ::selection { background: rgba(138, 168, 255, 0.28); }
+.v2-mono { font-family: var(--v2-mono); }
+.v2-hover:hover:not(:disabled) { background: var(--v2-raised); color: var(--v2-text); }

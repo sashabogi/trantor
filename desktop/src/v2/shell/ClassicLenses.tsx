@@ -1,0 +1,63 @@
+// Graph, Feed, Bus and Messages reuse the classic components inside 2.0 chrome until they get
+// their own screens; they are imported, never forked (#v2-F).
+import { useState } from "react";
+import type { HubClient } from "../../shared/api/client";
+import type { Lens } from "../../features/project/ProjectHeader";
+import { GraphLens } from "../../features/code/graph/GraphLens";
+import { Feed } from "../../features/feed/Feed";
+import { Conversation } from "../../features/chat/Conversation";
+import { Messages } from "../../features/messages/Messages";
+import { ProjectTile } from "../ui/ProjectTile";
+import type { LensScreen, Navigate } from "../routes";
+
+export type ClassicLensProps = { client: HubClient; project: string; me: string; lens: LensScreen; onNavigate: Navigate };
+
+export function ClassicLens({ client, project, me, lens, onNavigate }: ClassicLensProps) {
+  const [seat, setSeat] = useState<string | null>(null);
+  const onLens = (l: Lens) => onNavigate(l);
+  if (lens === "graph") {
+    return <GraphLens client={client} project={project} lens="graph" onLens={onLens} seat={seat} onSeat={setSeat} onOpenFile={() => onNavigate("code")} />;
+  }
+  if (lens === "feed") return <Feed client={client} project={project} lens="feed" onLens={onLens} />;
+  if (lens === "bus") {
+    if (!me) return <NotWired title="Bus" line="Waiting for the signed identity before the bus can be read." />;
+    return <Conversation client={client} project={project} me={me} lens="bus" onLens={onLens} />;
+  }
+  return <NotWired title="Browser" line="The in-app browser is not wired yet." />;
+}
+
+export function NotWired({ title, line }: { title: string; line: string }) {
+  return (
+    <div className="px-5 py-6">
+      <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
+      <p className="mt-1 text-[12.5px] text-[var(--v2-muted)]">{line}</p>
+    </div>
+  );
+}
+
+export function MessagesLens({ client, me }: { client: HubClient; me: string }) {
+  if (!me) return <NotWired title="Messages" line="Waiting for the signed identity before messages can be read." />;
+  return <Messages client={client} me={me} />;
+}
+
+export function AllProjects({ projects, live, onNavigate }: { projects: string[]; live: string[]; onNavigate: Navigate }) {
+  return (
+    <div className="px-5 py-4">
+      <h1 className="m-0 text-[20px] font-[650]">All projects</h1>
+      <p className="mt-1 text-[12px] text-[var(--v2-muted)]">{projects.length} known · {live.length} with live sessions</p>
+      <ul className="mt-4 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 p-0">
+        {projects.map(p => (
+          <li key={p}>
+            <button type="button" onClick={() => onNavigate("workspace", p)}
+              className="v2-hover flex w-full items-center gap-2.5 rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2 text-left text-[13px] text-[var(--v2-text)]">
+              <ProjectTile name={p} size={26} />
+              <span className="min-w-0 flex-1 truncate">{p}</span>
+              {live.includes(p) && <span role="img" aria-label="live" title="Has a live session" className="h-[7px] w-[7px] rounded-full bg-[var(--v2-accent)]" />}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {!projects.length && <p className="text-[12.5px] text-[var(--v2-muted)]">No projects pinned. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
+    </div>
+  );
+}

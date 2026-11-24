@@ -14,6 +14,7 @@ import { PairPhone } from "./PairPhone";
 import { RelayChat } from "./RelayChat";
 import { SettingsBoundary } from "./SettingsBoundary";
 import { onboardingApi } from "../onboarding/onboardingApi";
+import { enterV2 } from "../../v2/toggle";
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -132,6 +133,12 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="tr-sec-title">Trantor 2.0</h2>
+          <p className="tr-sec-sub">Preview the new shell. Its account menu has Back to classic.</p>
+          <button type="button" onClick={enterV2} className="tr-input mt-3">Try Trantor 2.0</button>
         </section>
 
         <section className="mb-8">
