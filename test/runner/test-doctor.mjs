@@ -46,7 +46,7 @@ ok("parsing an empty machine invents no seat called 'no'", !bareBrands.includes(
 ok("every surviving brand came from a real seat line", bareBrands.every(b => /^[a-z]/.test(b)), bareBrands.join(", "));
 
 // 3. Key attribution. A provider key that authenticates BOTH the crew seats and Scrooge makes a
-// spend spike unattributable — that is exactly how a $14 DeepSeek day (2026-08-25) took an
+// spend spike unattributable — that is exactly how a $14 DeepSeek day took an
 // investigation to explain, when Scrooge turned out to be 0.15% of the tokens on the key.
 {
   const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
@@ -108,7 +108,7 @@ ok("every surviving brand came from a real seat line", bareBrands.every(b => /^[
     sec.some(e => /agent-bus\/\.env \(crew\)/.test(e.message)), sec.map(e => e.message).join(" | "));
 }
 
-// 4. The duty row. The fleet watcher sat dead for four days (2026-08-27→31) while everything
+// 4. The duty row. The fleet watcher sat dead for four days while everything
 // else reported green — a dead watcher raises no error, it just stops nudging. The doctor must
 // make every duty state loud, each with its fix.
 {
@@ -188,6 +188,47 @@ ok("every surviving brand came from a real seat line", bareBrands.every(b => /^[
     dutyIssues(r).some(e => /keepalive installed but the seat is down/.test(e.message)), JSON.stringify(dutyIssues(r)));
 
   fh.close();
+}
+
+// 5. Claude Code version states (#14030): below the audited minimum warns with the CLI's own
+// updater as the fix, newer than verified is a quiet note, in range is ok — and the parse
+// accepts the "(Claude Code)" suffix `claude --version` really prints.
+{
+  const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const mkClaude = (version) => {
+    const d = mkdtempSync(join(tmpdir(), "trantor-claude-"));
+    writeFileSync(join(d, "claude"), `#!/bin/sh\necho "${version}"\n`);
+    chmodSync(join(d, "claude"), 0o755);
+    return d;
+  };
+  const runClaude = (binDir) => {
+    const opts = { encoding: "utf8", env: { HOME: homedir(), PATH: `${binDir}:/usr/bin:/bin` }, maxBuffer: 8 * 1024 * 1024 };
+    try { return JSON.parse(execFileSync(process.execPath, [join(HERE, "bin", "doctor.mjs"), "--json"], opts)); }
+    catch (e) { return JSON.parse(e.stdout); }
+  };
+
+  // (a) below the audited minimum — the one loud state, with claude update as the fix
+  let r = runClaude(mkClaude("2.1.100 (Claude Code)"));
+  let sec = [...r.ok, ...r.issues, ...r.notes].filter(e => String(e.section || "").startsWith("claude"));
+  ok("below the audited minimum warns with installed, needed and the feature that needs it",
+    sec.some(e => /claude 2\.1\.100 \(Claude Code\) is older than Trantor has audited \(2\.1\.215\)/.test(e.message) && /Mode menu needs 2\.1\.326/.test(e.message)),
+    sec.map(e => e.message).join(" | "));
+  ok("…and the fix is Claude Code's own updater, never a guess",
+    sec.some(e => (e.fix || "").startsWith("claude update")), sec.map(e => e.fix).join(" | "));
+
+  // (b) in range — ok, and the "(Claude Code)" suffix parses
+  r = runClaude(mkClaude("2.1.326 (Claude Code)"));
+  ok("the suffix claude --version really prints parses, and in range reads ok",
+    r.ok.some(e => /claude 2\.1\.326 \(Claude Code\) within the verified range \(2\.1\.215–2\.1\.326\)/.test(e.message)),
+    r.ok.filter(e => String(e.section || "").startsWith("claude")).map(e => e.message).join(" | "));
+
+  // (c) newer than verified — a quiet note, never a warning
+  r = runClaude(mkClaude("2.1.400 (Claude Code)"));
+  const asNote = r.notes.some(e => /claude 2\.1\.400 \(Claude Code\) is newer than the releases Trantor has verified \(up to 2\.1\.326\)/.test(e.message));
+  const asIssue = r.issues.some(e => /is newer than the releases Trantor has verified/.test(e.message));
+  ok("newer than the verified range is a quiet note, never a warning", asNote && !asIssue,
+    r.notes.filter(e => String(e.section || "").startsWith("claude")).map(e => e.message).join(" | "));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

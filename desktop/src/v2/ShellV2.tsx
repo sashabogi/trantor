@@ -6,6 +6,7 @@ import { backToClassic } from "./toggle";
 import { isLensScreen, readMode, saveMode, type Mode, type Navigate, type Screen, type ScreenProps } from "./routes";
 import { useShellData } from "./shell/useShellData";
 import { TopBar } from "./shell/TopBar";
+import { AgentCliBanner } from "./shell/AgentCliBanner";
 import { Rail } from "./shell/Rail";
 import { BottomBar } from "./shell/BottomBar";
 import { ProjectFrame } from "./shell/ProjectFrame";
@@ -76,6 +77,7 @@ export function ShellV2() {
         mode={mode} onMode={m => { setMode(m); saveMode(m); }}
         onSearch={() => setPalette(data.active ? { kind: "project", project: data.active } : { kind: "global" })}
         needsYou={data.needsYou} me={data.me} onNavigate={onNavigate} onBackToClassic={backToClassic} />
+      <AgentCliBanner />
       <div className="flex min-h-0 flex-1">
         <Rail screen={screen} project={data.active} live={data.live} unread={data.unread} needsYou={data.needsYou} onNavigate={onNavigate} />
         <main data-screen={screen} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">

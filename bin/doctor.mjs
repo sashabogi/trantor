@@ -178,6 +178,17 @@ section("duty seat (the fleet watcher)");
 section("claude (the orchestrator)");
 if (!has("claude")) warn("claude CLI not found", "install Claude Code: https://claude.com/claude-code");
 else {
+  // Claude Code's version against Trantor's compatibility states (#14030), mirroring the
+  // Rust-owned table in desktop/src-tauri/src/agent_cli.rs — keep the two in step.
+  const raw = (() => { try { return execSync("claude --version", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); } catch { return ""; } })();
+  const parts = (raw.split(/\s+/)[0] || "").replace(/^v/, "").split(".").map(Number);
+  const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+  if (parts.length === 3 && parts.every(Number.isFinite)) {
+    const MIN = [2, 1, 215], VERIFIED = [2, 1, 326];
+    if (cmp(parts, MIN) < 0) warn(`claude ${raw} is older than Trantor has audited (${MIN.join(".")}); the Mode menu needs ${VERIFIED.join(".")}`, "claude update   (Claude Code's own updater)");
+    else if (cmp(parts, VERIFIED) > 0) note(`claude ${raw} is newer than the releases Trantor has verified (up to ${VERIFIED.join(".")})`);
+    else ok(`claude ${raw} within the verified range (${MIN.join(".")}–${VERIFIED.join(".")})`);
+  } else if (raw) note(`claude version unreadable: ${raw}`);
   const st = read(join(H, ".claude", "settings.json")) || {};
   Object.keys(st.enabledPlugins || {}).some(k => k.startsWith("agent-bus@") || k.startsWith("trantor@"))
     ? ok("plugin installed")

@@ -1,6 +1,6 @@
 // Hub, Identity, Phone, Accounts and Agents: the classic panes and probes in 2.0 chrome (#13994).
 import { useEffect, useState } from "react";
-import { HubClient, hubForProject, knownProjects } from "../../../shared/api/client";
+import { HubClient, hubForProject, knownProjects, type AgentCliCompatibility } from "../../../shared/api/client";
 import { AccountsPane } from "../../../features/settings/providers/AccountsPane";
 import { AgentsPane } from "../../../features/settings/agents/AgentsPane";
 import { PairPhone } from "../../../features/settings/PairPhone";
@@ -8,6 +8,7 @@ import { RelayChat } from "../../../features/settings/RelayChat";
 import { Avatar } from "../../ui/Avatar";
 import { Chip } from "../../ui/Chip";
 import { Section } from "../../ui/Section";
+import { useAgentCliCompatibility } from "../../shell/agentCli";
 
 type HubRow = { url: string; projects: string[]; ok: boolean | null };
 
@@ -89,4 +90,34 @@ export function AccountsPage({ project }: { project: string }) {
 
 export function AgentsPage() {
   return <Section title="Agents and harnesses" sub="Installed agents, the default agent and launch commands."><AgentsPane /></Section>;
+}
+
+// #14030: a quiet list — the banner is the loud surface. Below the minimum shows here too, but
+// as words, never a warning; newer than verified is exactly the line it deserves and no more.
+function stateWords(r: AgentCliCompatibility): string {
+  switch (r.state) {
+    case "ok": return `within the verified range (${r.minimum}–${r.verifiedUpTo})`;
+    case "below_minimum": return `older than Trantor needs (${r.minimum})`;
+    case "newer_than_verified": return `newer than the verified range (up to ${r.verifiedUpTo})`;
+    default: return r.installed ? "version unreadable" : "not installed";
+  }
+}
+
+export function AgentClisCard() {
+  const reports = useAgentCliCompatibility();
+  return (
+    <Section title="Agent CLIs" sub="Each agent CLI's version against the range Trantor has verified.">
+      <div className="flex flex-col gap-2.5">
+        {reports.map(r => (
+          <div key={r.cli} data-agent-cli={r.cli}
+            className="flex items-center gap-2.5 rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
+            <span className="text-[13px] font-medium">{r.label}</span>
+            <span className="v2-mono text-[12px] text-[var(--v2-muted)]">{r.installed ?? "—"}</span>
+            <span className="ml-auto text-[11px] text-[var(--v2-muted)]">{stateWords(r)}</span>
+          </div>
+        ))}
+        {!reports.length && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">Reading installed agent CLIs…</p>}
+      </div>
+    </Section>
+  );
 }

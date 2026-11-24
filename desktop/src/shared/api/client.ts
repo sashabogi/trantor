@@ -454,6 +454,31 @@ export async function trantorCliCompatibility(): Promise<TrantorCliCompatibility
   return invoke<TrantorCliCompatibility>("trantor_cli_compatibility");
 }
 
+export type AgentCliFeature = {
+  name: string;
+  verifiedFrom: string;
+  verifiedTo: string;
+  why: string;
+  inRange: boolean;
+};
+
+export type AgentCliCompatibility = {
+  cli: string;
+  label: string;
+  installed: string | null;
+  state: "ok" | "below_minimum" | "newer_than_verified" | "not_installed";
+  minimum: string;
+  verifiedUpTo: string;
+  reason: string | null;
+  updateCommand: string | null;
+  features: AgentCliFeature[];
+};
+
+/** #14030: agent CLI versions against the Rust-owned table (minimum, verified up to, per feature). */
+export async function agentCliCompatibility(): Promise<AgentCliCompatibility[]> {
+  return invoke<AgentCliCompatibility[]>("agent_cli_compatibility");
+}
+
 export async function knownProjects(): Promise<string[]> {
   return invoke<string[]>("known_projects");
 }

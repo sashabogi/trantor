@@ -7,7 +7,7 @@ import { Button } from "../../ui/Button";
 import { AutonomyPage } from "./AutonomyPage";
 import { AboutPage, GeneralPage, NotificationsPage } from "./GeneralPages";
 import { WorkingAgreements } from "./PolicyCards";
-import { AccountsPage, AgentsPage, HubPage, IdentityPage, PhoneCard } from "./SystemPages";
+import { AccountsPage, AgentClisCard, AgentsPage, HubPage, IdentityPage, PhoneCard } from "./SystemPages";
 import { SettingsNav } from "./SettingsNav";
 import { SECTIONS, filterSections, type SectionId } from "./sections";
 import { useSettingsData } from "./useSettingsData";
@@ -89,7 +89,7 @@ function Page({ id, props, data, query, onNavigate }: PageProps) {
     );
     case "hub": return <HubPage />;
     case "identity": return <IdentityPage me={data.me} />;
-    case "about": return <AboutPage />;
+    case "about": return <><AboutPage /><AgentClisCard /></>;
     default: return <NotWired title={SECTIONS.find(s => s.id === id)?.label ?? id} line={wiredLine(id)} />;
   }
 }

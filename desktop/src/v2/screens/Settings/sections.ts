@@ -37,7 +37,7 @@ export const SECTIONS: readonly SectionDef[] = [
   { id: "identity", group: "System", label: "Identity and keys", desc: "signed requests, keychain", rows: ["signed", "key", "identity"] },
   { id: "storage", group: "System", label: "Storage", desc: "logs, transcripts, cleanup", rows: ["logs", "transcripts", "cleanup"] },
   { id: "drill", group: "System", label: "Drill mode", desc: "recorder settings", rows: ["recorder", "drill"] },
-  { id: "about", group: "System", label: "About", desc: "version, update, licenses", rows: ["version", "licenses", "update"] },
+  { id: "about", group: "System", label: "About", desc: "version, update, licenses", rows: ["version", "licenses", "update", "agent clis", "claude code"] },
 ];
 
 /** True when every word of the query appears in the joined texts (an empty query matches). */
