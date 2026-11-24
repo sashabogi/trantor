@@ -92,3 +92,9 @@ export function useAgentCliUpdate(cli: string): AgentCliUpdateState {
   };
   return { busy, result, run };
 }
+
+/** "2.1.331 (Claude Code)" → "2.1.331": the CLI prints its own name after the number (#14030 drill). */
+export function bareVersion(raw: string | null | undefined): string | null {
+  const found = /\d+(?:\.\d+)+/.exec(raw ?? "");
+  return found ? found[0] : null;
+}

@@ -6,7 +6,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentCliCompatibility, AgentCliUpdate } from "../../shared/api/client";
 import { Button } from "../ui/Button";
-import { useAgentCliCompatibility, useAgentCliStaleSessions, useAgentCliUpdate } from "./agentCli";
+import { useAgentCliCompatibility, useAgentCliStaleSessions, useAgentCliUpdate, bareVersion } from "./agentCli";
 
 function copyUpdateCommand(command: string): void {
   void navigator.clipboard?.writeText(command).then(() => {}).catch(() => {});
@@ -41,7 +41,7 @@ export function UpdateOutcomeLine({ report, result }: { report: AgentCliCompatib
     return (
       <p className="m-0 min-w-0 flex-1 text-[12.5px] text-[var(--v2-warn)]"
         data-agent-cli-updated={report.cli}>
-        Updated {result.before ?? "an unreadable version"} to {result.after ?? "an unreadable version"}.
+        Updated {report.label} {bareVersion(result.before) ?? "an unreadable version"} to {bareVersion(result.after) ?? "an unreadable version"}.
       </p>
     );
   }

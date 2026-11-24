@@ -9,7 +9,7 @@ import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import { Chip } from "../../ui/Chip";
 import { Section } from "../../ui/Section";
-import { useAgentCliCompatibility, useAgentCliUpdate } from "../../shell/agentCli";
+import { useAgentCliCompatibility, useAgentCliUpdate, bareVersion } from "../../shell/agentCli";
 import { AgentCliSessions } from "../../shell/AgentCliBanner";
 
 type HubRow = { url: string; projects: string[]; ok: boolean | null };
@@ -124,7 +124,7 @@ function AgentCliRow({ r }: { r: AgentCliCompatibility }) {
       {update.result && <span className="min-w-[180px] max-w-[320px] text-right text-[11px] text-[var(--v2-muted)]"
         title={update.result.output}>
         {update.result.ok
-          ? `updated ${update.result.before ?? "?"} to ${update.result.after ?? "?"}`
+          ? `updated ${bareVersion(update.result.before) ?? "?"} to ${bareVersion(update.result.after) ?? "?"}`
           : "the update did not succeed — see the banner for its output"}
       </span>}
     </div>

@@ -33,7 +33,7 @@ const stale: AgentCliStaleSessions = {
   machinesNotChecked: ["netcup"],
 };
 
-const updateOk: AgentCliUpdate = { ok: true, before: "2.1.100", after: "2.1.326", output: "updated" };
+const updateOk: AgentCliUpdate = { ok: true, before: "2.1.100 (Claude Code)", after: "2.1.326 (Claude Code)", output: "updated" };
 
 let host: HTMLDivElement;
 let root: Root;
@@ -122,7 +122,7 @@ describe("AgentCliBanner", () => {
     expect(invokes.filter(i => i.cmd === "agent_cli_update")).toEqual([{ cmd: "agent_cli_update", args: { cli: "claude" } }]);
     await act(async () => { resolveUpdate?.(updateOk); });
     expect(host.querySelector('[data-agent-cli-updated="claude"]')?.textContent)
-      .toContain("Updated 2.1.100 to 2.1.326");
+      .toContain("Updated Claude Code 2.1.100 to 2.1.326");
     expect(updateButton()).toBeNull();
   });
 
