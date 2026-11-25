@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Card, FileHold, HubClient, Peer } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
 import { usePendingHolds } from "../../../shared/FileHolds";
-import { orchestratorOf, type HerdrSeat } from "../../../features/workspace/herdr";
+import { herdrSeats, type HerdrSeat } from "../../../features/workspace/herdr";
 import { paneTargets } from "../../../features/workspace/paneTargets";
 import { hostPeer, seatPeers, seatViews, type SeatView } from "./seatModel";
 
@@ -30,29 +30,33 @@ function usePeerList(client: HubClient) {
   return { peers, refresh };
 }
 
-function useOrchestratorPane(project: string) {
-  const [orch, setOrch] = useState<HerdrSeat | null>(null);
+function useLocalPanes(project: string) {
+  const [owned, setOwned] = useState<{ project: string; rows: HerdrSeat[] }>({ project, rows: [] });
+  const [version, setVersion] = useState(0);
+  const refresh = useCallback(() => setVersion(v => v + 1), []);
   useEffect(() => {
     let alive = true;
-    const look = () => { orchestratorOf(project).then(o => { if (alive) setOrch(o); }).catch(() => {}); };
+    const look = () => { herdrSeats().then(rows => { if (alive) setOwned({ project, rows: rows.filter(r => r.project === project) }); }).catch(() => {}); };
     look();
     const iv = setInterval(look, POLL_MS);
     return () => { alive = false; clearInterval(iv); };
-  }, [project]);
-  return orch;
+  }, [project, version]);
+  return { rows: owned.project === project ? owned.rows : [], refresh };
 }
 
 export function useWorkspaceData(client: HubClient, project: string): WorkspaceData {
-  const { peers, refresh } = usePeerList(client);
-  const orch = useOrchestratorPane(project);
+  const { peers, refresh: refreshPeers } = usePeerList(client);
+  const { rows, refresh: refreshPanes } = useLocalPanes(project);
+  const refresh = useCallback(() => { refreshPeers(); refreshPanes(); }, [refreshPeers, refreshPanes]);
   const cards = useTasks(client, project);
   const allHolds = usePendingHolds(client);
   const holds = useMemo(() => allHolds.filter(h => h.project === project), [allHolds, project]);
   const seats = useMemo(() => {
-    if (!peers) return null;
-    const targets = paneTargets(seatPeers(peers, project), orch, hostPeer(peers, project), project);
-    return seatViews(targets, holds);
-  }, [peers, orch, project, holds]);
+    if (!peers && !rows.length) return null;
+    const orch = rows.find(r => r.kind === "orch") ?? null;
+    const targets = paneTargets(seatPeers(peers ?? [], project), orch, hostPeer(peers ?? [], project), project);
+    return seatViews(targets, holds, rows.filter(r => r.kind === "helper"));
+  }, [peers, rows, project, holds]);
   return { seats, cards, holds, refresh };
 }
 

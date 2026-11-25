@@ -10,6 +10,7 @@ export type HerdrSeat = {
   surface: string;
   /** "herdr" = a crew seat, "orch" = the operator's own session hosted by `trantor open` */
   kind: string;
+  status?: string | null;
 };
 export type TerminalBytes = number[] | Uint8Array | ArrayBuffer;
 
@@ -26,7 +27,7 @@ export type SurfaceLocation = { surface: string | null; machine: string | null }
 export async function surfaceFor(project: string, agent: string, machine?: string): Promise<SurfaceLocation> {
   const seats = await herdrSeats();
   // Last row per (project, agent) already wins Rust-side; take the last match defensively.
-  const mine = seats.filter(s => s.project === project && s.agent === agent);
+  const mine = seats.filter(s => s.project === project && (s.kind === "helper" ? `helper:${s.surface}` === agent : s.agent === agent));
   if (mine.length) return { surface: mine[mine.length - 1].surface ?? null, machine: null };
   if (!machine?.trim()) return { surface: null, machine: null };
   return {

@@ -137,6 +137,7 @@ switch (cmd) {
     break;
   }
   case "state": run("bin/state.mjs"); break;
+  case "helper": run("bin/helper.mjs"); break;
   case "seats": case "seat": run("bin/seats.mjs"); break;
   case "seat-why": case "why": run("bin/seat-why.mjs"); break;
   case "seat-record": run("bin/seat-record.mjs"); break;
@@ -288,6 +289,7 @@ switch (cmd) {
   trantor secrets     provider keys in the OS keychain: list · set <NAME> (stdin) · remove <NAME> · migrate [--dry-run]
   trantor keys        identity keys in the OS keychain: status · migrate [--dry-run] · prune [--apply] [--idle-days N]
   trantor models      browse live models behind each seat + the router's pick per difficulty
+  trantor helper      run a visible helper pane | list --project <name> | stop <pane>
   trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek glm:zai-coding-plan
   trantor open        host THIS session as the project's orchestrator pane (trantor down spares it)
   trantor herdr       install|remove|status the login agent that keeps panes alive across a reboot

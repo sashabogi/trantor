@@ -780,7 +780,7 @@ pub(crate) fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
         let surface = fields[3].trim();
         // `orch` rides the same file as the crew seats (crew.sh records both). Dropping it here is
         // what made `trantor open` land a live pane the app could never show.
-        if (kind != "herdr" && kind != "orch")
+        if (kind != "herdr" && kind != "orch" && kind != "helper")
             || project.is_empty()
             || agent.is_empty()
             || surface.is_empty()
@@ -795,7 +795,7 @@ pub(crate) fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
             agent
         };
         by_seat.insert(
-            (project.to_string(), agent.to_string()),
+            (project.to_string(), if kind == "helper" { format!("helper:{surface}") } else { agent.to_string() }),
             HerdrSeat {
                 project: project.to_string(),
                 agent: agent.to_string(),
@@ -805,6 +805,13 @@ pub(crate) fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
         );
     }
     by_seat.into_values().collect()
+}
+
+#[derive(Serialize)]
+struct HerdrSeatState {
+    #[serde(flatten)]
+    seat: HerdrSeat,
+    status: Option<String>,
 }
 
 #[tauri::command]
@@ -817,7 +824,12 @@ pub(crate) fn herdr_seats() -> Result<String, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(format!("could not read herdr seat map: {e}")),
     };
-    serde_json::to_string(&parse_herdr_seats(&raw)).map_err(|e| e.to_string())
+    // #14264: helpers have no hub peer, so their pane supplies liveness and completion.
+    let seats: Vec<_> = parse_herdr_seats(&raw).into_iter().filter_map(|seat| {
+        let status = if seat.kind == "helper" { Some(herdr::agent_status(&seat.surface)?) } else { None };
+        Some(HerdrSeatState { seat, status })
+    }).collect();
+    serde_json::to_string(&seats).map_err(|e| e.to_string())
 }
 
 
@@ -882,6 +894,20 @@ pub(crate) fn restorables_from(rows: &str, live_panes: &std::collections::HashSe
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    // #14264: pane identity preserves helpers with duplicate labels and crew names.
+    #[test]
+    fn helper_rows_keep_each_pane_and_label() {
+        let rows = "p\thelper\treview\tw1:p1\thelper\t\np\thelper\treview\tw1:p2\thelper\t\np\therdr\treview\tw1:p3\np\thelper\treview\tw1:p1\thelper\t";
+        let seats = parse_herdr_seats(rows);
+        assert_eq!(seats.len(), 3);
+        let helpers: Vec<_> = seats.iter().filter(|s| s.kind == "helper").collect();
+        assert_eq!(helpers.len(), 2);
+        assert!(helpers.iter().all(|s| s.project == "p" && s.agent == "review"));
+        assert_eq!(helpers[0].surface, "w1:p1");
+        assert_eq!(helpers[1].surface, "w1:p2");
+        assert!(parse_herdr_seats("p\thelper\t\tw1:p1\thelper").is_empty());
+    }
 
     // #10007 — `ps -o etime=` speaks macOS's four shapes; anything else is no answer.
     #[test]

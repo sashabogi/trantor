@@ -7,6 +7,7 @@ fn allowed(args: &[String]) -> bool {
     match parts.as_slice() {
         ["balances", "--json"] | ["agent-settings", "status", "--json"] => true,
         ["up" | "down" | "seat-why", seat, "--json"] => seat_arg(seat),
+        ["helper", "stop", pane, "--json"] => seat_arg(pane),
         ["swap", seat, replacement, "--json"] => seat_arg(seat) && seat_arg(replacement),
         _ => false,
     }
@@ -25,6 +26,9 @@ mod tests {
     fn accepts(args: &[&str]) -> bool { allowed(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()) }
     #[test]
     fn only_scoped_crew_commands() {
+        assert!(accepts(&["helper", "stop", "w1:p2", "--json"]));
+        assert!(!accepts(&["helper", "run", "anything", "--json"]));
+        assert!(!accepts(&["helper", "stop", "--all", "--json"]));
         assert!(accepts(&["down", "glm", "--json"]));
         assert!(accepts(&["swap", "kimi", "glm:zai-coding-plan", "--json"]));
         assert!(!accepts(&["down", "--json"]));

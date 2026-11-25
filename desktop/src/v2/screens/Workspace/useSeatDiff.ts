@@ -9,7 +9,7 @@ const LIVE_MS = 15_000;
 
 export function useSeatDiff(project: string, seat: SeatView | undefined, live: boolean): DiffState {
   const [state, setState] = useState<DiffState>({ diff: null, error: null });
-  const agent = seat && !seat.isOrchestrator && !seat.machine ? seat.agent : null;
+  const agent = seat && !seat.isOrchestrator && !seat.isHelper && !seat.machine ? seat.agent : null;
   useEffect(() => {
     let alive = true;
     setState({ diff: null, error: null });

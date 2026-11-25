@@ -1,4 +1,5 @@
 // Pure seat model for the 2.0 Workspace: peers and hub holds in, chip and inspector facts out (#13987).
+import type { HerdrSeat } from "../../../features/workspace/herdr";
 import type { FileHold, Peer } from "../../../shared/api/client";
 import { hubActivity } from "../../../features/workspace/seatActivity";
 import { isAgentPeer, type PaneTarget } from "../../../features/workspace/paneTargets";
@@ -21,6 +22,7 @@ export type SeatView = {
   lastSeen?: number;
   machine?: string;
   isOrchestrator: boolean;
+  isHelper?: boolean;
   target: PaneTarget;
 };
 
@@ -53,16 +55,24 @@ export function presenceOf(t: PaneTarget, holds: FileHold[]): Presence {
   return "ready";
 }
 
-export function seatViews(targets: PaneTarget[], holds: FileHold[]): SeatView[] {
-  return targets.map(t => {
+export function seatViews(targets: PaneTarget[], holds: FileHold[], helpers: HerdrSeat[] = []): SeatView[] {
+  const crew = targets.map(t => {
     const presence = presenceOf(t, holds);
     return {
       key: t.key, label: t.label, agent: t.agent, brand: t.brand, session: t.session, presence,
       words: WORDS[presence], lastSeen: t.lastSeen, machine: t.machine, isOrchestrator: t.isOrchestrator, target: t,
     };
   });
+  // #14264: helpers stay after crew and use pane IDs so labels can repeat without attaching the wrong terminal.
+  return [...crew, ...helpers.map(t => {
+    const key = `helper:${t.surface}`;
+    const finished = t.status === "idle" || t.status === "done" || t.status === "finished";
+    const target: PaneTarget = { key, label: t.agent, agent: key, brand: "helper", session: key, online: true, status: t.status ?? undefined, isOrchestrator: false };
+    return { ...target, target, isHelper: true, presence: finished ? "ready" as const : "working" as const, words: finished ? "finished" : "running" };
+  })];
 }
 
+export const liveCrewSeats = (seats: SeatView[]) => liveSeats(seats).filter(s => !s.isHelper && !s.isOrchestrator);
 export const liveSeats = (seats: SeatView[]) => seats.filter(s => s.presence !== "offline");
 export const offlineSeats = (seats: SeatView[]) => seats.filter(s => s.presence === "offline");
 
@@ -90,4 +100,4 @@ export function visibleSeats(layout: Layout, live: SeatView[], selected: SeatVie
 }
 
 /** #14254: the orchestrator is spoken to in the chat panel, so only crew seats get the one-line message box. */
-export const takesSeatMessage = (seat: Pick<SeatView, "isOrchestrator">): boolean => !seat.isOrchestrator;
+export const takesSeatMessage = (seat: Pick<SeatView, "isOrchestrator" | "isHelper">): boolean => !seat.isOrchestrator && !seat.isHelper;

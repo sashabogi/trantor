@@ -19,6 +19,7 @@ export type TabSpec<T extends string = string> = {
   sub?: ReactNode;
   /** Show a close button; the bar's onClose receives the tab's id. */
   close?: boolean;
+  closeLabel?: string;
   /** The dirty dot, titled "Unsaved changes". */
   dirty?: boolean;
 };
@@ -74,7 +75,7 @@ export function Tabs<T extends string>(p: TabsProps<T>) {
                 {t.dirty && <span title="Unsaved changes" aria-label="Unsaved changes" role="img" className="h-[6px] w-[6px] shrink-0 rounded-full bg-[var(--v2-accent)]" />}
               </button>
               {t.close && p.onClose && (
-                <IconButton label={`Close ${t.label}`} title="Close tab" size={18} onClick={() => p.onClose?.(t.id)}>
+                <IconButton label={t.closeLabel ?? `Close ${t.label}`} title={t.closeLabel ?? "Close tab"} size={18} onClick={() => p.onClose?.(t.id)}>
                   <X size={11} aria-hidden />
                 </IconButton>
               )}

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient, type FileHold, type Peer } from "../../../shared/api/client";
 import type { Composer } from "../../../features/chat/Composer";
+import { surfaceFor, type HerdrSeat } from "../../../features/workspace/herdr";
 import type { PaneTarget } from "../../../features/workspace/paneTargets";
 import { WorkspaceScreen } from "./index";
 import { ComposerAdapter, judge } from "./ComposerAdapter";
@@ -55,11 +56,13 @@ function fakeClient(calls: Calls, holds: FileHold[] = []) {
 let host: HTMLDivElement;
 let root: Root;
 let ipc: { command: string; args: unknown }[];
+let localPanes: HerdrSeat[];
 beforeEach(() => {
   ipc = [];
+  localPanes = [];
   mockIPC((command, args) => {
     ipc.push({ command, args });
-    if (command === "herdr_seats") return "[]";
+    if (command === "herdr_seats") return JSON.stringify(localPanes);
     if (command === "identity_name") return "sasha";
     if (command === "autonomy_get") return JSON.stringify({ resolved: { harness: "prompt", push: false, commit: true } });
     if (command === "git_panel") return JSON.stringify({ branch: "seat/codex-8", upstream: null, ahead: 1, behind: null, status: [], counts: [], log: [] });
@@ -68,6 +71,7 @@ beforeEach(() => {
     if (command === "workspace_cli") {
       // SAFETY: workspace_cli is invoked with { project, args } by the crew control bridge.
       const argv = (args as { project: string; args: string[] }).args;
+      if (argv[0] === "helper" && argv[1] === "stop") localPanes = localPanes.filter(p => p.surface !== argv[2]);
       return argv[0] === "agent-settings" || argv[0] === "balances" ? CREW : JSON.stringify({ ok: true, action: argv[0], seat: argv[1] ?? "" });
     }
     if (command === "plugin:event|listen") return 1;
@@ -112,6 +116,43 @@ describe("seat strip", () => {
     expect(host.textContent).toContain("+1 offline");
     expect(host.querySelector('button[aria-label="Add a seat"]')).not.toBeNull();
     expect(host.querySelector('[role="group"][aria-label="Layout"]')).not.toBeNull();
+  });
+});
+
+// #14264: helpers have terminal tabs and pane controls without acquiring crew identities.
+describe("helper panes", () => {
+  it("shows helpers after crew, excludes them from the count and messages, and stops by pane", async () => {
+    localPanes = [
+      { project: "trantor", kind: "helper", agent: "review", surface: "w1:p2", status: "working" },
+      { project: "trantor", kind: "helper", agent: "review", surface: "w1:p3", status: "idle" },
+      { project: "other", kind: "helper", agent: "hidden", surface: "w2:p1", status: "working" },
+    ];
+    await mountScreen(fakeClient([]));
+    const tabs = [...host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')];
+    expect(tabs.map(t => t.textContent)).toEqual([expect.stringContaining("codex-8working"), expect.stringContaining("glm-5ready"), expect.stringContaining("reviewhelperrunning"), expect.stringContaining("reviewhelperfinished")]);
+    expect(host.textContent).toContain("2 seats live");
+    await click(tabs[2]);
+    expect(terminalAgents()).toEqual(["helper:w1:p2"]);
+    expect(host.querySelector('input[placeholder*="Message"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Send to review"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Message review"]')).toBeNull();
+    expect(await surfaceFor("trantor", "helper:w1:p2")).toEqual({ surface: "w1:p2", machine: null });
+    expect(await surfaceFor("trantor", "helper:w1:p3")).toEqual({ surface: "w1:p3", machine: null });
+    await click(host.querySelector('button[aria-label="Stop review"]'));
+    expect(ipc).toContainEqual({ command: "workspace_cli", args: { project: "trantor", args: ["helper", "stop", "w1:p2", "--json"] } });
+    expect(host.querySelectorAll('button[aria-label="Stop review"]')).toHaveLength(1);
+    expect(host.textContent).not.toContain("reviewhelperrunning");
+  });
+
+  it("includes helper terminals in Split and Grid", async () => {
+    localPanes = [{ project: "trantor", kind: "helper", agent: "check", surface: "w1:p4", status: "working" }];
+    await mountScreen(fakeClient([]));
+    await click(chipFor("check"));
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Split") ?? null);
+    expect(terminalAgents()).toEqual(["helper:w1:p4", "codex-8"]);
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Grid") ?? null);
+    expect(terminalAgents()).toEqual(["codex-8", "glm-5", "helper:w1:p4"]);
+    expect(takesSeatMessage({ isOrchestrator: false, isHelper: true })).toBe(false);
   });
 });
 

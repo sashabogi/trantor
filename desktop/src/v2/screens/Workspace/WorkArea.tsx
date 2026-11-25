@@ -36,6 +36,7 @@ function TabBody({ tab, project, seat, diff }: { tab: WorkTab; project: string; 
   if (tab === "terminal") {
     return <div className="flex min-h-[360px] min-w-0 flex-1 flex-col p-2"><SeatTerminal project={project} seat={seat} interactive /></div>;
   }
+  if (seat.isHelper) return <NotWired title="Changes" line="Helpers keep their output in the terminal." />;
   if (seat.isOrchestrator) return <NotWired title="Changes" line="The orchestrator works in the project checkout; open Code to review it." />;
   if (seat.machine) return <NotWired title="Changes" line={`${seat.label} runs on ${seat.machine}; its diff is not readable from here yet.`} />;
   return <Suspense fallback={<div className="p-4 text-v2-base text-[var(--v2-muted)]">Loading the diff view</div>}><ChangesTab state={diff} seatName={seat.label} /></Suspense>;
@@ -59,7 +60,7 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
         activeId={tab} onSelect={onTab}
         end={<span className="inline-flex items-center gap-[5px] text-v2-small text-[var(--v2-muted)]">
           <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: seat.presence === "offline" ? "var(--v2-track)" : "var(--v2-ok)" }} />
-          {seat.presence === "offline" ? "offline" : "live"}{seat.machine ? ` · ${seat.machine}` : ""}
+          {seat.isHelper ? seat.words : seat.presence === "offline" ? "offline" : "live"}{seat.machine ? ` · ${seat.machine}` : ""}
         </span>} />
       <TabBody tab={tab} project={project} seat={seat} diff={diff} />
       <Approval client={client} holds={holds} seatName={seat.label} onDecided={onDecided} />

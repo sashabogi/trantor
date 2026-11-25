@@ -6,7 +6,7 @@ import { PRESENCE_COLOR } from "../../ui/identity";
 import { Seg, type SegOption } from "../../ui/Seg";
 import { Tabs, type TabSpec } from "../../ui/Tabs";
 import { PopMenu } from "./PopMenu";
-import { liveSeats, offlineNote, offlineSeats, type Layout, type SeatView } from "./seatModel";
+import { liveCrewSeats, liveSeats, offlineNote, offlineSeats, type Layout, type SeatView } from "./seatModel";
 import type { Crew } from "./useCrew";
 
 const LAYOUTS: readonly SegOption<Layout>[] = [
@@ -20,15 +20,18 @@ export function SeatStrip({ seats, selectedKey, onSelect, layout, onLayout, crew
   layout: Layout; onLayout: (l: Layout) => void; crew: Crew; recording: boolean; onRecord: () => void;
 }) {
   const offline = offlineSeats(seats);
-  const tabs: TabSpec[] = liveSeats(seats).map(s => ({
+  const tabs: TabSpec[] = [...liveSeats(seats).filter(s => !s.isHelper), ...liveSeats(seats).filter(s => s.isHelper)].map(s => ({
     id: s.key,
     label: s.label,
     title: s.session,
+    close: s.isHelper && !crew.busy,
+    closeLabel: s.isHelper ? `Stop ${s.label}` : undefined,
     leading: <Avatar name={s.brand} size={22} presence={s.presence} surface="var(--v2-bg)" />,
-    sub: <span className="text-v2-small" style={{ color: s.presence === "working" || s.isOrchestrator ? "var(--v2-muted)" : PRESENCE_COLOR[s.presence] }}>{s.isOrchestrator ? "you" : s.words}</span>,
+    sub: <>{s.isHelper && <span className="rounded-sm bg-[var(--v2-sunken)] px-1 text-v2-micro text-[var(--v2-muted)]">helper</span>}<span className="text-v2-small" style={{ color: s.presence === "working" || s.isOrchestrator ? "var(--v2-muted)" : PRESENCE_COLOR[s.presence] }}>{s.isOrchestrator ? "you" : s.words}</span></>,
   }));
   return (
     <Tabs label="Seats" pane="var(--v2-bg)" barClassName="h-[38px] px-5" tabs={tabs} activeId={selectedKey} onSelect={onSelect}
+      onClose={key => { const helper = seats.find(s => s.key === key && s.isHelper); if (helper) void crew.stopHelper(helper.agent.slice("helper:".length)); }}
       actions={<>
         {offline.length > 0 && (
           <PopMenu heading="Offline seats" empty="No offline seats"
@@ -49,6 +52,7 @@ export function SeatStrip({ seats, selectedKey, onSelect, layout, onLayout, crew
           )} />
       </>}
       end={<>
+        <span className="text-v2-small text-[var(--v2-muted)]">{liveCrewSeats(seats).length} seats live</span>
         <Seg label="Layout" options={LAYOUTS} value={layout} onChange={onLayout} />
         <button type="button" aria-pressed={recording} onClick={onRecord}
           title="Record a drill: opens Drill Mode, which stages a disposable project and captures the evidence"

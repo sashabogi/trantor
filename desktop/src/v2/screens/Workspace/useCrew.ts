@@ -1,4 +1,5 @@
 // Crew controls for the 2.0 Workspace: the classic crew CLI bridge, start, stop and swap (#13987).
+import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
 import { availableAgent, crewApi, startFailureReason, type CrewApi, type CrewCatalog } from "../../../features/workspace/crewControlApi";
 import type { AgentStatus } from "../../../features/settings/agents/agentSettings";
@@ -13,6 +14,7 @@ export type Crew = {
   busy: boolean;
   start: (seat: string) => Promise<void>;
   stop: (seat: string) => Promise<void>;
+  stopHelper: (pane: string) => Promise<void>;
   swap: (seat: string, replacement: string) => Promise<void>;
   dismiss: () => void;
 };
@@ -61,6 +63,10 @@ export function useCrew(project: string, onChanged: () => void, api: CrewApi = c
     notice, busy,
     start: seat => run(seat, "starting", () => api.action(project, "up", launchOf(seat))),
     stop: seat => run(seat, "stopping", () => api.action(project, "down", seat)),
+    stopHelper: pane => run(pane, "stopping", async () => {
+      await invoke<string>("workspace_cli", { project, args: ["helper", "stop", pane, "--json"] });
+      return { ok: true };
+    }),
     swap: (seat, replacement) => run(seat, "swapping", () => api.action(project, "swap", seat, launchOf(replacement))),
     dismiss: () => setNotice(null),
   };

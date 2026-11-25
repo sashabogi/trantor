@@ -93,7 +93,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   };
 
   // The same scoping the Files sheet used: a crew seat on this machine shows its worktree, anything else the project checkout.
-  const scope = selected && !selected.isOrchestrator && !selected.machine ? selected.agent : null;
+  const scope = selected && !selected.isOrchestrator && !selected.isHelper && !selected.machine ? selected.agent : null;
   // #14047 drill: the seat rows under Branches and seats, branch and ahead count included.
   const { seats: seatInfos } = useSeats(client, project);
   // A row click in the sidebar's Branches and seats section: that seat in the strip, the main checkout row the orchestrator.
@@ -127,12 +127,13 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />
-        {selected && <Inspector key={selected.key} project={project} seat={selected} card={cardOf(data.cards, selected)}
+        {selected && !selected.isHelper && <Inspector key={selected.key} project={project} seat={selected} card={cardOf(data.cards, selected)}
           mayDo={mayDo} crew={crew} onNavigate={onNavigate} onMessage={message} />}
+        {selected?.isHelper && crew.notice && <div role="status" className="px-5 py-2 text-v2-body text-[var(--v2-muted)]">{crew.notice.text}</div>}
         {body}
       </div>
       <ChatColumn col={chatCol} workspace={workspaceRef}>
-        <RightPanel project={project} seat={selected} orchestrator={seats.find(s => s.isOrchestrator)}
+        <RightPanel project={project} seat={selected?.isHelper ? undefined : selected} orchestrator={seats.find(s => s.isOrchestrator)}
           changed={diff.diff?.files.length ?? 0} onNavigate={onNavigate} wake={wake} onClose={() => chatCol.setOpen(false)} />
       </ChatColumn>
       {recording && (me
