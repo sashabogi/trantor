@@ -8,7 +8,7 @@ import { getCommands, useRegisterCommands } from "./commands";
 import { setOpenIntent } from "./openIntent";
 import { shellCommands } from "./shellCommands";
 import type { Mode } from "./shellMode";
-import { inTerminal, matchesShortcut } from "./shortcuts";
+import { appChordFromTerminal, inTerminal, matchesShortcut } from "./shortcuts";
 
 type Overlay = "quick-open" | "commands" | null;
 
@@ -16,7 +16,7 @@ type Overlay = "quick-open" | "commands" | null;
 function useChords() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (inTerminal(e)) return;
+      if (inTerminal(e) && !appChordFromTerminal(e)) return;
       const command = getCommands().find(c => c.shortcut && !c.listOnly && matchesShortcut(e, c.shortcut));
       if (!command || (command.when && !command.when())) return;
       e.preventDefault();

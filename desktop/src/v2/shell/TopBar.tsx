@@ -1,5 +1,5 @@
 // Top bar from the Workspace/Dashboard artboards: project switcher, mode, search, bell, account (#v2-F).
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Bell, ChevronDown, Code2, Network, Plus, Search, SplitSquareHorizontal } from "lucide-react";
 import { Seg, type SegOption } from "../ui/Seg";
 import { IconButton } from "../ui/IconButton";
@@ -31,8 +31,30 @@ export type TopBarProps = {
   notice?: ReactNode;
 };
 
+/** Case-insensitive substring filter over project names (#14268). */
+export function filterProjects(projects: string[], query: string): string[] {
+  const q = query.trim().toLowerCase();
+  return q ? projects.filter(p => p.toLowerCase().includes(q)) : projects;
+}
+
 function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<TopBarProps, "projects" | "project" | "onProject" | "onStartProject">) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const field = useRef<HTMLInputElement>(null);
+  const shown = filterProjects(projects, query);
+  useEffect(() => { if (open) { setQuery(""); setCursor(Math.max(0, projects.indexOf(project))); field.current?.focus(); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const choose = (p: string) => { onProject(p); setOpen(false); };
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (shown.length) setCursor(c => (c + (e.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const pick = shown[Math.min(cursor, shown.length - 1)];
+      if (pick) choose(pick);
+    }
+  };
   return (
     <div className="relative">
       <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(o => !o)}
@@ -43,15 +65,19 @@ function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<
         <ChevronDown size={12} aria-hidden />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} label="Projects">
+        <input ref={field} type="text" aria-label="Find a project" placeholder="Find a project" value={query}
+          onChange={e => { setQuery(e.target.value); setCursor(0); }} onKeyDown={onKeyDown}
+          className="mb-1 w-full rounded-md border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-2 py-1.5 text-v2-base text-[var(--v2-text)]" />
         <MenuItem onSelect={() => { setOpen(false); onStartProject(); }} title="Create a project and wake its orchestrator (⌘N)">
           <Plus size={14} aria-hidden /><span className="flex-1">Start a project</span><Kbd>⌘N</Kbd>
         </MenuItem>
-        {projects.map(p => (
-          <MenuItem key={p} active={p === project} onSelect={() => { onProject(p); setOpen(false); }}>
+        {shown.map((p, i) => (
+          <MenuItem key={p} active={i === cursor} onSelect={() => choose(p)}>
             <ProjectTile name={p} size={20} />{p}
           </MenuItem>
         ))}
         {!projects.length && <div className="px-2 py-1.5 text-v2-body text-[var(--v2-muted)]">No projects pinned. Run trantor hub set</div>}
+        {!!projects.length && !shown.length && <div className="px-2 py-1.5 text-v2-body text-[var(--v2-muted)]">No project matches</div>}
       </Popover>
     </div>
   );

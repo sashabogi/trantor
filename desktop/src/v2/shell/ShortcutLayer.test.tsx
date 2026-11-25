@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// Cmd+P and Cmd+Shift+P work from any screen, win over the editor, and stay out of a terminal.
+// Cmd+P and Cmd+Shift+P work from any screen, win over the editor, and work from a terminal on Cmd only.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -124,17 +124,16 @@ describe("where the chords apply", () => {
     editor.closest(".monaco-editor")?.remove();
   });
 
-  it("ignores the chords inside a terminal", () => {
+  it("opens Go to file and the palette from inside a terminal on Cmd, but not on Ctrl (#14268)", () => {
     document.body.insertAdjacentHTML("beforeend", '<div class="xterm"><textarea id="term"></textarea></div>');
     const term = document.getElementById("term")!;
-    const seen = vi.fn();
-    term.addEventListener("keydown", seen);
     mount();
-    press({ key: "p", metaKey: true }, term);
-    press({ key: "P", metaKey: true, shiftKey: true }, term);
+    press({ key: "p", ctrlKey: true }, term);
     expect(dialog("Go to file")).toBeNull();
-    expect(dialog("Command palette")).toBeNull();
-    expect(seen).toHaveBeenCalledTimes(2);
+    press({ key: "p", metaKey: true }, term);
+    expect(dialog("Go to file")).not.toBeNull();
+    press({ key: "P", metaKey: true, shiftKey: true }, term);
+    expect(dialog("Command palette")).not.toBeNull();
     term.closest(".xterm")?.remove();
   });
 

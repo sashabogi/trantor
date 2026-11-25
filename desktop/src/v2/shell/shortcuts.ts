@@ -41,3 +41,8 @@ export function formatShortcut(shortcut: string, mac: boolean = isMac()): string
 export function inTerminal(event: KeyboardEvent): boolean {
   return event.target instanceof Element && event.target.closest(".xterm") !== null;
 }
+
+/** Command chords reach the app from inside a terminal (#14268); Ctrl+key stays with the shell, and copy and paste stay with the terminal. */
+export function appChordFromTerminal(event: KeyboardEvent): boolean {
+  return event.metaKey && !event.ctrlKey && !["c", "v", "x", "a"].includes(event.key.toLowerCase());
+}

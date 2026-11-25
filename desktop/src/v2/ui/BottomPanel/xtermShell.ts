@@ -2,6 +2,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { appChordFromTerminal } from "../../shell/shortcuts";
 import type { ShellSession } from "./shellStore";
 
 const THEME = {
@@ -24,6 +25,8 @@ export function createXtermShell(): ShellSession {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  // #14268: Cmd chords belong to the app, so xterm leaves them alone; Ctrl keys still reach the shell.
+  term.attachCustomKeyEventHandler(e => !appChordFromTerminal(e));
   term.open(el);
   return {
     write: bytes => term.write(bytes),
