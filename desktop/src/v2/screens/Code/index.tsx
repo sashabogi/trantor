@@ -72,10 +72,17 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     setScope(seat);
     setKey(null);
     if (intent.kind === "file") openTab({ id: `file:${seat ?? ""}:${intent.path}`, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
-    else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); }
+    else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
     else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
     else activateTab("source");
   }, [project, openTab, activateTab]);
+  // #14084 drill: a file with no uncommitted change has no diff to land on, so its tab opens instead of an unrelated change.
+  const [wantChange, setWantChange] = useState<string | null>(null);
+  useEffect(() => {
+    if (!wantChange || !snap) return;
+    setWantChange(null);
+    if (!snap.status.some(s => s.path === wantChange)) openTab({ id: `file:${scope ?? ""}:${wantChange}`, kind: "file", label: base(wantChange), scope, path: wantChange });
+  }, [wantChange, snap, scope, openTab]);
   const picker: PickerActions = {
     onCheckout: () => pick(null),
     onSeat: seat => pick(seat),

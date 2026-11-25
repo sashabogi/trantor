@@ -108,9 +108,9 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
   const style: CSSProperties = { maxHeight: prompts.length * MAX_GAP + 16 };
   if (frame) { style.marginTop = frame.top; style.height = frame.height; }
   return (
-    <nav aria-label="Prompt timeline" style={style} className="flex w-4 shrink-0 flex-col items-center justify-between self-start py-2">
+    <nav aria-label="Prompt timeline" style={style} className="flex w-4 shrink-0 flex-col items-center self-start py-2">
       {prompts.map((p, i) => (
-        <div key={p.id} className="relative flex h-3 min-h-0 w-full shrink items-center justify-center"
+        <div key={p.id} className="relative flex min-h-0 w-full flex-1 items-center justify-center"
           onMouseEnter={() => setShown(i)} onMouseLeave={() => setShown(null)}
           onFocus={() => { setShown(i); setRove(i); }}
           onBlur={e => {
@@ -120,7 +120,7 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
           <button type="button" ref={el => { ticks.current[i] = el; }} aria-label={tickLabel(i, prompts.length, p.text)}
             aria-current={i === active ? "true" : undefined} tabIndex={i === tabbable ? 0 : -1}
             onClick={() => jump(p.id)} onKeyDown={e => onKey(e, i)}
-            className="flex h-3 w-full items-center justify-center">
+            className="flex h-full min-h-3 w-full items-center justify-center">
             <span aria-hidden className="block h-[2px] w-2.5 rounded-full"
               style={{ background: i === active ? "var(--v2-accent)" : "var(--v2-edge-2)" }} />
           </button>

@@ -87,6 +87,14 @@ describe("open intent", () => {
     expect(takeOpenIntent("trantor")).toBeUndefined();
   });
 
+  // #14084 drill: the timeline named a file committed long ago, and the click landed on an unrelated change.
+  it("a change intent for a file with no uncommitted change opens the file itself", async () => {
+    setOpenIntent("trantor", { kind: "change", path: "src/committed.ts" });
+    await mount();
+    const active = host.querySelector('[role="tab"][aria-selected="true"]');
+    expect(active?.textContent).toContain("committed.ts");
+  });
+
   it("a commit intent switches to History with that commit selected", async () => {
     setOpenIntent("trantor", { kind: "commit", sha: "fedcba9" });
     await mount();
