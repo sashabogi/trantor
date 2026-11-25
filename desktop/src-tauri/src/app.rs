@@ -184,6 +184,7 @@ pub fn run() {
             project_files,
             search_files,
             crate::text_search::search_text,
+            crate::output_log::output_log_read,
             read_file,
             file_stat,
             file_diff,

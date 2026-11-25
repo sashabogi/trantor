@@ -31,6 +31,7 @@ mod hub;
 mod crew_controls;
 mod files;
 mod text_search;
+mod output_log;
 mod chat;
 mod watchers;
 mod panes;
