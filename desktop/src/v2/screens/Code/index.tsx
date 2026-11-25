@@ -106,10 +106,13 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
         <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} />
         {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
-        <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
-          selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
-          onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty}
-          liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
+        {/* #14071: the tab's body always fills the column, so the panel stays at the bottom under short content. */}
+        <div data-testid="code-main" className="flex min-h-0 flex-1 flex-col overflow-auto">
+          <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
+            selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
+            onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty}
+            liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
+        </div>
         {/* #14080: keyed by project so one project never shows another project's shell. */}
         <BottomPanel terminal={<Terminals key={project} project={project} />} output={<Output />} />
       </div>

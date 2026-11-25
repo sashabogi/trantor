@@ -65,6 +65,15 @@ const mount = async () => { await act(async () => { root.render(<CodeScreen clie
 const click = async (sel: string) => { await act(async () => { host.querySelector<HTMLElement>(sel)?.click(); }); await flush(); };
 
 describe("CodeScreen", () => {
+  // #14071 drill on rock-os: under a short tab body the panel floated mid-column with empty space below it.
+  it("lets the tab body fill the column so the bottom panel sits under it at the bottom", async () => {
+    await mount();
+    const body = host.querySelector('[data-testid="code-main"]');
+    expect(body?.className).toContain("flex-1");
+    const panel = body?.nextElementSibling;
+    expect(panel?.matches('section[aria-label="Bottom panel"]') || panel?.querySelector('button[aria-label="Open bottom panel"]') != null).toBe(true);
+  });
+
   it("folds the source control sidebar into the icon bar while the Source control tab is open", async () => {
     await mount();
     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain("Source control");
