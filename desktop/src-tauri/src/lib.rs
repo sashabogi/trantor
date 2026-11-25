@@ -4,6 +4,7 @@
 
 mod code_attribution;
 mod herdr;
+mod shell_terminal;
 mod asks;
 mod dismissals;
 mod drill_mode;

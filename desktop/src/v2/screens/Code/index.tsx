@@ -5,6 +5,7 @@ import { takeOpenIntent } from "../../shell/openIntent";
 import type { Card } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
 import { BottomPanel } from "../../ui/BottomPanel";
+import { Terminals } from "../../ui/BottomPanel/Terminals";
 import { conflictPaths } from "../../../features/code/gitApi";
 import type { ScreenProps } from "../../routes";
 import { NotWiredBlock } from "./parts";
@@ -108,7 +109,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
           onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty}
           liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
-        <BottomPanel />
+        {/* #14080: keyed by project so one project never shows another project's shell. */}
+        <BottomPanel terminal={<Terminals key={project} project={project} />} />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
     </div>

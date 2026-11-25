@@ -41,6 +41,8 @@ fn avoid_splitting_marker(bytes: &[u8], end: usize) -> usize {
 }
 
 type ByteSink = Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>;
+/// Called once with the sub when a child's output ends (it exited, or detach killed it).
+pub(crate) type EndSink = Arc<dyn Fn(u64) + Send + Sync + 'static>;
 
 struct TerminalSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -54,9 +56,9 @@ struct TerminalSession {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DetachReport {
-    pid: Option<u32>,
-    reaped: bool,
+pub(crate) struct DetachReport {
+    pub(crate) pid: Option<u32>,
+    pub(crate) reaped: bool,
 }
 
 /// What a target-keyed attach did: the subscription id to stream from, and — when a previous
@@ -86,7 +88,17 @@ pub struct TerminalManager {
 
 impl TerminalManager {
     fn attach_command(&self, cmd: CommandBuilder, on_bytes: ByteSink) -> Result<u64, String> {
-        self.attach_session(None, cmd, on_bytes)
+        self.attach_session(None, cmd, on_bytes, None)
+    }
+
+    /// A plain shell child (#14080): unkeyed, so the one-attach-per-pane rule never merges two.
+    pub(crate) fn attach_shell(
+        &self,
+        cmd: CommandBuilder,
+        on_bytes: ByteSink,
+        on_end: EndSink,
+    ) -> Result<u64, String> {
+        self.attach_session(None, cmd, on_bytes, Some(on_end))
     }
 
     fn attach_session(
@@ -94,6 +106,7 @@ impl TerminalManager {
         target: Option<String>,
         mut cmd: CommandBuilder,
         on_bytes: ByteSink,
+        on_end: Option<EndSink>,
     ) -> Result<u64, String> {
         cmd.env("PATH", crate::terminal_path());
         crate::identity_env::scrub_pty_command(&mut cmd);
@@ -122,6 +135,7 @@ impl TerminalManager {
         let killer = child.clone_killer();
         let reaped = Arc::new(AtomicBool::new(false));
         let reaped_for_waiter = Arc::clone(&reaped);
+        let sub = self.next_sub.fetch_add(1, Ordering::SeqCst) + 1;
 
         thread::spawn(move || {
             let _ = child.wait();
@@ -141,9 +155,11 @@ impl TerminalManager {
                     Err(_) => break,
                 }
             }
+            if let Some(end) = on_end {
+                crate::guard_boundary("terminal pty end", || end(sub));
+            }
         });
 
-        let sub = self.next_sub.fetch_add(1, Ordering::SeqCst) + 1;
         let session = Arc::new(TerminalSession {
             master: Mutex::new(pair.master),
             writer: Mutex::new(writer),
@@ -175,12 +191,12 @@ impl TerminalManager {
             Some(old_sub) => self.detach(old_sub).ok(),
             None => None,
         };
-        let sub = self.attach_session(Some(target.to_string()), cmd, on_bytes)?;
+        let sub = self.attach_session(Some(target.to_string()), cmd, on_bytes, None)?;
         crate::lock_or_recover(&self.targets).insert(target.to_string(), sub);
         Ok(AttachOutcome { sub, replaced })
     }
 
-    fn write(&self, sub: u64, data: &str) -> Result<usize, String> {
+    pub(crate) fn write(&self, sub: u64, data: &str) -> Result<usize, String> {
         let session = self.session(sub)?;
         let mut writer = crate::lock_or_recover(&session.writer);
         let bytes = data.as_bytes();
@@ -207,7 +223,7 @@ impl TerminalManager {
         Ok(chunks)
     }
 
-    fn resize(&self, sub: u64, cols: u16, rows: u16) -> Result<(), String> {
+    pub(crate) fn resize(&self, sub: u64, cols: u16, rows: u16) -> Result<(), String> {
         let session = self.session(sub)?;
         let result = {
             let master = crate::lock_or_recover(&session.master);
@@ -223,7 +239,7 @@ impl TerminalManager {
         result
     }
 
-    fn detach(&self, sub: u64) -> Result<DetachReport, String> {
+    pub(crate) fn detach(&self, sub: u64) -> Result<DetachReport, String> {
         let session = crate::lock_or_recover(&self.sessions)
             .remove(&sub)
             .ok_or_else(|| format!("unknown terminal subscription {sub}"))?;

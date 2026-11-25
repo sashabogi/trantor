@@ -290,7 +290,8 @@ pub fn run() {
             remote_terminal::remote_herdr_surface,
             terminal::term_write,
             terminal::term_resize,
-            terminal::term_detach
+            terminal::term_detach,
+            shell_terminal::term_shell_open
             ];
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || handler(invoke))) {
                 Ok(handled) => handled,

@@ -81,6 +81,14 @@ pub(crate) fn scrub_pty_command(command: &mut portable_pty::CommandBuilder) {
     for key in inherited_identity() {
         command.env_remove(key);
     }
+    let carried: Vec<String> = command
+        .iter_full_env_as_str()
+        .map(|(key, _)| key.to_string())
+        .filter(|key| is_identity_key(OsStr::new(key)))
+        .collect();
+    for key in carried {
+        command.env_remove(key);
+    }
 }
 
 /// Headless real-binary probe for the launch contract. It spawns a child through the same factory
