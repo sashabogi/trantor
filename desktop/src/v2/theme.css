@@ -10,6 +10,7 @@
   --v2-edge: #22252B;
   --v2-edge-2: #2A2E36;
   --v2-track: #3A3F47;
+  --v2-knob: #FFFFFF;
   --v2-text: #E7E9EC;
   --v2-text-2: #C4C8CE;
   --v2-muted: #9AA0A8;
@@ -26,6 +27,30 @@
   --v2-bad-soft: rgba(229, 138, 138, 0.12);
   --v2-info: #8AA8FF;
   --v2-ink: #0E0F12;
+  --v2-faint: #6B717A;
+  --v2-card: #15171B;
+  --v2-card-selected: #1B1E26;
+  --v2-side: #0F1013;
+  --v2-sunken: #111316;
+  --v2-edge-soft: #1D2025;
+  --v2-warn-panel: #18160E;
+  --v2-medium: #E2B86B;
+  --v2-proposal: #CDB1FF;
+  --v2-ok-edge: #24402F;
+  --v2-bad-edge: #4A2A2A;
+  --v2-bad-hover: rgba(229, 138, 138, 0.2);
+  --v2-info-edge: #3E4A7A;
+  --v2-info-soft: #22263A;
+  --v2-accent-edge: #2E3A5A;
+  --v2-brand-claude: #D97757;
+  --v2-diff-add: rgba(124, 196, 154, 0.10);
+  --v2-diff-del: rgba(229, 138, 138, 0.10);
+  --v2-scrim: rgba(0, 0, 0, 0.45);
+  --v2-scrim-soft: rgba(0, 0, 0, 0.40);
+  --v2-shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --v2-shadow-menu-up: 0 -12px 32px rgba(0, 0, 0, 0.5);
+  --v2-shadow-dialog: 0 16px 40px rgba(0, 0, 0, 0.5);
+  --v2-shadow-sheet: 0 20px 60px rgba(0, 0, 0, 0.55);
   --v2-font: Inter, system-ui, -apple-system, "Helvetica Neue", sans-serif;
   --v2-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }

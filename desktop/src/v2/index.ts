@@ -6,6 +6,9 @@ export { ProjectTile, type ProjectTileProps } from "./ui/ProjectTile"; // projec
 export { Chip, type ChipProps, type ChipTone } from "./ui/Chip"; // small status label: neutral, ok, warn, bad, info
 export { Button, type ButtonProps, type ButtonVariant } from "./ui/Button"; // text button: primary, ghost, quiet, danger; disabledReason explains itself
 export { IconButton, type IconButtonProps } from "./ui/IconButton"; // icon-only button; label and title are required
+export { Toggle, type ToggleProps } from "./ui/Toggle"; // on/off switch with the same state label everywhere
+export { Checkbox, type CheckboxProps } from "./ui/Checkbox"; // native keyboard semantics, Graphite check styling
+export { Select, type SelectProps } from "./ui/Select"; // native keyboard semantics, Graphite field styling
 export { Ring, type RingProps } from "./ui/Ring"; // context-used ring with the percent inside, amber from 75
 export { Seg, type SegProps, type SegOption } from "./ui/Seg"; // segmented control (mode switch, view toggles)
 export { Section, type SectionProps } from "./ui/Section"; // titled panel card with optional sub line and actions

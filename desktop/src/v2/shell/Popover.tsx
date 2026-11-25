@@ -20,7 +20,7 @@ export function Popover({ open, onClose, label, align = "left", children }: {
   if (!open) return null;
   return (
     <div ref={ref} role="menu" aria-label={label}
-      className={`absolute top-[calc(100%+6px)] z-50 min-w-[220px] max-h-[60vh] overflow-y-auto rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[0_12px_32px_rgba(0,0,0,0.45)] ${align === "right" ? "right-0" : "left-0"}`}>
+      className={`absolute top-[calc(100%+6px)] z-50 min-w-[220px] max-h-[60vh] overflow-y-auto rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[var(--v2-shadow-menu)] ${align === "right" ? "right-0" : "left-0"}`}>
       {children}
     </div>
   );

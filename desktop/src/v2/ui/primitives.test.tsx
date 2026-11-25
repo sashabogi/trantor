@@ -12,6 +12,9 @@ import { Ring } from "./Ring";
 import { Seg } from "./Seg";
 import { Section } from "./Section";
 import { Kbd } from "./Kbd";
+import { Toggle } from "./Toggle";
+import { Checkbox } from "./Checkbox";
+import { Select } from "./Select";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -122,6 +125,52 @@ describe("Seg", () => {
     expect(b.getAttribute("aria-pressed")).toBe("false");
     act(() => b.click());
     expect(onChange).toHaveBeenCalledWith("b");
+  });
+});
+
+describe("Toggle, Checkbox and Select", () => {
+  it("keeps the switch role, On/Off word and token-coloured knob", () => {
+    const onToggle = vi.fn();
+    render(<Toggle label="Notifications" on={false} onToggle={onToggle} />);
+    const toggle = host.querySelector<HTMLButtonElement>('[role="switch"]');
+    expect(toggle?.getAttribute("aria-checked")).toBe("false");
+    expect(toggle?.getAttribute("aria-label")).toBe("Notifications");
+    expect(host.querySelector("[data-switch-state]")?.textContent).toBe("Off");
+    expect(toggle?.querySelector("span")?.className).toContain("bg-[var(--v2-knob)]");
+    act(() => toggle?.click());
+    expect(onToggle).toHaveBeenCalledOnce();
+    render(<Toggle label="Notifications" on onToggle={onToggle} disabled />);
+    expect(host.querySelector<HTMLButtonElement>('[role="switch"]')?.disabled).toBe(true);
+  });
+
+  it("uses a labelled native checkbox with checked and disabled states", () => {
+    const onChange = vi.fn();
+    render(<Checkbox aria-label="Amend last commit" checked={false} onChange={onChange} />);
+    const checkbox = host.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(checkbox?.type).toBe("checkbox");
+    checkbox?.focus();
+    expect(document.activeElement).toBe(checkbox);
+    act(() => checkbox?.click());
+    expect(onChange).toHaveBeenCalledOnce();
+    render(<Checkbox aria-label="Amend last commit" checked disabled readOnly />);
+    const disabled = host.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(disabled?.checked).toBe(true);
+    expect(disabled?.disabled).toBe(true);
+  });
+
+  it("uses a native select and reports the chosen option", () => {
+    const onChange = vi.fn();
+    render(<Select aria-label="Open code in" value="vscode" onChange={onChange}><option value="vscode">VS Code</option><option value="zed">Zed</option></Select>);
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Open code in"]');
+    expect(select?.value).toBe("vscode");
+    act(() => {
+      if (!select) return;
+      select.value = "zed";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onChange).toHaveBeenCalledOnce();
+    render(<Select aria-label="Open code in" disabled><option>VS Code</option></Select>);
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="Open code in"]')?.disabled).toBe(true);
   });
 });
 

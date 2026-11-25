@@ -23,7 +23,7 @@ export function Picker({ label, placeholder, query, onQuery, onKeyDown, onClose,
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => { input.current?.focus(); }, []);
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-[12vh]"
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--v2-scrim-soft)] pt-[12vh]"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
       <div role="dialog" aria-label={label} className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] shadow-2xl">
         <div className="flex items-center gap-2.5 border-b border-[var(--v2-edge)] px-4 py-3">

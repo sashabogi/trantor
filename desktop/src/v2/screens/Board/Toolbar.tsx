@@ -30,7 +30,7 @@ function QuickChip({ label, count, on, onClick, title, disabledReason }: {
   return (
     <button type="button" aria-pressed={on} disabled={off} onClick={onClick} title={disabledReason ?? title}
       className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-[10px] py-[3px] text-[11.5px] font-medium disabled:opacity-45 ${
-        on ? "border-[#3E4A7A] bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]" : "border-[var(--v2-edge)] bg-transparent text-[var(--v2-text-2)] hover:bg-[var(--v2-raised)]"}`}>
+        on ? "border-[var(--v2-info-edge)] bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]" : "border-[var(--v2-edge)] bg-transparent text-[var(--v2-text-2)] hover:bg-[var(--v2-raised)]"}`}>
       {label}{count !== undefined && <span className="text-[10.5px] text-[var(--v2-muted)]">{count}</span>}
     </button>
   );

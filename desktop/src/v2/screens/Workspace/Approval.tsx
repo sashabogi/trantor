@@ -21,7 +21,7 @@ export function Approval({ client, holds, seatName, onDecided }: {
     <div className="mx-3 mb-3 flex flex-col gap-2">
       {holds.map(h => (
         <div key={h.id} role="group" aria-label={`${seatName} needs a decision on ${h.file}`}
-          className="flex flex-wrap items-center gap-2.5 rounded-[10px] border border-[var(--v2-warn-edge)] bg-[#18160E] px-3 py-[11px]">
+          className="flex flex-wrap items-center gap-2.5 rounded-[10px] border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-panel)] px-3 py-[11px]">
           <span className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] bg-[var(--v2-warn-soft)] text-[var(--v2-warn)]">
             <Lock size={14} aria-hidden />
           </span>

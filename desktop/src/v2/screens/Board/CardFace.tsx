@@ -9,7 +9,7 @@ import type { Presence } from "../../ui/identity";
 import { dictGet } from "../../../shared/dict";
 import { ageDays, agoShort, checklistOf, drillState, type BoardCard } from "./model";
 
-const DIFFICULTY_COLOR = { easy: "var(--v2-ok)", medium: "#E2B86B", hard: "var(--v2-bad)" } as const satisfies Record<string, string>;
+const DIFFICULTY_COLOR = { easy: "var(--v2-ok)", medium: "var(--v2-medium)", hard: "var(--v2-bad)" } as const satisfies Record<string, string>;
 
 export function toPresence(p?: PresenceState): Presence | undefined {
   if (!p) return undefined;
@@ -88,16 +88,16 @@ export function CardFace({ card, presence, selected, next, subagents, forceOpenS
   const aged = age > 7;
   return (
     <article data-card={card.id} data-selected={selected || undefined}
-      className={`flex flex-col gap-[7px] rounded-[10px] border p-[9px_10px] ${selected ? "border-[var(--v2-accent)] bg-[#1B1E26]" : "border-[var(--v2-edge)] bg-[#15171B]"}`}>
+      className={`flex flex-col gap-[7px] rounded-[10px] border p-[9px_10px] ${selected ? "border-[var(--v2-accent)] bg-[var(--v2-card-selected)]" : "border-[var(--v2-edge)] bg-[var(--v2-card)]"}`}>
       <button type="button" onClick={() => onOpen(card.id)} aria-label={`Open card #${card.id}`}
         className="flex cursor-pointer items-start gap-[7px] border-0 bg-transparent p-0 text-left text-[var(--v2-text)]">
         <DifficultyDot difficulty={card.difficulty} />
         <span className="min-w-0 flex-1 break-words text-[12.5px] leading-[1.35] [overflow-wrap:anywhere]">{card.summary || cleanTitle(card.title)}</span>
-        <span className="v2-mono text-[10.5px] text-[#6B717A]">#{card.id}</span>
+        <span className="v2-mono text-[10.5px] text-[var(--v2-faint)]">#{card.id}</span>
       </button>
       {(seat || card.model) && (
         <div className="flex flex-wrap items-center gap-[7px]">
-          {seat && <Avatar name={seat} size={18} presence={toPresence(presence)} surface="#15171B" />}
+          {seat && <Avatar name={seat} size={18} presence={toPresence(presence)} surface="var(--v2-card)" />}
           {card.model && <span className="v2-mono whitespace-nowrap text-[10.5px] text-[var(--v2-muted)]">{card.model}</span>}
         </div>
       )}
@@ -107,10 +107,10 @@ export function CardFace({ card, presence, selected, next, subagents, forceOpenS
         {aged && <Chip tone={age >= 14 ? "warn" : "neutral"} title="untouched for over a week; the reaper stales it at 14d">{age}d in todo</Chip>}
       </div>
       <div className="flex items-center gap-1.5">
-        <span title="last touched" className="flex-1 text-[10.5px] text-[#6B717A]">{card.status === "todo" ? `idle ${agoShort(card)}` : agoShort(card)}</span>
+        <span title="last touched" className="flex-1 text-[10.5px] text-[var(--v2-faint)]">{card.status === "todo" ? `idle ${agoShort(card)}` : agoShort(card)}</span>
         {next && (
           <button type="button" title={next.title} onClick={next.run}
-            className="whitespace-nowrap rounded-md border-0 bg-[var(--v2-text)] px-2 py-[3px] text-[11px] font-semibold text-[var(--v2-ink)] hover:bg-white">
+            className="whitespace-nowrap rounded-md border-0 bg-[var(--v2-text)] px-2 py-[3px] text-[11px] font-semibold text-[var(--v2-ink)] hover:bg-[var(--v2-knob)]">
             {next.label}
           </button>
         )}

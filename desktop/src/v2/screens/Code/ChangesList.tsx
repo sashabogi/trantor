@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { Minus, Plus, Undo2 } from "lucide-react";
 import { bucketStatus, isUnmerged, lineCountFor, stageableChanges, type GitStatusEntry } from "../../../features/code/gitApi";
 import { Button } from "../../ui/Button";
+import { Checkbox } from "../../ui/Checkbox";
 import { IconButton } from "../../ui/IconButton";
 import { Counts, MainCheckoutMark, PathLabel, SectionLabel, StatusLetter } from "./parts";
 import { fileChipLabel, type Letter } from "./model";
@@ -80,7 +81,7 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
         className="w-full rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
       <div className="flex items-center gap-2 text-[11.5px] text-[var(--v2-text-2)]">
         <label className="flex items-center gap-1.5" title={historyReason ?? "Replace the last commit with its changes plus what is staged"}>
-          <input type="checkbox" checked={amend} disabled={busy || !!historyReason} onChange={toggleAmend} />Amend last commit
+          <Checkbox checked={amend} disabled={busy || !!historyReason} onChange={toggleAmend} />Amend last commit
         </label>
         <span className="flex-1" />
         <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" disabledReason={busy ? "Working" : historyReason} onClick={undo}><Undo2 size={12} aria-hidden />Undo last commit</Button>

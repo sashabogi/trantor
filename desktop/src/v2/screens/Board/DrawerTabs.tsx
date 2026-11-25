@@ -1,6 +1,7 @@
 // The four drawer tab bodies, kept apart from the drawer's load and move logic (#13989).
 import type { ReactNode } from "react";
 import type { CardCode, HubEvent, Message } from "../../../shared/api/client";
+import { Checkbox } from "../../ui/Checkbox";
 import { drillLine, type BoardCard } from "./model";
 
 function Block({ title, aside, children }: { title: string; aside?: string; children: ReactNode }) {
@@ -34,7 +35,7 @@ export function OverviewTab({ task, onToggle, onOpen }: { task: BoardCard; onTog
         {list.length === 0 && <Empty line="No acceptance items on this card." />}
         {list.map((item, i) => (
           <label key={`${i}:${item.text}`} className="flex cursor-pointer items-start gap-2 py-[3px] text-[12.5px] text-[var(--v2-text-2)]">
-            <input type="checkbox" checked={item.done} onChange={() => onToggle(i, !item.done)} className="mt-[3px] accent-[var(--v2-accent)]" />
+            <Checkbox checked={item.done} onChange={() => onToggle(i, !item.done)} className="mt-[3px]" />
             <span className={item.done ? "text-[var(--v2-muted)] line-through" : ""}>{item.text}</span>
           </label>
         ))}

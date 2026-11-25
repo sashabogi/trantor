@@ -18,8 +18,8 @@ function SeatChip({ seat, on, onSelect }: { seat: SeatView; on: boolean; onSelec
   return (
     <button type="button" aria-pressed={on} title={seat.session} onClick={onSelect}
       className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-[10px] border px-2.5 py-1.5 text-[12px] font-medium text-[var(--v2-text)]"
-      style={{ background: on ? "#22263A" : "var(--v2-panel-2)", borderColor: on ? "#3E4A7A" : "var(--v2-edge)" }}>
-      <Avatar name={seat.brand} size={22} presence={seat.presence} surface={on ? "#22263A" : "var(--v2-panel-2)"} />
+      style={{ background: on ? "var(--v2-info-soft)" : "var(--v2-panel-2)", borderColor: on ? "var(--v2-info-edge)" : "var(--v2-edge)" }}>
+      <Avatar name={seat.brand} size={22} presence={seat.presence} surface={on ? "var(--v2-info-soft)" : "var(--v2-panel-2)"} />
       {seat.label}
       <span className="text-[10.5px]" style={{ color: seat.presence === "working" || seat.isOrchestrator ? "var(--v2-muted)" : PRESENCE_COLOR[seat.presence] }}>{sub}</span>
     </button>

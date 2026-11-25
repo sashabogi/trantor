@@ -5,7 +5,7 @@ import { errorMessage, type BranchDialogState, type ErrorHandler } from "./useBr
 
 function Dialog({ label, children, onClose }: { label: string; children: ReactNode; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/45 p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[var(--v2-scrim)] p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div role="dialog" aria-label={label} className="flex w-[420px] max-w-full flex-col gap-3 rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] p-4 shadow-2xl">
         {children}
       </div>

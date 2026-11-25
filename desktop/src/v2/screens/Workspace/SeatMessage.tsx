@@ -18,7 +18,7 @@ export function SeatMessage({ client, project, seat, inputRef }: {
     catch { setState("failed"); }
   };
   return (
-    <div className="flex items-center gap-2 border-t border-[var(--v2-edge)] bg-[#111316] px-3 py-2">
+    <div className="flex items-center gap-2 border-t border-[var(--v2-edge)] bg-[var(--v2-sunken)] px-3 py-2">
       <label htmlFor="v2-seatmsg" className="sr-only">Message {seat.label}</label>
       <TerminalSquare size={13} className="shrink-0 text-[var(--v2-muted)]" aria-hidden />
       <input id="v2-seatmsg" ref={inputRef} type="text" value={text} disabled={!!reason}

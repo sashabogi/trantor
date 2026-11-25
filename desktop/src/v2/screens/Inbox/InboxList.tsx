@@ -8,7 +8,7 @@ import { rankInboxItems, splitStaleItems, type InboxFilter, type InboxItem, type
 const KIND = {
   question: { label: "Question", color: "var(--v2-accent)", icon: CircleHelp },
   collision: { label: "Collision", color: "var(--v2-bad)", icon: TriangleAlert },
-  proposal: { label: "Proposal", color: "#CDB1FF", icon: Shield },
+  proposal: { label: "Proposal", color: "var(--v2-proposal)", icon: Shield },
 } as const;
 
 function KindLabel({ kind }: { kind: InboxItem["kind"] }) {

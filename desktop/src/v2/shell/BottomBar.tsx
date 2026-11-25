@@ -11,7 +11,7 @@ import { useBalances } from "./useBalances";
 const CHIP_TONE = {
   ok: { bg: "var(--v2-panel-2)", border: "var(--v2-edge)", value: "var(--v2-muted)", bar: "" },
   warn: { bg: "var(--v2-warn-soft)", border: "var(--v2-warn-edge)", value: "var(--v2-warn)", bar: "var(--v2-warn)" },
-  fail: { bg: "var(--v2-bad-soft)", border: "#4A2A2A", value: "var(--v2-bad)", bar: "var(--v2-bad)" },
+  fail: { bg: "var(--v2-bad-soft)", border: "var(--v2-bad-edge)", value: "var(--v2-bad)", bar: "var(--v2-bad)" },
 } as const;
 
 export function balanceChips(report: BalancesReport | null): BalanceChip[] {

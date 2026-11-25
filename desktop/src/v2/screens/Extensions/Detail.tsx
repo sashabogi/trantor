@@ -1,7 +1,7 @@
 // Right pane: the selected Open VSX extension, install controls (disabled with the reason), facts, README (#13993).
 import { useEffect, useState } from "react";
 import type { HubClient, Peer } from "../../../shared/api/client";
-import { Button, Chip, Section } from "../..";
+import { Button, Checkbox, Chip, Section } from "../..";
 import { useExtDetail } from "./hooks";
 import type { Ext, ExtDetail } from "./openvsx";
 import { formatCount, IconTile, INSTALL_REASON } from "./Results";
@@ -47,7 +47,7 @@ export function Detail({ client, ext }: { client: HubClient; ext: Ext | null }) 
             {peers.map(p => (
               <li key={p.session}>
                 <label title={SEAT_REASON} className="flex items-center gap-2 text-[12.5px] text-[var(--v2-muted)]">
-                  <input type="checkbox" disabled aria-label={`Give ${p.session} this extension`} />
+                  <Checkbox disabled aria-label={`Give ${p.session} this extension`} />
                   <span className="text-[var(--v2-text-2)]">{p.session}</span>
                   {p.machine && <span className="text-[11px]">{p.machine}</span>}
                 </label>

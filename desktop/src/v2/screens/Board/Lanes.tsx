@@ -68,7 +68,7 @@ function GroupHead({ label, count, note, open, onToggle }: { label: string; coun
         ? <button type="button" aria-expanded={open} onClick={onToggle}
             className="flex items-center gap-1.5 border-0 bg-transparent px-0.5 pt-1 text-[10.5px] font-semibold tracking-[0.06em] text-[var(--v2-muted)]">{inner}</button>
         : <div className="flex items-center gap-1.5 px-0.5 pt-1 text-[10.5px] font-semibold tracking-[0.06em] text-[var(--v2-muted)]">{inner}</div>}
-      <div className="px-0.5 text-[10.5px] text-[#6B717A]">{note}</div>
+      <div className="px-0.5 text-[10.5px] text-[var(--v2-faint)]">{note}</div>
     </>
   );
 }
@@ -98,7 +98,7 @@ function ExceptionStrip({ lane, cards, open, onToggle }: { lane: ExceptionLane; 
   return (
     <button type="button" aria-expanded={open} aria-label={`${LANE_LABEL[lane]}, ${cards.length}`} onClick={onToggle}
       title={`${cards.length} ${lane}: ${titles}${cards.length > 3 ? ", …" : ""}`}
-      className="v2-hover flex w-10 shrink-0 flex-col items-center gap-2 self-stretch rounded-[10px] border border-[var(--v2-edge)] bg-[#111316] py-2.5 text-[var(--v2-text-2)]">
+      className="v2-hover flex w-10 shrink-0 flex-col items-center gap-2 self-stretch rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-sunken)] py-2.5 text-[var(--v2-text-2)]">
       <span className="h-2 w-2 rounded-full" style={{ background: LANE_DOT[lane] }} />
       <span className="text-[11px] font-bold">{cards.length}</span>
       <span className="text-[11.5px] font-semibold [writing-mode:vertical-rl]">{LANE_LABEL[lane]}</span>

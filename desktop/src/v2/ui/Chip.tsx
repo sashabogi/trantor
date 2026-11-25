@@ -4,10 +4,10 @@ export type ChipTone = "neutral" | "ok" | "warn" | "bad" | "info";
 
 const TONE = {
   neutral: { bg: "var(--v2-panel-2)", border: "var(--v2-edge)", fg: "var(--v2-text-2)" },
-  ok: { bg: "var(--v2-ok-soft)", border: "#24402F", fg: "var(--v2-ok)" },
+  ok: { bg: "var(--v2-ok-soft)", border: "var(--v2-ok-edge)", fg: "var(--v2-ok)" },
   warn: { bg: "var(--v2-warn-soft)", border: "var(--v2-warn-edge)", fg: "var(--v2-warn)" },
-  bad: { bg: "var(--v2-bad-soft)", border: "#4A2A2A", fg: "var(--v2-bad)" },
-  info: { bg: "var(--v2-accent-soft)", border: "#3E4A7A", fg: "var(--v2-accent-hi)" },
+  bad: { bg: "var(--v2-bad-soft)", border: "var(--v2-bad-edge)", fg: "var(--v2-bad)" },
+  info: { bg: "var(--v2-accent-soft)", border: "var(--v2-info-edge)", fg: "var(--v2-accent-hi)" },
 } as const satisfies Record<ChipTone, { bg: string; border: string; fg: string }>;
 
 export type ChipProps = {

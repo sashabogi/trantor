@@ -223,7 +223,7 @@ function ReplaceConfirm({ text, busy, onRun, onCancel }: { text: string | null; 
       <div className="text-[var(--v2-text)]">{text}</div>
       <div className="mt-1 flex gap-1">
         <button type="button" disabled={busy} onClick={onRun}
-          className="rounded-md border-0 bg-[var(--v2-text)] px-2 py-0.5 text-[11.5px] font-semibold text-[var(--v2-ink)] hover:bg-white disabled:opacity-50">
+          className="rounded-md border-0 bg-[var(--v2-text)] px-2 py-0.5 text-[11.5px] font-semibold text-[var(--v2-ink)] hover:bg-[var(--v2-knob)] disabled:opacity-50">
           Replace
         </button>
         <button type="button" disabled={busy} onClick={onCancel}

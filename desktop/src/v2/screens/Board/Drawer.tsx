@@ -81,7 +81,7 @@ function Header({ task, id, error, onClose }: { task: BoardCard | null; id: numb
       </h2>
       {task && (seat || meta) && (
         <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--v2-muted)]">
-          {seat && <Avatar name={seat} size={22} surface="#0F1013" />}
+          {seat && <Avatar name={seat} size={22} surface="var(--v2-side)" />}
           {seat && <span className="text-[var(--v2-text-2)]">{seatLabel(seat)}</span>}
           {meta && <span>{seat ? "· " : ""}{meta}</span>}
         </div>
@@ -114,7 +114,7 @@ export function Drawer({ client, id, onClose, onMoved, onOpen }: DrawerProps) {
   const count = (n: number) => n > 0 ? <span className="ml-1 text-[10.5px] text-[var(--v2-muted)]">{n}</span> : null;
   const badge = { overview: null, code: count((code?.files.length ?? 0) + (code?.commits.length ?? 0)), story: count(task?.log?.length ?? 0), timeline: null };
   return (
-    <aside aria-label={`Card #${id}`} className="flex w-[430px] shrink-0 flex-col border-l border-[var(--v2-edge)] bg-[#0F1013]">
+    <aside aria-label={`Card #${id}`} className="flex w-[430px] shrink-0 flex-col border-l border-[var(--v2-edge)] bg-[var(--v2-side)]">
       <div className="flex flex-col gap-[9px] border-b border-[var(--v2-edge)] px-4 py-3">
         <Header task={task} id={id} error={error} onClose={onClose} />
         {task && <Moves task={task} busy={busy} error={moveError} onMove={move} />}

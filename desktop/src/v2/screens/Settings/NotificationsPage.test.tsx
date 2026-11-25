@@ -23,18 +23,18 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
 const mount = async () => { await act(async () => { root.render(<NotificationsPage />); }); };
-const toggle = () => host.querySelector<HTMLInputElement>('input[aria-label="Only when Trantor is in the background"]');
+const toggle = () => host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Only when Trantor is in the background"]');
 
 describe("NotificationsPage background setting", () => {
   it("shows the toggle on by default", async () => {
     await mount();
-    expect(toggle()?.checked).toBe(true);
+    expect(toggle()?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("reflects a stored off value", async () => {
     localStorage.setItem(KEY, "off");
     await mount();
-    expect(toggle()?.checked).toBe(false);
+    expect(toggle()?.getAttribute("aria-checked")).toBe("false");
   });
 
   it("writes the value when clicked", async () => {

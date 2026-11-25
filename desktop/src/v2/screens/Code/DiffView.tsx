@@ -13,7 +13,7 @@ import { FileHistoryControl } from "./HistoryView";
 export type DiffLayout = "combined" | "split";
 export type ApplyPatch = (patch: string, action: GitPatchAction, path: string) => Promise<void>;
 
-const ROW_BG = { add: "rgba(124,196,154,0.10)", del: "rgba(229,138,138,0.10)", ctx: "transparent" } as const;
+const ROW_BG = { add: "var(--v2-diff-add)", del: "var(--v2-diff-del)", ctx: "transparent" } as const;
 const SIGN = { add: "+", del: "-", ctx: " " } as const;
 
 type LineSelect = (index: number, shift: boolean) => void;

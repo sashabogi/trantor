@@ -33,7 +33,7 @@ export function ListView({ cards, presence, selected, onOpen }: {
               <tr key={c.id} data-row={c.id} className={`border-t border-[var(--v2-edge)] ${selected === c.id ? "bg-[var(--v2-panel-2)]" : ""}`}>
                 <td className="max-w-[420px] py-1.5 pr-3">
                   <button type="button" onClick={() => onOpen(c.id)} className="v2-hover flex w-full items-baseline gap-2 rounded border-0 bg-transparent p-0 text-left text-[var(--v2-text)]">
-                    <span className="v2-mono shrink-0 text-[10.5px] text-[#6B717A]">#{c.id}</span>
+                    <span className="v2-mono shrink-0 text-[10.5px] text-[var(--v2-faint)]">#{c.id}</span>
                     <span className="min-w-0 flex-1 truncate">{c.summary || cleanTitle(c.title)}</span>
                   </button>
                 </td>

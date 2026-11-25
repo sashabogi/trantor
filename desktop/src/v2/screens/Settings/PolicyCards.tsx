@@ -1,6 +1,7 @@
 // Static policy copy under the dials, from the artboard (#13994).
 import { Lock } from "lucide-react";
 import { Chip } from "../../ui/Chip";
+import { Checkbox } from "../../ui/Checkbox";
 import { Section } from "../../ui/Section";
 
 const NEVER_AUTO = [
@@ -36,7 +37,7 @@ export function WorkingAgreements() {
       <div className="flex flex-col gap-2.5">
         {AGREEMENTS.map(a => (
           <label key={a.title} className="flex items-start gap-2.5" title="Edited in BUILD-DOCTRINE.md, not here">
-            <input type="checkbox" checked disabled readOnly aria-label={`${a.title}, edited in BUILD-DOCTRINE.md`} className="mt-[3px]" />
+            <Checkbox checked disabled readOnly aria-label={`${a.title}, edited in BUILD-DOCTRINE.md`} className="mt-[3px]" />
             <span className="flex flex-col">
               <span className="text-[12.5px] text-[var(--v2-text)]">{a.title}</span>
               <span className="text-[11.5px] text-[var(--v2-muted)]">{a.body}</span>

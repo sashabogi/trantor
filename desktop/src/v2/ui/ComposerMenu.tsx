@@ -53,7 +53,7 @@ export function ChipMenu({ label, title, group, className = "", chip, menuLabel,
       </button>
       {open && (
         <div role="menu" aria-label={menuLabel}
-          className="absolute bottom-[calc(100%+8px)] left-0 z-50 max-h-[60vh] w-[min(320px,100%)] overflow-y-auto rounded-[12px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1.5 shadow-[0_-12px_32px_rgba(0,0,0,0.5)]">
+          className="absolute bottom-[calc(100%+8px)] left-0 z-50 max-h-[60vh] w-[min(320px,100%)] overflow-y-auto rounded-[12px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1.5 shadow-[var(--v2-shadow-menu-up)]">
           {children(() => setOpen(false))}
         </div>
       )}

@@ -16,7 +16,7 @@ export function SeatGrid({ project, seats, layout, selectedKey, onFocus }: {
       {seats.map(s => (
         <div key={s.key} data-selected={s.key === selectedKey || undefined}
           className="flex min-h-[240px] min-w-0 flex-col overflow-hidden rounded-xl border bg-[var(--v2-chrome)] p-2"
-          style={{ borderColor: s.key === selectedKey ? "#3E4A7A" : "var(--v2-edge)" }}>
+          style={{ borderColor: s.key === selectedKey ? "var(--v2-info-edge)" : "var(--v2-edge)" }}>
           <button type="button" onClick={() => onFocus(s.key)} title={`Open ${s.label} full size`}
             className="mb-1.5 flex items-center gap-2 border-0 bg-transparent text-left text-[12px] text-[var(--v2-text)]">
             <Avatar name={s.brand} size={20} presence={s.presence} surface="var(--v2-chrome)" />

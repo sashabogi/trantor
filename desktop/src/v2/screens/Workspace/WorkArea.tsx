@@ -45,7 +45,7 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
   const changed = diff.diff?.files.length ?? 0;
   return (
     <div className="mx-5 mb-3.5 mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-[var(--v2-edge)] bg-[var(--v2-chrome)]">
-      <div role="tablist" aria-label="Seat views" className="flex items-center gap-0.5 border-b border-[#1D2025] bg-[#111316] px-2 py-1.5">
+      <div role="tablist" aria-label="Seat views" className="flex items-center gap-0.5 border-b border-[var(--v2-edge-soft)] bg-[var(--v2-sunken)] px-2 py-1.5">
         {TABS.map(t => {
           const on = t.id === tab;
           return (

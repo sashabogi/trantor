@@ -6,6 +6,8 @@ import { backgroundOnly, notificationsEnabled, setBackgroundOnly, setNotificatio
 import { onboardingApi } from "../../../features/onboarding/onboardingApi";
 import { Button } from "../../ui/Button";
 import { Section } from "../../ui/Section";
+import { Select } from "../../ui/Select";
+import { Toggle } from "../../ui/Toggle";
 import { backToClassic } from "../../toggle";
 
 export function Row({ title, body, children }: { title: string; body: ReactNode; children: ReactNode }) {
@@ -20,20 +22,18 @@ export function Row({ title, body, children }: { title: string; body: ReactNode;
   );
 }
 
-const SELECT = "rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2 py-[5px] text-[12px] text-[var(--v2-text)]";
-
 export function OpenCodeIn() {
   const [editor, setEditor] = useState<EditorPref>(editorPref());
   return (
     <Row title="Open code in" body="Repos are found at ~/development/<project> (override with TRANTOR_DEV_ROOT).">
-      <select aria-label="Open code in" value={editor} className={SELECT}
+      <Select aria-label="Open code in" value={editor}
         onChange={e => { const v = e.target.value; if (isEditorPref(v)) { setEditor(v); setEditorPref(v); } }}>
         <option value="default">System default</option>
         <option value="vscode">VS Code</option>
         <option value="cursor">Cursor</option>
         <option value="zed">Zed</option>
         <option value="reveal">Reveal in Finder</option>
-      </select>
+      </Select>
     </Row>
   );
 }
@@ -100,12 +100,12 @@ export function NotificationsPage() {
   return (
     <Section title="Notifications" flush sub="Native, and deliberately narrow: a notification for everything is a notification for nothing.">
       <Row title="Notify me when something needs a human" body="Direct messages to you, verify gates opening, and crew seats going offline. Broadcasts, card moves and presence never interrupt.">
-        <input type="checkbox" role="switch" aria-label="Notify me when something needs a human" checked={on}
-          onChange={e => { setOn(e.target.checked); setNotificationsEnabled(e.target.checked); }} />
+        <Toggle label="Notify me when something needs a human" on={on}
+          onToggle={() => { setOn(!on); setNotificationsEnabled(!on); }} />
       </Row>
       <Row title="Only when Trantor is in the background" body="Skip the notification while this window is open and in front of you.">
-        <input type="checkbox" role="switch" aria-label="Only when Trantor is in the background" checked={bg}
-          onChange={e => { setBg(e.target.checked); setBackgroundOnly(e.target.checked); }} />
+        <Toggle label="Only when Trantor is in the background" on={bg}
+          onToggle={() => { setBg(!bg); setBackgroundOnly(!bg); }} />
       </Row>
     </Section>
   );

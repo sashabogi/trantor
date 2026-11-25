@@ -38,7 +38,7 @@ export function Inspector({ project, seat, card, mayDo, crew, onNavigate, onMess
   const status = seat.target.status;
   const orchNote = "This is your own session; manage it from its window";
   return (
-    <div className="flex flex-wrap items-center gap-3.5 border-b border-[var(--v2-edge)] bg-[#111316] px-5 py-2.5 text-[12px]">
+    <div className="flex flex-wrap items-center gap-3.5 border-b border-[var(--v2-edge)] bg-[var(--v2-sunken)] px-5 py-2.5 text-[12px]">
       <span className="inline-flex items-center gap-2">
         <Avatar name={seat.brand} size={26} />
         <span>

@@ -41,14 +41,14 @@ export function FilesColumn(p: FilesColumnProps) {
   if (!p.col.open) {
     return (
       <aside aria-label="Files rail" style={{ width: FILES_RAIL_WIDTH }}
-        className="flex min-h-0 shrink-0 flex-col items-center border-r border-[var(--v2-edge)] bg-[#0F1013] py-2">
+        className="flex min-h-0 shrink-0 flex-col items-center border-r border-[var(--v2-edge)] bg-[var(--v2-side)] py-2">
         <IconButton label="Open files" title="Open the source control sidebar" size={30} onClick={() => p.col.setOpen(true)}><Files size={16} aria-hidden /></IconButton>
       </aside>
     );
   }
   return (
     <aside aria-label="Source control" style={{ width: p.col.width, minWidth: FILES_MIN_WIDTH, maxWidth: "40%" }}
-      className="relative flex min-h-0 shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[#0F1013]">
+      className="relative flex min-h-0 shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-side)]">
       <ResizeHandle cfg={FILES_COLUMN} col={p.col} workspace={p.workspace} edge="right" label="Resize files" />
       <ScmColumn {...p} />
     </aside>

@@ -48,7 +48,7 @@ function SeatMenu({ s, acts, ops, onClose }: { s: SeatInfo & { branchLabel: stri
   const rebaseReason = s.presence === "working" ? `${seatLabel(s.seat)} is working; rebase after the turn ends`
     : !branch?.current ? "Open this seat's worktree; rebase acts on its current branch" : !main ? "main is not present in this checkout" : null;
   return (
-    <div role="menu" ref={showWhole} aria-label={`${s.branchLabel} actions`} className="absolute right-2 top-full z-10 w-[280px] rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[0_12px_32px_rgba(0,0,0,0.45)]">
+    <div role="menu" ref={showWhole} aria-label={`${s.branchLabel} actions`} className="absolute right-2 top-full z-10 w-[280px] rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[var(--v2-shadow-menu)]">
       <div className="flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-[var(--v2-muted)]"><Avatar name={s.seat} size={16} /><span className="v2-mono text-[var(--v2-text)]">{s.branchLabel}</span> · {ahead}</div>
       <SectionLabel>Open</SectionLabel>
       <MenuRow label="Open its worktree in a tab" onClick={run(() => acts.onSeat(s.seat))} />
@@ -128,7 +128,7 @@ export function BranchPicker({ project, seats, snap, scope, acts, onClose, onMut
   const { filter, setFilter, show, setShow, sort, setSort, groups, locals, remotes } = useBranchRows(seats, branchState.branches);
   const { ops, dialog, setDialog, busy } = branchState;
   return (
-    <div role="dialog" aria-label="Switch branch" className="absolute left-0 top-[calc(100%+6px)] z-50 w-[560px] max-w-[92vw] rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] shadow-[0_16px_40px_rgba(0,0,0,0.5)]">
+    <div role="dialog" aria-label="Switch branch" className="absolute left-0 top-[calc(100%+6px)] z-50 w-[560px] max-w-[92vw] rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] shadow-[var(--v2-shadow-dialog)]">
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2">
         <Search size={13} aria-hidden className="text-[var(--v2-muted)]" />
         <label htmlFor="v2-branch-filter" className="sr-only">Switch to a branch or seat</label>

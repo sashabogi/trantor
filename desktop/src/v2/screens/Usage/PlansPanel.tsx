@@ -31,7 +31,7 @@ export function PlansPanel({ cards, failure, loading }: { cards: PlanCard[]; fai
     <>
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="m-0 text-[10.5px] font-semibold tracking-[0.08em] text-[var(--v2-muted)]">PLANS AND BALANCES</h2>
-        <span className="text-[11.5px] text-[#6B717A]">live, one card per provider · the bottom bar shows the same numbers</span>
+        <span className="text-[11.5px] text-[var(--v2-faint)]">live, one card per provider · the bottom bar shows the same numbers</span>
       </div>
       {failure && <p role="status" className="m-0 text-[12px] text-[var(--v2-warn)]">Plans unavailable: {failure}</p>}
       {!failure && loading && <p role="status" className="m-0 text-[12px] text-[var(--v2-muted)]">Reading each provider's meter...</p>}
