@@ -4,23 +4,29 @@ Source: the operator's screenshots after creating a real project (rock-os) with 
 (CleanShot 7.05 to 7.10 PM, `~/Library/Application Support/CleanShot/media/`). Their words: "A bunch of stuff is
 still not wired."
 
-## A. Mode chip says "Mode unknown" on a fresh pane and blames the version
-The new project's pane footer plainly shows `bypass permissions on (shift+tab to cycle) · ← 1 agent`, yet the chip
-reads "Mode unknown" with "Claude Code 2.1.331 is newer than the version mode switching was checked on (2.1.326),
-and its mode line could not be read."
-Likely cause, to confirm: `desktop/src/v2/screens/Workspace/useAgentMode.ts` reads on mount, after a send, when
-working flips to idle, and on window focus. At mount Claude was still booting, and nothing re-reads.
-Fix: retry while unknown (short interval, bounded) and re-read when the chip menu opens; blame the version only
-after a read of a settled pane fails. Then check the 2.1.331 footer strings against
-`desktop/src-tauri/src/fixtures/pane-mode/` and raise `verified_up_to` at the next release.
-Quick check for the operator: click another window and back; if the chip then reads "Bypass", it was timing.
+## A. Mode chip said "Mode unknown" on a fresh pane and blamed the version: CONFIRMED TIMING
+A few minutes later the same chip read "Bypass" on Claude Code 2.1.331 with no change to the app (operator
+screenshot 7.14 PM). So the 2.1.331 footer parses fine; the first read happened while Claude was still booting and
+nothing re-read. `desktop/src/v2/screens/Workspace/useAgentMode.ts` reads on mount, after a send, when working
+flips to idle, and on window focus.
+Fix: retry while unknown (short interval, bounded) and re-read when the chip menu opens; say "reading…" during
+boot; blame the version only after a read of a settled pane fails. Then raise `verified_up_to` to 2.1.331 at the
+next release.
+Operator context: their Claude Code starts EVERY session in bypass permissions (a global setting they chose long
+ago and prefer). Other developers will not have that. Nothing may assume a starting mode: always show what was
+read. Two places assume today and are wrong for this operator:
+- the post-create hint "Opened in Agent mode. Switch to Plan from the composer's first chip." (the session was in
+  Bypass): print the mode that was read, or say nothing until it is read;
+- the inspector chip "Asks first" beside a pane in bypass: it shows the autonomy dial, not the session. Show the
+  session's read mode there, and label the dial as what it is (applies to new sessions and handoffs).
 
-## B. New project wake
-The status line stayed at "Orchestrator is open. Waiting for it to take its first prompt…" and the chat showed
-"kickoff pending, waiting for idle" while Claude sat idle at its prompt. Confirm whether the kickoff ever landed.
-Suspect: herdr's idle detection for a fresh pane (`desktop/src-tauri/src/genesis.rs` wake ladder), the same
-dependency the plan-first idea has. Also: the inspector chip said "Asks first" while the pane was in bypass; that
-chip shows the autonomy dial, not the session.
+## B. New project wake: IT LANDED, the status line did not say so
+rock-os received "You were just woken via Trantor. Catch up…" and answered with a correct recap of an empty
+project (screenshot 7.14 PM). But the Workspace line never advanced to "First prompt delivered", and for a while
+the chat said "kickoff pending, waiting for idle" with Claude idle. Check `useWakeStatus.ts` against the real
+wake-progress events (phases opened, waiting_idle, kickoff_sent, kickoff_landed, ended): the final phases are not
+reaching the line, or it is dismissed early. The wake itself took minutes; time it and see whether herdr's idle
+detection for a fresh pane is the slow step (`desktop/src-tauri/src/genesis.rs` wake ladder).
 
 ## C. Dashboard
 - "By project" and "By agent" are not wired.
@@ -36,12 +42,22 @@ chip shows the autonomy dial, not the session.
 "Add seat" and "Start seat" disabled ("Seats start from the trantor CLI for now"), Ask the Advisor disabled,
 per-seat swap / hand off / restart / stop disabled, History and Trust rules tabs not wired.
 
-## E. Files and git
-The operator still does not see the git surface they expect beside the files (their message was cut off: "I still
-don't see any of the git stuff that we…"). The tree now shows letters and folder dots, but trantor's main checkout
-has almost no changes, so little shows. Probably wanted: a Source control section in the left column like the
-reference (changes list with letters, commit box, branch, recent commits), not only decorations. ASK before
-building.
+## E. The left column must be a SOURCE CONTROL SIDEBAR, not only a file tree (operator, clarified 7.18 PM)
+"I still don't see any of the stuff that we agreed on in the previous round." Reference: the operator's Ember
+screenshot (`CleanShot 2026-11-24 at 7.18.16 PM.jpg`): the left column is "Source Control" with collapsible
+sections: **Changes** (commit message box, Commit split button, then EVERY changed file in one flat list with its
+letter, so nobody hunts through subfolders; count badge; stage / discard / open on each row), **Graph**,
+**Forge**, **Recent Commits**, **Agent Review**. The operator's point: anything touched sits on top, immediately
+visible and one click away.
+We designed our own version of exactly this on 11-23: the source control sidebar in
+`docs/design/v2/BranchPicker.dc.html` (branch pill, commit box naming its target, Staged, Your changes, the
+seat's work boxed separately with Keep all / Undo all / Open PR, Branches and seats, Pull requests, Crew review,
+Stashes). It was folded away on the Code artboard to give the diff room, and never built as a column.
+Build: in the Workspace left column and in Code's sidebar, sections in this order: Changes (flat list of changed
+files with letters and counts, commit box, stage/unstage; uses `scopePanel`/`scopeStage`/`scopeCommit` from
+`desktop/src/v2/screens/Code/scopeGitApi.ts`; main-checkout rules apply), Files (the tree), Recent commits
+(`git_panel` log; a click opens the commit in Code), Branches and seats, Crew review. Each section collapsible
+and remembered. Graph and pull requests where data exists, otherwise leave them out rather than show a stub.
 
 ## F. Open from earlier, still not wired
 Workspace Reasoning / Preview / Tests tabs; Browser lens; Board Dependencies / By seat / New card / Has a PR; Usage
