@@ -6,7 +6,7 @@ type Span = { isEmpty(): boolean; startLineNumber: number; startColumn: number; 
 
 /** The part of the Monaco editor the footer reads; the real editor satisfies it. */
 export type FooterEditor = {
-  getModel(): { getOptions(): { insertSpaces: boolean; tabSize: number }; getLanguageId(): string; getEOL(): string; getValueInRange(range: Span): string } | null;
+  getModel(): { getOptions(): { insertSpaces: boolean; tabSize: number }; getLanguageId(): string; getEOL(): string; getValueInRange(range: Span): string; getLineCount(): number } | null;
   getPosition(): { lineNumber: number; column: number } | null;
   getSelection(): Span | null;
   onDidChangeCursorPosition(cb: () => void): { dispose(): void };
@@ -14,7 +14,8 @@ export type FooterEditor = {
   onDidChangeModel(cb: () => void): { dispose(): void };
   onDidChangeModelOptions(cb: () => void): { dispose(): void };
   onDidChangeModelLanguage(cb: () => void): { dispose(): void };
-  getAction(id: string): { run(): Promise<void> } | null;
+  revealLineInCenter(line: number): void;
+  setPosition(position: { lineNumber: number; column: number }): void;
   focus(): void;
 };
 
@@ -48,6 +49,7 @@ const languageName = (id: string) => LANGUAGE_NAMES.get(id) ?? id.charAt(0).toUp
 /** `version` bumps whenever a new editor is mounted, so the footer moves to it. */
 export function EditorFooter({ editorRef, version }: { editorRef: MutableRefObject<FooterEditor | null>; version: number }) {
   const [info, setInfo] = useState<FooterInfo | null>(null);
+  const [asking, setAsking] = useState(false);
   useEffect(() => {
     const ed = editorRef.current;
     if (!ed) { setInfo(null); return; }
@@ -59,14 +61,30 @@ export function EditorFooter({ editorRef, version }: { editorRef: MutableRefObje
     ];
     return () => subs.forEach(s => s.dispose());
   }, [editorRef, version]);
+  // Monaco's own go to line box does not show in this shell, so the footer asks for the line itself (#14105 drill).
+  const goTo = (text: string) => {
+    setAsking(false);
+    const ed = editorRef.current;
+    const model = ed?.getModel();
+    const line = Number.parseInt(text, 10);
+    if (!ed || !model || !Number.isFinite(line)) return;
+    const target = Math.max(1, Math.min(model.getLineCount(), line));
+    ed.revealLineInCenter(target);
+    ed.setPosition({ lineNumber: target, column: 1 });
+    ed.focus();
+  };
   if (!info) return null;
   return (
     <div className="v2-mono flex shrink-0 items-center gap-3 border-t border-[var(--v2-edge)] px-3 py-1 text-[11px] text-[var(--v2-muted)]">
-      <button type="button" aria-label="Go to line" title="Go to line"
-        className="v2-hover rounded px-1 text-left"
-        onClick={() => { const ed = editorRef.current; void ed?.getAction("editor.action.gotoLine")?.run(); ed?.focus(); }}>
-        {`Ln ${info.line}, Col ${info.column}`}{info.selected > 0 && ` (${info.selected} selected)`}
-      </button>
+      {asking ? (
+        <input autoFocus aria-label="Go to line" placeholder="Line" inputMode="numeric" onBlur={() => setAsking(false)}
+          onKeyDown={e => { if (e.key === "Enter") goTo(e.currentTarget.value); else if (e.key === "Escape") setAsking(false); }}
+          className="w-16 rounded border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] px-1 text-[11px] text-[var(--v2-text)] outline-none" />
+      ) : (
+        <button type="button" aria-label="Go to line" title="Go to line" className="v2-hover rounded px-1 text-left" onClick={() => setAsking(true)}>
+          {`Ln ${info.line}, Col ${info.column}`}{info.selected > 0 && ` (${info.selected} selected)`}
+        </button>
+      )}
       <span className="flex-1" />
       <span>{info.indent}</span>
       <span>{info.eol}</span>
