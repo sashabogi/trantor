@@ -84,3 +84,16 @@ it("asks before aborting a paused merge", async () => {
   await flush();
   expect(calls.find(call => call.command === "git_operation_abort")?.args).toEqual({ project: "trantor", scope: "project" });
 });
+
+it("keeps the abort question open when git is read again while the merge is still paused", async () => {
+  operation = { operation: "merge", conflicts: 0 };
+  const view = (readAt: number) => <ConflictView project="trantor" snap={{ ...resolvedSnap(), readAt }} path={null} onPick={() => undefined} onResolved={() => undefined} />;
+  await act(async () => { root.render(view(1)); });
+  await flush();
+  await act(async () => { findButton("Abort…")?.click(); });
+  await flush();
+  await act(async () => { root.render(view(2)); });
+  await flush();
+  expect(findButton("Confirm abort")).toBeDefined();
+  expect(calls.some(call => call.command === "git_operation_abort")).toBe(false);
+});

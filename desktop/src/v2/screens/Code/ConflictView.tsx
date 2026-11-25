@@ -97,7 +97,8 @@ export function ConflictView({ project, snap, path, onPick, onResolved }: { proj
   useEffect(() => {
     let alive = true;
     scopeOperation(project, scope)
-      .then(value => { if (alive) { setState(value); setConfirmAbort(false); } })
+      // The question stays open across re-reads of a still paused operation: closing it on every poll moved other buttons under the pointer (#14102 drill).
+      .then(value => { if (alive) { setState(value); if (!value.operation) setConfirmAbort(false); } })
       .catch(cause => { if (alive) setError(message(cause)); });
     return () => { alive = false; };
   }, [project, scope, snap.readAt, snap.status]);
