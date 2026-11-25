@@ -1,11 +1,9 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: Ledger and card records are historical external formats; their compatibility probes remain unchanged in this structural split. */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 let ledgerCache = { mtimeMs: -1, rows: [] };
-let telemetryCache = { maxMtimeMs: -1, turns: [] };
-const LOGDIR = join(homedir(), ".agent-bus", "logs");
 const TURN_OUTCOMES = new Set(["completed", "asked", "blocked", "no-delivery", "empty", "stalled", "cut", "rejected", "api-error"]);
 const stringWithin = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max;
 const safeInteger = (value, min = 0) => Number.isSafeInteger(value) && value >= min;
@@ -33,26 +31,8 @@ function validTurnRow(row, nowMs) {
   return { ...row, id: row.id.toLowerCase(), verdict: row.verdict.slice(0, 600) };
 }
 
-function scanTelemetry() {
-  let files = [];
-  try { files = readdirSync(LOGDIR).filter(f => f.endsWith(".jsonl")); } catch { return telemetryCache.turns; }
-  let maxMtimeMs = 0;
-  for (const file of files) { try { maxMtimeMs = Math.max(maxMtimeMs, statSync(join(LOGDIR, file)).mtimeMs); } catch {} }
-  if (maxMtimeMs === telemetryCache.maxMtimeMs) return telemetryCache.turns;
-  const turns = [];
-  for (const file of files) {
-    let source = ""; try { source = readFileSync(join(LOGDIR, file), "utf8"); } catch { continue; }
-    for (const line of source.trim().split("\n")) {
-      if (!line) continue;
-      try { const row = JSON.parse(line); if (row?.agent) turns.push(row); } catch {}
-    }
-  }
-  telemetryCache = { maxMtimeMs, turns };
-  return turns;
-}
-
 export async function routeInsights({ res, q, P, req, auth, ctx }) {
-  const { state, json, canon, now, body, scopeAllows, turnTelemetry, AUTH_MODE } = ctx;
+  const { state, json, canon, now, body, scopeAllows, filterReadable, turnTelemetry, AUTH_MODE } = ctx;
     if (req.method === "POST" && P === "/telemetry/turns") {
       const b = await body(req);
       if (!Array.isArray(b?.rows)) return json(res, 400, { error: "rows array required" });
@@ -75,6 +55,19 @@ export async function routeInsights({ res, q, P, req, auth, ctx }) {
         process.stderr.write(`[trantor] turn telemetry store failed: ${reason}\n`);
         return json(res, 500, { error: `turn telemetry store failed: ${reason}` });
       }
+    }
+    if (req.method === "GET" && P === "/telemetry/turns") {
+      const numberQuery = (value, fallback) => {
+        if (value === undefined || value === "") return fallback;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      };
+      const limit = Math.min(1000, Math.max(1, Math.floor(numberQuery(q.limit, 1000))));
+      const rows = turnTelemetry.readRows({
+        project: q.project || "", agent: q.agent || "",
+        since: numberQuery(q.since, 0), until: numberQuery(q.until, Number.MAX_SAFE_INTEGER),
+      });
+      return json(res, 200, { rows: filterReadable(auth, rows, row => row.project || "").slice(0, limit) });
     }
     if (req.method === "GET" && P === "/economics") {   // the brain's books, surfaced: scrooge ledger + quota profile
       const out = { scrooge: null, lifetime: null, profile: null };
@@ -162,7 +155,7 @@ export async function routeInsights({ res, q, P, req, auth, ctx }) {
     // charts), and the Scrooge guardrails baked into each model's prompt (+ per-model economics).
     if (req.method === "GET" && P === "/learning") {
       const projOf = by => (by && by.includes(":")) ? by.split(":").pop() : "";
-      // ts is ms (lessons/telemetry) or s (ledger). Null-safe: a malformed record with a missing/bad
+      // ts is ms (lessons) or s (ledger). Null-safe: a malformed record with a missing/bad
       // ts must not throw (new Date(NaN).toISOString() does) and 500 the whole endpoint — return null
       // and let callers skip that day-bucket.
       const dayOf = ts => { const n = Number(ts); if (!n) return null; const d = new Date(n > 2e10 ? n : n * 1000); return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
@@ -179,20 +172,25 @@ export async function routeInsights({ res, q, P, req, auth, ctx }) {
 
       // per-LLM reliability from turn telemetry, bucketed BY PROJECT (+ a global ALL bucket) so the
       // sidebar's project filter scopes the charts. Each turn carries its own project.
-      const turns = scanTelemetry();
+      const totals = turnTelemetry.readTotals();
       const relAgg = {};       // scope -> agent -> {turns,failures,models:Set,lastFailure,days}
       const scopeModels = {};  // scope -> Set(model used)
       let totalTurns = 0, totalFails = 0;
       const bumpRel = (scope, t) => {
         const a = ((relAgg[scope] ||= {})[t.agent] ||= { agent: t.agent, turns: 0, failures: 0, models: new Set(), lastFailure: null, days: {} });
-        a.turns++;
-        if (t.model) { a.models.add(t.model); if (t.model !== "default") (scopeModels[scope] ||= new Set()).add(t.model); }
-        const dk = dayOf(t.ts); const d = dk ? (a.days[dk] ||= { turns: 0, failures: 0 }) : null; if (d) d.turns++;
-        if (t.exit && t.exit !== 0) { a.failures++; if (d) d.failures++; if (!a.lastFailure || t.ts > a.lastFailure.ts) a.lastFailure = { ts: t.ts, exit: t.exit, project: t.project || "" }; }
+        a.turns += t.turns;
+        a.failures += t.failed;
+        for (const model of t.models) { a.models.add(model); if (model !== "default") (scopeModels[scope] ||= new Set()).add(model); }
+        const d = (a.days[t.day] ||= { turns: 0, failures: 0 });
+        d.turns += t.turns;
+        d.failures += t.failed;
+        if (t.lastFailure && (!a.lastFailure || t.lastFailure.ts > a.lastFailure.ts)) {
+          a.lastFailure = { ts: t.lastFailure.ts, exit: t.lastFailure.exit, project: t.project || "" };
+        }
       };
-      for (const t of turns) {
-        if (!t.agent) continue;
-        totalTurns++; if (t.exit && t.exit !== 0) totalFails++;
+      for (const t of totals) {
+        totalTurns += t.turns;
+        totalFails += t.failed;
         bumpRel(ALL, t);
         if (t.project) { bumpRel(t.project, t); projSet.add(t.project); }
       }

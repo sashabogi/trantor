@@ -285,6 +285,13 @@ const readTurnTotals = () => [...dailyTurns.values()].flatMap(projects =>
     models: [...total.models].sort(),
     lastFailure: total.lastFailure ? { ...total.lastFailure } : null,
   }))));
+function readTurnRows({ project = "", agent = "", since = 0, until = Number.MAX_SAFE_INTEGER, limit } = {}) {
+  const rows = [...turnRows.values()]
+    .filter(row => (!project || row.project === project) && (!agent || row.agent === agent) && row.ts >= since && row.ts <= until)
+    .sort((a, b) => b.ts - a.ts || String(b.id).localeCompare(String(a.id)));
+  const capped = Number.isSafeInteger(limit) && limit >= 0 ? Math.min(limit, 1000) : rows.length;
+  return rows.slice(0, capped).map(row => ({ ...row }));
+}
 function turnHealth() {
   const cutoff = Date.now() - 86400000;
   let lo = 0, hi = recentTurnTs.length;
@@ -306,7 +313,7 @@ const retentionTimer = setInterval(async () => {
   }
 }, 86400000);
 retentionTimer.unref?.();
-const turnTelemetry = { append: appendTurns, prune: pruneTurns, readTotals: readTurnTotals, health: turnHealth };
+const turnTelemetry = { append: appendTurns, prune: pruneTurns, readTotals: readTurnTotals, readRows: readTurnRows, health: turnHealth };
 
 let dirty = false;
 // Persist the unified log under `events`, AND mirror the card-only subset under the legacy

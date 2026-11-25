@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import { HubClient, type BalancesReport, type Learning } from "../../../shared/api/client";
+import { HubClient, type BalancesReport, type HubHealth, type Learning } from "../../../shared/api/client";
 import { UsageScreen } from "./index";
 import { dayKey } from "./model";
 
@@ -27,10 +27,12 @@ const report: BalancesReport = { ts: Date.now(), lowCount: 0, stale: false, entr
   { provider: "deepseek", label: "DeepSeek", kind: "prepaid", ok: true, low: false, remaining: 36 },
 ] };
 
-function client(): HubClient {
+function client(lastRowTs: number | null = Date.now(), learningData: Learning = learning()): HubClient {
   const c = new HubClient("http://127.0.0.1:1");
+  const health: HubHealth = { ok: true, authMode: "off", peers: 0, messages: 0, streams: 0, telemetry: { lastRowTs, rows24h: lastRowTs ? 1 : 0 } };
   vi.spyOn(c, "economics").mockResolvedValue({ windows: {} });
-  vi.spyOn(c, "learning").mockResolvedValue(learning());
+  vi.spyOn(c, "learning").mockResolvedValue(learningData);
+  vi.spyOn(c, "health").mockResolvedValue(health);
   vi.spyOn(c, "tasks").mockResolvedValue([]);
   vi.spyOn(c, "peers").mockResolvedValue([]);
   vi.spyOn(c, "balances").mockResolvedValue(report);
@@ -42,8 +44,8 @@ let root: Root;
 beforeEach(() => { mockIPC(cmd => (cmd === "machine_id" ? "m1" : undefined)); host = document.createElement("div"); document.body.append(host); root = createRoot(host); });
 afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.restoreAllMocks(); });
 
-async function mount(project = "") {
-  await act(async () => { root.render(<UsageScreen client={client()} project={project} onNavigate={() => {}} />); });
+async function mount(project = "", lastRowTs: number | null = Date.now(), learningData: Learning = learning()) {
+  await act(async () => { root.render(<UsageScreen client={client(lastRowTs, learningData)} project={project} onNavigate={() => {}} />); });
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
 }
 const click = (label: string) => act(() => { [...host.querySelectorAll("button")].find(b => b.textContent === label)?.click(); });
@@ -89,6 +91,19 @@ describe("UsageScreen", () => {
     expect(host.textContent).not.toContain("HOUR × WEEKDAY");
     expect(host.textContent).not.toMatch(/not wired/i);
     expect(host.textContent).toContain("CACHE AND CONTEXT");
+  });
+
+  it("says when the last turn was reported when the selected range is empty", async () => {
+    const empty = { ...learning(), agents: [] };
+    const lastRowTs = Date.parse("2026-11-20T12:30:00Z");
+    await mount("", lastRowTs, empty);
+    expect(host.querySelector("[data-empty-turns]")?.textContent).toBe(`No turns in this range. The last turn was reported ${new Date(lastRowTs).toLocaleString()}.`);
+  });
+
+  it("explains when no runner has ever reported a turn", async () => {
+    const empty = { ...learning(), agents: [] };
+    await mount("", 0, empty);
+    expect(host.querySelector("[data-empty-turns]")?.textContent).toBe("No turns in this range. No runner has reported a turn to this hub.");
   });
 
   it("exports the by-agent CSV through a download", async () => {

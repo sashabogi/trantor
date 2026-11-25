@@ -33,11 +33,12 @@ function row(overrides = {}) {
     ...overrides,
   };
 }
-async function request(base, identity, path, payload) {
-  const response = await sfetchJson(`${base}${path}`, { identity, payload });
+async function request(base, identity, path, payload, method = "POST") {
+  const response = await sfetchJson(`${base}${path}`, { identity, payload, method });
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 const post = (base, identity, rows) => request(base, identity, "/telemetry/turns", { rows });
+const get = (base, identity, path) => request(base, identity, path, undefined, "GET");
 let hub;
 
 try {
@@ -69,6 +70,7 @@ try {
     row({ id: "not-a-turn-id" }),
     row({ outcome: "unknown" }),
     row({ text: "output must not be accepted" }),
+    { agent: "kimi", project, ts: now, trigger: "boot" },
   ];
   result = await post(hub.base, seatA, [valid, ...invalid]);
   assert.deepEqual(result.body, { ok: true, stored: 1, duplicates: 0, dropped: invalid.length });
@@ -83,6 +85,23 @@ try {
 
   health = await (await fetch(`${hub.base}/health`)).json();
   ok(health.telemetry.rows24h === 5 && health.telemetry.lastRowTs === now + 1000, "health counts stored rows only and tracks the newest timestamp");
+
+  const learning = await get(hub.base, seatA, "/learning");
+  const learningKimi = learning.body.agents.find(agent => agent.agent === "kimi");
+  ok(learning.status === 200 && learning.body.totals.turns === 5 && learning.body.totals.failures === 1, "/learning totals come from stored turn rows");
+  ok(learningKimi?.turns === 3 && learningKimi.failures === 1 && learningKimi.lastFailure?.exit === 0, "/learning counts a clean-exit failed outcome as failed");
+  ok(learningKimi?.series.failRate.length === 1 && learningKimi.series.failRate[0].turns === 3 && learningKimi.series.failRate[0].failures === 1, "/learning serves the stored daily series without counting the boot row");
+  ok(learning.body.agentsByProject[project]?.length === 2, "/learning retains its per-project agent shape");
+
+  const raw = await get(hub.base, seatA, `/telemetry/turns?project=${project}&agent=kimi&since=${now}&until=${now}&limit=1000`);
+  ok(raw.status === 200 && raw.body.rows.length === 3 && raw.body.rows.every(item => item.agent === "kimi" && item.ts === now), "raw turns filter by project, agent, and inclusive time bounds");
+  const newest = await get(hub.base, seatA, `/telemetry/turns?project=${project}&limit=2`);
+  ok(newest.body.rows.length === 2 && newest.body.rows[0].ts === now + 1000 && newest.body.rows[0].agent === "codex", "raw turns are newest first and honor the requested limit");
+  const windowed = await get(hub.base, seatA, `/telemetry/turns?project=${project}&since=${now + 1}&until=${now + 1000}`);
+  ok(windowed.body.rows.length === 1 && windowed.body.rows[0].persona === "seat-b", "raw turns apply both timestamps together");
+  const missing = await get(hub.base, seatA, "/telemetry/turns?project=unknown");
+  ok(missing.status === 403, "raw turns refuse a project the signer cannot read");
+
   const old = row({ ts: now - 181 * 86400000, turn: 100 });
   result = await post(hub.base, seatA, [old]);
   ok(result.status === 200 && result.body.stored === 1, "old history can be backfilled before retention runs");
@@ -106,6 +125,10 @@ try {
   ok(kimi.lastFailure?.outcome === "empty" && kimi.lastFailure?.exit === 0, "failure totals use outcome rather than raw exit code");
   const codex = totals.find(total => total.day === day && total.project === project && total.agent === "codex");
   ok(codex?.turns === 2 && codex.models.includes("gpt"), "models and owner-backfilled rows survive restart totals");
+  const storedRows = runtime.turnTelemetry.readRows({ project, agent: "kimi", since: now, until: now });
+  ok(storedRows.length === 3 && storedRows.every(item => item.agent === "kimi"), "the store reads filtered raw rows after restart");
+  const storedNewest = runtime.turnTelemetry.readRows({ project, limit: 2 });
+  ok(storedNewest.length === 2 && storedNewest[0].ts === now + 1000, "the store caps and orders raw reads newest first");
 } finally {
   if (hub) await hub.stop();
   rmSync(dir, { recursive: true, force: true });

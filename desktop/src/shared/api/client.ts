@@ -132,6 +132,8 @@ export type DutyHealth = {
   queuedEscalations: number;
 };
 
+export type TelemetryHealth = { lastRowTs: number | null; rows24h: number };
+
 export type HubHealth = {
   ok: boolean;
   authMode: string;
@@ -140,7 +142,17 @@ export type HubHealth = {
   streams: number;
   /** v1.4: the public front door (Tailscale Funnel). Absent or empty when the hub has none. */
   publicUrl?: string;
+  telemetry?: TelemetryHealth;
   duty?: DutyHealth;
+};
+
+export type TurnRow = {
+  id: string; v: 1; ts: number; persona: string; agent: string; project: string; machine: string;
+  turn: number; trigger: string; card: number; model: string; duration_ms: number;
+  tokens: number | null; usage?: Record<string, number>;
+  exit: number | null; effExit: number | null; outcome: string; verdict: string;
+  cut?: boolean; stalled?: boolean; authFailed?: boolean; emptyOutput?: boolean; emptyTurn?: boolean;
+  cutSignal?: string; extensions?: number; boxMs?: number; containers?: string[];
 };
 
 /** POST /invite's answer: the token plus the scopes the hub actually stored (it may fold a role it does not know down to read). */
@@ -232,6 +244,13 @@ export class HubClient {
 
   /** The self-learning loop: relay lessons, per-agent reliability, per-model economics + guardrails. */
   learning() { return this.request<Learning>("GET", "/learning"); }
+
+  turns(opts: { project?: string; agent?: string; since?: number; until?: number; limit?: number } = {}) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(opts)) if (v !== undefined) q.set(k, String(v));
+    const s = q.toString();
+    return this.request<{ rows: TurnRow[] }>("GET", `/telemetry/turns${s ? "?" + s : ""}`).then(r => r.rows ?? []);
+  }
 
   /** Cross-session batons: who handed off what, where, and why. */
   handoffs(project?: string) {

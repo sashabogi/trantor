@@ -83,6 +83,8 @@ export function UsageScreen({ client }: ScreenProps) {
     downloadCsv("usage-all.csv", parts.map(p => toCsv(p.head, p.rows)).join("\n"));
   };
   const kpis = buildKpis({ stats, turnsDaily: bars.turns, failDaily: dailyFailures(stats, days), savedDaily: savedBars, econ, projectScoped: !!filters.project });
+  const hasTurns = bars.turns.some(day => day.total > 0);
+  const lastRowTs = dataOf(data.health)?.telemetry?.lastRowTs ?? 0;
 
   return (
     <div data-screen="usage" className="flex min-h-full flex-col gap-[14px] overflow-y-auto px-6 pb-6 pt-[18px]">
@@ -92,6 +94,13 @@ export function UsageScreen({ client }: ScreenProps) {
       {learning ? (
         <>
           <KpiRow kpis={kpis} />
+          {!hasTurns && (
+            <p data-empty-turns className="m-0 rounded-lg border border-[#2E3A5A] bg-[var(--v2-panel)] px-4 py-3 text-[12px] text-[var(--v2-muted)]">
+              No turns in this range. {lastRowTs
+                ? `The last turn was reported ${new Date(lastRowTs).toLocaleString()}.`
+                : "No runner has reported a turn to this hub."}
+            </p>
+          )}
           <DailyChart bars={bars} available={available} rangeLabel={rangeLabel} vendor={filters.vendor} onVendor={vendor => setFilters({ ...filters, vendor })} />
           <AgentTable rows={agents} agent={filters.agent} onAgent={agent => setFilters({ ...filters, agent })} />
           <div className="grid grid-cols-[repeat(auto-fit,minmax(380px,1fr))] gap-[14px]">
