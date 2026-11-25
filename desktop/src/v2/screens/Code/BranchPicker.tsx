@@ -23,7 +23,6 @@ export type PickerActions = {
   onCheckout: () => void;
   onSeat: (seat: string) => void;
   onCompare: (seat: string) => void;
-  onOpenPr: (seat: string) => void;
   onMessage: (seat: string) => void;
   onCopy: (text: string) => void;
 };
@@ -55,9 +54,7 @@ function SeatMenu({ s, acts, ops, onClose }: { s: SeatInfo & { branchLabel: stri
       <MenuRow label="Open its worktree in a tab" onClick={run(() => acts.onSeat(s.seat))} />
       <MenuRow label={`Message ${seatLabel(s.seat)}`} onClick={run(() => acts.onMessage(s.seat))} />
       <SectionLabel>With current branch</SectionLabel>
-      <MenuRow label="Crew review against main" disabled="No crew review start command from the desktop yet." />
       <MenuRow label="Compare with main" onClick={run(() => acts.onCompare(s.seat))} />
-      <MenuRow label="Open pull request" onClick={run(() => acts.onOpenPr(s.seat))} />
       <MenuRow label={`Merge ${s.branchLabel} into current`} disabled={!branch ? "Reading branches" : ops.mutationReason()} onClick={branch ? run(() => ops.integrate("merge", branch)) : undefined} />
       <MenuRow label="Rebase this seat branch onto main" disabled={!branch ? "Reading branches" : rebaseReason} onClick={branch && main ? run(() => ops.integrate("rebase", main)) : undefined} />
       <SectionLabel>Branch</SectionLabel>
@@ -166,7 +163,6 @@ export function BranchPicker({ project, seats, snap, scope, acts, onClose, onMut
       </div>
       <div className="flex items-center gap-2 border-t border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-muted)]">
         <Button disabledReason={ops.mutationReason()} onClick={() => setDialog({ kind: "create" })}>Create branch…</Button>
-        <button type="button" disabled title="Starting a seat on a branch needs the crew launcher from the desktop. Not wired yet." className="rounded-md border border-[var(--v2-edge-2)] bg-transparent px-2 py-1 text-[var(--v2-text-2)] disabled:opacity-45">Start a seat on a branch…</button>
         <span className="flex-1" />
         <span>⏎ switch</span>
       </div>

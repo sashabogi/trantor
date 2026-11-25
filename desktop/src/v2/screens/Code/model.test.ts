@@ -69,7 +69,6 @@ describe("sidebar fold rule", () => {
   it("folds while the full Source control tab is open, unless the operator brings it back", () => {
     expect(sidebarVisible("source", false)).toBe(false);
     expect(sidebarVisible("source", true)).toBe(true);
-    expect(sidebarVisible("pr", false)).toBe(false);
     expect(sidebarVisible("file", false)).toBe(true);
   });
 });

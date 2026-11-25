@@ -29,7 +29,7 @@ const branches = [
   { name: "origin/topic", sha: "d".repeat(40), committed_at: 300, ahead: null, behind: null, current: false, remote: true, worktree: null },
 ];
 const seats: SeatInfo[] = [{ seat: "dev", presence: "ready", branch: "seat/dev", ahead: 1, machine: null, hasWorktree: true }];
-const acts: PickerActions = { onCheckout: vi.fn(), onSeat: vi.fn(), onCompare: vi.fn(), onOpenPr: vi.fn(), onMessage: vi.fn(), onCopy: vi.fn() };
+const acts: PickerActions = { onCheckout: vi.fn(), onSeat: vi.fn(), onCompare: vi.fn(), onMessage: vi.fn(), onCopy: vi.fn() };
 const snapshot: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, status: [], counts: [], log: [], seatBacked: false, readAt: Date.now() };
 
 beforeEach(() => {

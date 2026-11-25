@@ -1,7 +1,7 @@
 // The editor tab strip (#13988): the Source control tab, file tabs, PR and merge tabs, and +.
 // #14072: a dirty tab carries a dot; closing a dirty tab asks first in an inline row under the
 // strip, never window.confirm.
-import { AlertTriangle, GitBranch, GitPullRequest, PanelLeftOpen, Plus, SquareSplitHorizontal, X } from "lucide-react";
+import { AlertTriangle, GitBranch, PanelLeftOpen, Plus, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
@@ -13,7 +13,6 @@ export const SOURCE_TAB: CodeTab = { id: "source", kind: "source", label: "Sourc
 
 const ICON = {
   source: <GitBranch size={13} aria-hidden />,
-  pr: <GitPullRequest size={13} aria-hidden />,
   conflict: <AlertTriangle size={13} aria-hidden className="text-[var(--v2-bad)]" />,
   file: null,
 } satisfies Record<MainTab, ReactNode>;
@@ -53,7 +52,6 @@ export function TabBar({ tabs, activeId, sidebarFolded, dirty, confirmId, onActi
         })}
         <IconButton label="New tab" title="New tab: search for a file to open" size={28} onClick={onNew}><Plus size={14} aria-hidden /></IconButton>
         <span className="flex-1" />
-        <IconButton label="Split editor" title="Split editor is not available yet" size={28} disabled><SquareSplitHorizontal size={14} aria-hidden /></IconButton>
       </div>
       {confirming && (
         <div role="alert" className="flex items-center gap-3 border-t border-[var(--v2-edge)] px-3 py-1.5 text-[12px] text-[var(--v2-text)]">

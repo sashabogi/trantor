@@ -15,7 +15,6 @@ import type { PickerActions } from "./BranchPicker";
 import { ChatRail } from "./ChatRail";
 import { ConflictView } from "./ConflictView";
 import { IconBar, type SideView } from "./IconBar";
-import { PrTab } from "./PrTab";
 import { Sidebar } from "./Sidebar";
 import { SourceControlTab, type ChatActs } from "./SourceControlTab";
 import { TabBar, type CodeTab } from "./TabBar";
@@ -96,7 +95,6 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     onCheckout: () => pick(null),
     onSeat: seat => pick(seat),
     onCompare: seat => { pick(seat); setViewPick("history"); setKey("unlanded"); },
-    onOpenPr: seat => tabs.open({ id: `pr:${seat}`, kind: "pr", label: `${seat} into main`, scope: seat }),
     onMessage: seat => { setChatWant(seat); setChatOpen(true); },
     onCopy: copy,
   };
@@ -161,7 +159,6 @@ function Main(p: MainProps) {
       </Suspense>
     );
   }
-  if (p.tab.kind === "pr" && p.tab.scope) return <PrTab client={p.client} project={p.project} seat={p.tab.scope} onAddToChat={p.acts.addToChat} />;
   if (p.state.kind === "error") return <div className="p-4"><NotWiredBlock title="Git could not be read for this view" line={p.state.reason} /></div>;
   if (!p.snap) return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Reading git</div>;
   if (p.tab.kind === "conflict") {

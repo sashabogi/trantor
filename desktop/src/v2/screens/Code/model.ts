@@ -81,12 +81,12 @@ export function groupBranches(input: { seats: readonly SeatInfo[]; filter: strin
   return { checkout, seats };
 }
 
-export type MainTab = "source" | "file" | "pr" | "conflict";
+export type MainTab = "source" | "file" | "conflict";
 
 /** The operator's rule: while the full Source control tab (or a PR) is open, its sidebar folds into
  *  the icon bar so the diff gets the width; the tab-bar button can bring it back (#13988). */
 export function sidebarVisible(active: MainTab, override: boolean): boolean {
-  const fullView = active === "source" || active === "pr" || active === "conflict";
+  const fullView = active === "source" || active === "conflict";
   return fullView ? override : true;
 }
 
