@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "release:mac": "APPLE_SIGNING_IDENTITY='Developer ID Application: Sasha Bogojevic (68KA9HJDSF)' tauri build",
     "test": "node ../bin/heavy-gate.mjs -- vitest run"
   },
   "dependencies": {
