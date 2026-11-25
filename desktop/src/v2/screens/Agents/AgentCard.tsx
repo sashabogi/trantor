@@ -1,17 +1,20 @@
 // One seat on the roster: who, what state, what card, what it may do, its plan, and the actions (#13992).
 import { useState } from "react";
-import { AlertTriangle, ArrowLeftRight, CornerDownRight, MessageSquare, RotateCw, ShieldCheck, Square, Terminal } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, MessageSquare, RotateCw, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import type { BalanceChip } from "../../../features/fleet/balanceChips";
 import { LEVEL_LABEL } from "../../../features/overseer/model";
+import { seatName } from "../../../features/workspace/paneTargets";
 import { dictGet } from "../../../shared/dict";
 import { ago } from "../../../shared/presence";
 import type { Card, HubClient } from "../../../shared/api/client";
 import { Avatar, Chip, IconButton, modelHue, PRESENCE_LABEL, seatLabel, type Navigate } from "../../index";
-import type { SeatView } from "./model";
+import { PopMenu } from "../Workspace/PopMenu";
+import { isHostSession } from "../Workspace/seatModel";
+import type { Crew } from "../Workspace/useCrew";
+import { noticeSeat, type SeatView } from "./model";
 
-const NOT_WIRED_SWAP = "Swap is not wired yet: the hub has no swap endpoint";
-const NOT_WIRED_HANDOFF = "Hand off is not wired yet: handoffs start from the seat's own session";
-const NOT_WIRED_STOP = "Stopping a single seat is not wired yet: only the duty seat has a stop";
+const ORCH_NOTE = "This is your own session; manage it from its window";
+const STOP_TITLE = "Its work stays on its branch";
 
 const STATE_COLOR = { working: "var(--v2-accent)", "needs-you": "var(--v2-warn)", ready: "var(--v2-ok)", offline: "var(--v2-muted)" } as const;
 
@@ -26,6 +29,8 @@ export type AgentCardProps = {
   onNavigate: Navigate;
   /** Present only on the duty seat's card: the one seat the app can start and stop. */
   duty?: DutyControls;
+  /** The crew controls for the project on screen; absent when this seat runs in another project. */
+  crew?: Crew;
 };
 
 function stateLine(v: SeatView): string {
@@ -69,22 +74,42 @@ function MessageBox({ client, view, onDone }: { client: HubClient; view: SeatVie
   );
 }
 
-function Actions({ view, onNavigate, duty, onMessage }: Pick<AgentCardProps, "view" | "onNavigate" | "duty"> & { onMessage: () => void }) {
+/** The seat's notice: useCrew writes "<seat> · <what happened>", and a failure must land on the card that acted. */
+function Notice({ crew, seat }: { crew: Crew; seat: string }) {
+  if (!crew.notice || noticeSeat(crew.notice.text) !== seat) return null;
+  return (
+    <div role="status" className={`flex items-center gap-2 text-[11.5px] ${crew.notice.failed ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
+      <span className="min-w-0 flex-1">{crew.notice.text}</span>
+      <IconButton label="Dismiss the seat notice" title="Dismiss" size={20} onClick={crew.dismiss}><X size={11} /></IconButton>
+    </div>
+  );
+}
+
+function Actions({ view, onNavigate, duty, crew, onMessage }: Pick<AgentCardProps, "view" | "onNavigate" | "duty" | "crew"> & { onMessage: () => void }) {
   const name = seatLabel(view.peer.session);
   const offline = view.presence === "offline";
+  const seat = seatName(view.peer.session);
+  const host = isHostSession(view.peer.session);
   return (
     <div className="mt-2.5 flex items-center gap-1 border-t border-[var(--v2-edge)] pt-2">
       <IconButton label={`Message ${name}`} title={`Message ${name}`} onClick={onMessage} disabled={offline}><MessageSquare size={14} /></IconButton>
       <IconButton label="Open its terminal" title="Open its terminal in the Workspace" onClick={() => onNavigate("workspace", view.project || undefined)}><Terminal size={14} /></IconButton>
-      <IconButton label="Swap model or harness" title={NOT_WIRED_SWAP} disabled><ArrowLeftRight size={14} /></IconButton>
-      <IconButton label="Hand off" title={NOT_WIRED_HANDOFF} disabled><CornerDownRight size={14} /></IconButton>
-      {duty
-        ? <IconButton label="Restart the runner" title="Start the duty seat (trantor duty up)" disabled={duty.busy} onClick={duty.start}><RotateCw size={14} /></IconButton>
-        : <IconButton label="Restart the runner" title="Restart is not wired yet: only the duty seat can be started from the app" disabled><RotateCw size={14} /></IconButton>}
+      {crew && (host
+        ? <IconButton label={`Swap ${name}`} title={ORCH_NOTE} disabled><ArrowLeftRight size={14} /></IconButton>
+        : <PopMenu heading={`Swap ${name} to`} empty="No other agent is installed, enabled and within quota"
+            items={crew.available.filter(a => a.id !== seat).map(a => ({ id: a.id, label: a.label, sub: "keeps the card", disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.swap(seat, a.id) }))}
+            trigger={p => (
+              <IconButton {...p} label={`Swap ${name}`} title="Swap model, keep the card"><ArrowLeftRight size={14} /></IconButton>
+            )} />)}
+      {/* No Restart on a crew seat: crew.start takes a catalog id, not the seat's instance name, so stop-then-start can fail and leave it stopped. */}
+      {duty && <IconButton label="Restart the runner" title="Start the duty seat (trantor duty up)" disabled={duty.busy} onClick={duty.start}><RotateCw size={14} /></IconButton>}
       <span className="flex-1" />
       {duty
-        ? <IconButton label={`Stop ${name}`} title={`Stop ${name}: its work stays on its branch`} disabled={duty.busy} onClick={duty.stop}><Square size={13} /></IconButton>
-        : <IconButton label={`Stop ${name}`} title={NOT_WIRED_STOP} disabled><Square size={13} /></IconButton>}
+        ? <IconButton label={`Stop ${name}`} title={`Stop ${name}: ${STOP_TITLE}`} disabled={duty.busy} onClick={duty.stop}><Square size={13} /></IconButton>
+        : crew && (host
+          ? <IconButton label={`Stop ${name}`} title={ORCH_NOTE} disabled><Square size={13} /></IconButton>
+          : <IconButton label={`Stop ${name}`} title={`Stop ${name}: ${STOP_TITLE}`} disabled={crew.busy} className="text-[var(--v2-bad)]"
+              onClick={() => void crew.stop(seat)}><Square size={13} /></IconButton>)}
     </div>
   );
 }
@@ -130,7 +155,8 @@ export function AgentCard(props: AgentCardProps) {
         </div>
       )}
       {composing && <MessageBox client={props.client} view={view} onDone={() => setComposing(false)} />}
-      <Actions view={view} onNavigate={onNavigate} duty={props.duty} onMessage={() => setComposing(c => !c)} />
+      <Actions view={view} onNavigate={onNavigate} duty={props.duty} crew={props.crew} onMessage={() => setComposing(c => !c)} />
+      {props.crew && <div className="mt-2"><Notice crew={props.crew} seat={seatName(p.session)} /></div>}
     </article>
   );
 }

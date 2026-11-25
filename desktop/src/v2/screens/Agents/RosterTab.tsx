@@ -2,6 +2,7 @@
 import { useState } from "react";
 import type { HubClient } from "../../../shared/api/client";
 import type { Navigate } from "../../index";
+import type { Crew } from "../Workspace/useCrew";
 import { AddSeat } from "./AddSeat";
 import { AgentCard } from "./AgentCard";
 import { Elsewhere, Machines, SECTION_LABEL } from "./Machines";
@@ -18,9 +19,9 @@ function Pill({ on, onClick, children }: { on: boolean; onClick: () => void; chi
   );
 }
 
-export type RosterTabProps = { client: HubClient; project: string; data: AgentsData; ov: OverseerData; onNavigate: Navigate };
+export type RosterTabProps = { client: HubClient; project: string; data: AgentsData; ov: OverseerData; crew: Crew; onNavigate: Navigate };
 
-export function RosterTab({ client, project, data, ov, onNavigate }: RosterTabProps) {
+export function RosterTab({ client, project, data, ov, crew, onNavigate }: RosterTabProps) {
   const [scope, setScope] = useState<Scope>("project");
   const [state, setState] = useState<StateFilter>("all");
   const shown = rosterSort(applyFilters(data.views, scope, project, state));
@@ -42,11 +43,12 @@ export function RosterTab({ client, project, data, ov, onNavigate }: RosterTabPr
         {shown.map(v => (
           <AgentCard key={v.peer.session} client={client} view={v} card={currentCard(v.peer.session, data.cards)}
             plan={chipForVendor(v.vendor, data.balances.report)} level={levelFor(autonomy, v.project)} onNavigate={onNavigate}
+            crew={v.project === project ? crew : undefined}
             duty={v.peer.session === ov.status?.dutySession ? { busy: ov.busy, start: ov.startDuty, stop: ov.stopDuty } : undefined} />
         ))}
       </div>
       {shown.length === 0 && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">No seats match this filter.</p>}
-      <AddSeat report={data.balances.report} />
+      <AddSeat report={data.balances.report} crew={crew} />
       <div className={SECTION_LABEL}>Machines</div>
       <Machines report={data.machines} views={data.views} />
       {scope === "project" && <>

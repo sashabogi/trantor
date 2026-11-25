@@ -111,3 +111,9 @@ export function planLine(entry: BalanceEntry | undefined): PlanState {
   if (entry.kind === "prepaid") return { tone: entry.low ? "warn" : "ok", line: "metered" };
   return { tone: "none", line: "no meter" };
 }
+
+/** The seat a crew notice is about: useCrew writes "<seat> · <what happened>". */
+export function noticeSeat(text: string): string {
+  const i = text.indexOf(" · ");
+  return i < 0 ? "" : text.slice(0, i);
+}

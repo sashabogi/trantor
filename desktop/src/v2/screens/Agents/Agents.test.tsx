@@ -5,7 +5,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HubClient, type Peer } from "../../../shared/api/client";
 import { AutonomyLadder } from "./AutonomyLadder";
-import { headerCounts, presenceOf, rosterSort, toSeatViews, vendorOf } from "./model";
+import { isHostSession } from "../Workspace/seatModel";
+import { headerCounts, noticeSeat, presenceOf, rosterSort, toSeatViews, vendorOf } from "./model";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -27,6 +28,18 @@ describe("presence", () => {
   it("finds the vendor from the session brand", () => {
     expect(vendorOf(peer("codex:trantor", 0))).toBe("Codex");
     expect(vendorOf(peer("x", 0, { llm: "glm" }))).toBe("GLM");
+  });
+  it("flags the operator's host session and no crew seat, whatever the case", () => {
+    expect(isHostSession("MacBook-Pro-M1:trantor")).toBe(true);
+    expect(isHostSession("macbook-pro-m1:ember")).toBe(true);
+    expect(isHostSession("codex-8:trantor")).toBe(false);
+    expect(isHostSession("claude:trantor-duty")).toBe(false);
+  });
+  it("reads the seat a crew notice is about, and a seatless line belongs to no card", () => {
+    expect(noticeSeat("codex-8 · no runner for codex-8")).toBe("codex-8");
+    expect(noticeSeat("kimi · done")).toBe("kimi");
+    expect(noticeSeat("Seat catalog unavailable for trantor: boom")).toBe("");
+    expect(noticeSeat("done")).toBe("");
   });
 });
 

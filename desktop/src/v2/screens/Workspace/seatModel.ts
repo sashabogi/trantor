@@ -24,16 +24,21 @@ export type SeatView = {
   target: PaneTarget;
 };
 
+/** The operator's own host session, the one rule every screen shares: not a seat, and no crew action may stop or swap it. */
+export function isHostSession(session: string): boolean {
+  return session.toLowerCase().startsWith("macbook");
+}
+
 /** A seat is a crew peer of this project; the human's own host session and non-agent tools are not seats (#13987). */
 export function seatPeers(peers: Peer[], project: string): Peer[] {
   return peers
     .filter(p => p.session.endsWith(`:${project}`))
-    .filter(p => !p.session.toLowerCase().startsWith("macbook"))
+    .filter(p => !isHostSession(p.session))
     .filter(isAgentPeer);
 }
 
 export function hostPeer(peers: Peer[], project: string): Peer | undefined {
-  return peers.find(p => p.session.endsWith(`:${project}`) && p.session.toLowerCase().startsWith("macbook"));
+  return peers.find(p => p.session.endsWith(`:${project}`) && isHostSession(p.session));
 }
 
 const WORDS = { working: "working", "needs-you": "needs you", ready: "ready", offline: "offline" } as const satisfies Record<Presence, string>;

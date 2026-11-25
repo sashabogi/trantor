@@ -1,5 +1,5 @@
 // One place the Agents screen reads from: peers, cards, plans, machines, and who is waiting on the human (#13992).
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, Peer } from "../../../shared/api/client";
 import { usePeers } from "../../../shared/presence";
 import { useTasks } from "../../../shared/tasks";
@@ -31,6 +31,8 @@ export type AgentsData = {
   cards: Card[];
   balances: ReturnType<typeof useBalances>;
   machines: ReturnType<typeof useMachinesHealth>;
+  /** After a crew action: re-derive presence at once; peers land on the next presence event or poll. */
+  refresh: () => void;
 };
 
 export function useAgentsData(client: HubClient): AgentsData {
@@ -41,8 +43,9 @@ export function useAgentsData(client: HubClient): AgentsData {
   const needs = useNeedsYou(client);
   // Presence decays with the clock, so re-derive on a tick as well as on new peers.
   const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick(n => n + 1), []);
   useEffect(() => { const t = setInterval(() => setTick(n => n + 1), 15_000); return () => clearInterval(t); }, []);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const views = useMemo(() => toSeatViews(peers ?? [], needs), [peers, needs, tick]);
-  return { peers, error, views, cards, balances, machines };
+  return { peers, error, views, cards, balances, machines, refresh };
 }
