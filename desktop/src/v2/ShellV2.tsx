@@ -8,6 +8,7 @@ import { MODE_CONFIG, saveMode, useShellMode, type Mode } from "./shell/shellMod
 import { useShellData } from "./shell/useShellData";
 import { TopBar } from "./shell/TopBar";
 import { ShortcutLayer } from "./shell/ShortcutLayer";
+import { keepInputsPlain } from "./shell/plainInputs";
 import { AgentCliBanner } from "./shell/AgentCliBanner";
 import { Rail } from "./shell/Rail";
 import { BottomBar } from "./shell/BottomBar";
@@ -89,6 +90,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
       hint={start.planHint === data.active} onRetry={p => void start.retry(p)} onDismiss={start.dismissWake}
       onDismissHint={start.dismissHint} />
   ) : null;
+  useEffect(() => keepInputsPlain(document.body), []);
   return (
     <div className="v2-root flex flex-col" {...start.rootProps}>
       <TopBar projects={data.projects} project={data.active} onProject={p => onNavigate(isLensScreen(screen) ? screen : landing, p)}
