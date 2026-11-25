@@ -23,17 +23,14 @@ let calls: { command: string; args: Args }[];
 let host: HTMLDivElement;
 let root: Root;
 let copied: string[];
-let asked: string[];
-let answer: boolean;
 beforeEach(() => {
-  calls = []; copied = []; asked = []; answer = true;
+  calls = []; copied = [];
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
   });
   vi.stubGlobal("navigator", { clipboard: { writeText: async (t: string) => { copied.push(t); } } });
-  vi.stubGlobal("confirm", (q: string) => { asked.push(q); return answer; });
   mockIPC((command, payload) => {
     // SAFETY: mockIPC types payload as unknown; these commands are invoked with an object of named args.
     const args = (payload ?? {}) as Args;
@@ -67,6 +64,7 @@ const choose = async (path: string, name: string) => {
   await flush();
 };
 const call = (command: string) => calls.find(c => c.command === command);
+const question = () => host.querySelector<HTMLElement>("[data-explorer-confirm]");
 
 describe("row menu", () => {
   it("copies the relative path as given and the absolute path from the native side", async () => {
@@ -152,21 +150,27 @@ describe("folders", () => {
     expect(call("rename_file")).toBeUndefined();
   });
 
-  it("says how many files are inside before deleting, then deletes", async () => {
+  it("says how many files are inside before deleting, then deletes on the click", async () => {
     await mount();
     await choose("src", "Delete");
-    expect(asked).toEqual([folderDeleteQuestion("src", 3)]);
-    expect(asked[0]).toContain("3 files");
+    await flush();
+    expect(question()?.textContent).toContain(folderDeleteQuestion("src", 3));
+    expect(question()?.textContent).toContain("3 files");
+    expect(call("delete_folder")).toBeUndefined();
+    await act(async () => { question()?.querySelector<HTMLButtonElement>('button[data-variant="danger"]')?.click(); });
+    await flush();
     expect(call("delete_folder")?.args).toMatchObject({ path: "src" });
     expect(call("delete_file")).toBeUndefined();
   });
 
-  it("deletes nothing when the question is declined", async () => {
-    answer = false;
+  it("deletes nothing when the question is cancelled", async () => {
     await mount();
     await press(item("docs"), "Delete");
     await flush();
-    expect(asked).toHaveLength(1);
+    expect(question()).not.toBeNull();
+    await act(async () => { question()?.querySelector<HTMLButtonElement>('button[data-variant="quiet"]')?.click(); });
+    await flush();
+    expect(question()).toBeNull();
     expect(call("delete_folder")).toBeUndefined();
   });
 

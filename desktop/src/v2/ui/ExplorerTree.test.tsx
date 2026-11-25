@@ -195,12 +195,15 @@ describe("behaviour", () => {
   });
 
   it("renames and deletes from the row menu with the classic calls", async () => {
-    vi.stubGlobal("confirm", () => true);
     await mount();
     await act(async () => { item("clean.ts")?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
     const menu = host.querySelector('[role="menu"][aria-label="Actions for clean.ts"]');
     expect([...(menu?.querySelectorAll("button") ?? [])].map(b => b.textContent)).toEqual(["New file", "Rename", "Delete", "Move to", "Copy path", "Copy relative path", "Reveal in Finder"]);
     await click([...(menu?.querySelectorAll("button") ?? [])].find(b => b.textContent === "Delete") ?? null);
+    await flush();
+    expect(calls.find(c => c.command === "delete_file")).toBeUndefined();
+    expect(host.querySelector("[data-explorer-confirm]")?.textContent).toContain("Delete clean.ts?");
+    await click(host.querySelector<HTMLButtonElement>('[data-explorer-confirm] button[data-variant="danger"]'));
     await flush();
     expect(calls.find(c => c.command === "delete_file")?.args).toMatchObject({ path: "clean.ts" });
     await press(item("clean.ts"), "F2");

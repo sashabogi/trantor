@@ -8,6 +8,7 @@ import { IconButton } from "./IconButton";
 import { ExplorerRow, NameInput, type RowAction, type RowMark } from "./ExplorerRow";
 import { joinPath, parentOf, renameFolder } from "./explorerOps";
 import { MoveToPicker } from "./MoveToPicker";
+import { DeleteConfirm } from "./ExplorerConfirm";
 import { useExplorerOps } from "./useExplorerOps";
 import { LEGEND, TONE_VAR, decorate, decorateCode } from "./explorerStatus";
 import { useExplorerData, type ExplorerData } from "./useExplorerData";
@@ -80,6 +81,7 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
   const [focused, setFocused] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [moving, setMoving] = useState<FileEntry | null>(null);
+  const [asking, setAsking] = useState<{ entry: FileEntry; text: string } | null>(null);
   const [dragPath, setDragPath] = useState<string | null>(null);
   const [overPath, setOverPath] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -103,9 +105,14 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
   };
   const ops = useExplorerOps({ project, seat: scopeSeat, run, note: setNote });
   const remove = (entry: FileEntry) => {
-    if (entry.dir) return ops.removeFolder(entry);
-    if (!confirm(`Delete ${entry.path}?`)) return;
-    run(deleteFile(project, entry.path, scopeSeat));
+    if (!entry.dir) { setAsking({ entry, text: `Delete ${entry.path}?` }); return; }
+    ops.folderQuestion(entry).then(text => setAsking({ entry, text })).catch(e => setNote(e instanceof Error ? e.message : String(e)));
+  };
+  const confirmRemove = () => {
+    if (!asking) return;
+    setAsking(null);
+    if (asking.entry.dir) ops.deleteFolder(asking.entry);
+    else run(deleteFile(project, asking.entry.path, scopeSeat));
   };
   const act = (entry: FileEntry, a: RowAction) => {
     setMenu(null);
@@ -142,6 +149,7 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
         <Legend />
       </div>
       {moving && <MoveToPicker project={project} seat={seat} entry={moving} onClose={() => setMoving(null)} onPick={dir => { if (dir) d.expand(dir); ops.move(moving, dir); setMoving(null); }} />}
+      {asking && <DeleteConfirm text={asking.text} onConfirm={confirmRemove} onCancel={() => setAsking(null)} />}
       {note && <div role="status" className="px-3 pb-1 text-[11px] text-[var(--v2-bad)]">{note}</div>}
       <div ref={treeRef} role="tree" aria-label="Files" onKeyDown={onKeyDown} className="flex flex-col">
         {createAt("")}

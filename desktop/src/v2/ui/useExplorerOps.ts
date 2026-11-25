@@ -25,10 +25,7 @@ export function useExplorerOps({ project, seat, run, note }: Deps) {
       run(movePath(project, entry.path, joinPath(dir, entry.name), seat));
     },
     renameFolder: (entry: FileEntry, to: string) => run(renameFolder(project, entry.path, to, seat)),
-    removeFolder: (entry: FileEntry) => {
-      countFolderFiles(project, entry.path, seat)
-        .then(files => { if (confirm(folderDeleteQuestion(entry.path, files))) run(deleteFolder(project, entry.path, seat)); })
-        .catch(e => note(e instanceof Error ? e.message : String(e)));
-    },
+    folderQuestion: (entry: FileEntry) => countFolderFiles(project, entry.path, seat).then(files => folderDeleteQuestion(entry.path, files)),
+    deleteFolder: (entry: FileEntry) => run(deleteFolder(project, entry.path, seat)),
   };
 }
