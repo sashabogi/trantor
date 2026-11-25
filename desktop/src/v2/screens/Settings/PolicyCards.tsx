@@ -1,4 +1,4 @@
-// The static and not-yet-wired cards under the dials: policy copy from the artboard (#13994).
+// Static policy copy under the dials, from the artboard (#13994).
 import { Lock } from "lucide-react";
 import { Chip } from "../../ui/Chip";
 import { Section } from "../../ui/Section";
@@ -16,16 +16,6 @@ const AGREEMENTS = [
   { title: "Seats never touch your live surfaces", body: "No app launches, provider logins, or trantor up and down." },
   { title: "Turn ends with a commit", body: "Uncommitted work does not exist." },
 ] as const;
-
-export function AlwaysAllowed() {
-  return (
-    <Section title="Always allowed" sub="Grown from your approvals: every Always you click will land here with its scope.">
-      <p className="m-0 text-[12px] text-[var(--v2-muted)]">
-        Not wired yet. The hub does not store approval rules today, so there is nothing to list or remove. This list will grow from approvals once it does.
-      </p>
-    </Section>
-  );
-}
 
 export function AlwaysAsks() {
   return (

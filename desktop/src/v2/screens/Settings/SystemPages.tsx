@@ -78,8 +78,7 @@ export function IdentityPage({ me }: { me: string }) {
 
 export function PhoneCard({ hubBase }: { hubBase: string }) {
   return (
-    <Section title="Phone" sub="The companion app enrolls itself from a QR: one invite, single use, ten minutes."
-      actions={<Chip title="Per-permission switches for the phone have no hub setting to write yet">permission switches not wired</Chip>}>
+    <Section title="Phone" sub="The companion app enrolls itself from a QR: one invite, single use, ten minutes.">
       <PairPhone hubBase={hubBase} />
       <RelayChat />
     </Section>

@@ -1,8 +1,6 @@
-// SETTINGS (#13994): artboard nav, the Autonomy page in full, classic panes re-skinned elsewhere,
-// and an honest not-wired line where classic has no equivalent.
+// SETTINGS (#13994): artboard nav, the Autonomy page in full and classic panes re-skinned elsewhere.
 import { useEffect, useMemo, useState } from "react";
 import type { ScreenProps } from "../../routes";
-import { NotWired } from "../../shell/ClassicLenses";
 import { Button } from "../../ui/Button";
 import { AutonomyPage } from "./AutonomyPage";
 import { AboutPage, GeneralPage, NotificationsPage } from "./GeneralPages";
@@ -11,24 +9,6 @@ import { AccountsPage, AgentClisCard, AgentsPage, HubPage, IdentityPage, PhoneCa
 import { SettingsNav } from "./SettingsNav";
 import { SECTIONS, filterSections, type SectionId } from "./sections";
 import { useSettingsData } from "./useSettingsData";
-
-const NOT_WIRED_LINE = {
-  models: "Defaults per job. No model-per-job setting exists on the hub yet.",
-  keyboard: "Shortcuts and conflicts. The shortcut map is not readable yet.",
-  memory: "What loads into a turn. Memory and rules are not exposed to the app yet.",
-  hooks: "What runs on events. Installed hooks are not readable from the app yet.",
-  budgets: "Caps per metered provider. Budget limits are not wired yet; balances show in the bottom bar.",
-  repository: "Protected branches, merge method and the gate. Not wired yet.",
-  worktrees: "Where seats work. Not wired yet.",
-  editor: "Font and format on save. Not wired yet; the app to open code in is under General.",
-  storage: "Logs, transcripts and cleanup. Not wired yet.",
-  drill: "Recorder settings. Drill Mode itself starts from the classic app (Settings, then About); its recorder settings are not wired here yet.",
-} satisfies Partial<Record<SectionId, string>>;
-
-function wiredLine(id: SectionId): string {
-  const hit = Object.entries(NOT_WIRED_LINE).find(([k]) => k === id);
-  return hit ? hit[1] : "Not wired yet.";
-}
 
 export function SettingsScreen({ client, project, onNavigate }: ScreenProps) {
   const [query, setQuery] = useState("");
@@ -90,6 +70,5 @@ function Page({ id, props, data, query, onNavigate }: PageProps) {
     case "hub": return <HubPage />;
     case "identity": return <IdentityPage me={data.me} />;
     case "about": return <><AboutPage /><AgentClisCard /></>;
-    default: return <NotWired title={SECTIONS.find(s => s.id === id)?.label ?? id} line={wiredLine(id)} />;
   }
 }

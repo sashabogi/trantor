@@ -1,4 +1,4 @@
-// Cache, wasted turns and the heatmap: real where the hub serves the data, NotWired where it does not (#13991).
+// Cache ratios and failed-turn counts read from the hub (#13991).
 import { NotWired, Section } from "../../index";
 import type { BalanceRow } from "../../../features/fleet/balanceChips";
 import { fmtInt, fmtPct } from "./format";
@@ -43,17 +43,6 @@ export function WastedPanel({ stats }: { stats: AgentStat[] }) {
           </li>
         ))}
       </ul>
-      <div className="mt-3 border-t border-[var(--v2-edge)] pt-1">
-        <NotWired title="By cause" line="Exit codes, empty turns and auth failures sit in each seat's local log; the hub serves only the failure count." />
-      </div>
-    </Section>
-  );
-}
-
-export function HeatmapPanel() {
-  return (
-    <Section title="HOUR × WEEKDAY" sub="when the fleet works">
-      <NotWired title="Not wired yet" line="The hub serves turns per day, not per hour. The hour-by-weekday grid needs per-turn timestamps." />
     </Section>
   );
 }

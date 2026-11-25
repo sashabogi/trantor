@@ -82,6 +82,15 @@ describe("UsageScreen", () => {
     expect(host.querySelector("[data-filter]")).toBeNull();
   });
 
+  it("omits controls and insights for which the hub has no data", async () => {
+    await mount();
+    expect(host.textContent).not.toContain("Budgets and alerts");
+    expect(host.textContent).not.toContain("By cause");
+    expect(host.textContent).not.toContain("HOUR × WEEKDAY");
+    expect(host.textContent).not.toMatch(/not wired/i);
+    expect(host.textContent).toContain("CACHE AND CONTEXT");
+  });
+
   it("exports the by-agent CSV through a download", async () => {
     const created: Blob[] = [];
     URL.createObjectURL = (b: Blob | MediaSource) => { if (b instanceof Blob) created.push(b); return "blob:x"; };

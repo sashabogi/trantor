@@ -39,6 +39,12 @@ describe("nav search", () => {
     expect(filterSections("zzzz")).toEqual([]);
   });
 
+  it("lists only sections with real content", () => {
+    expect(SECTIONS.map(s => s.id)).toEqual([
+      "general", "notifications", "accounts", "phone", "agents", "autonomy", "agreements", "extensions", "hub", "identity", "about",
+    ]);
+  });
+
   it("renders only the matching groups and says so when nothing matches", () => {
     act(() => root.render(<SettingsNav sections={filterSections("keychain")} active="accounts" query="keychain" onQuery={() => {}} onPick={() => {}} />));
     expect(host.querySelector('[data-section="accounts"]')).not.toBeNull();

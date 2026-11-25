@@ -6,7 +6,7 @@ import { Button } from "../../ui/Button";
 import { Section } from "../../ui/Section";
 import { Seg } from "../../ui/Seg";
 import { DialRow } from "./DialRow";
-import { AlwaysAllowed, AlwaysAsks } from "./PolicyCards";
+import { AlwaysAsks } from "./PolicyCards";
 import { DIALS, autonomyApi, dialBlockedBy, resetPlan, type AutonomyApi, type AutonomyState } from "./autonomyModel";
 import { rowMatches } from "./sections";
 
@@ -60,7 +60,6 @@ export function AutonomyPage({ client, project, query, api = autonomyApi }: Auto
       {!state && !error && <div className="text-[12.5px] text-[var(--v2-muted)]">reading the dials…</div>}
       {state && <Dials state={state} target={target} query={query} busy={busy} onWrite={write} onReset={reset} />}
       <OverseerLadder client={client} project={project} target={target} query={query} />
-      {rowMatches(query, "always allowed", "rule", "approval") && <AlwaysAllowed />}
       {rowMatches(query, "always asks", "force-push", "irreversible", "launch or quit the app") && <AlwaysAsks />}
       <p className="m-0 text-[11.5px] text-[var(--v2-muted)]">
         Every change here is written through the trantor CLI, so the rules between dials live in one place.

@@ -1,10 +1,10 @@
-// Usage and costs: plans, spend, turns and outcomes from real hub reads; honest gaps elsewhere (#13991).
+// Usage and costs: plans, spend, turns and outcomes from real hub reads (#13991).
 import { useMemo, useState } from "react";
 import { Button, NotWired, Seg, type ScreenProps } from "../../index";
 import type { BalanceRow } from "../../../features/fleet/balanceChips";
 import { useBalances } from "../../shell/useBalances";
 import { DailyChart, type Metric } from "./DailyChart";
-import { CachePanel, HeatmapPanel, WastedPanel } from "./Insights";
+import { CachePanel, WastedPanel } from "./Insights";
 import { buildKpis, KpiRow } from "./Kpis";
 import { PlansPanel } from "./PlansPanel";
 import { AgentTable, CardTable, ProjectTable } from "./Tables";
@@ -34,7 +34,6 @@ function FilterBar({ filters, onChange, onExport }: { filters: Filters; onChange
       ))}
       {active.length === 0 && <span>none · click a project, agent or vendor to filter</span>}
       <span className="flex-1" />
-      <Button disabledReason="Monthly caps and alerts are not wired yet">Budgets and alerts</Button>
       <Button onClick={onExport}>Export all</Button>
     </div>
   );
@@ -100,7 +99,6 @@ export function UsageScreen({ client }: ScreenProps) {
             <ProjectTable rows={projects} project={filters.project} onProject={p => setFilters({ ...filters, project: p })} />
           </div>
           <div className="grid grid-cols-[repeat(auto-fit,minmax(320px,1fr))] gap-[14px]">
-            <HeatmapPanel />
             <WastedPanel stats={stats} />
             <CachePanel rows={rows} />
           </div>
