@@ -470,6 +470,11 @@ trantor setup | doctor | connect | profile | provider | models
   then logs, tracked panes, live pids): `live`, `dead-quota`, `dead-auth`, `dead-crash`,
   `no-runner`, or `no-pane`, each with the advice that actually fits. A quota-dead seat is
   indistinguishable from a broken bus until you read the err file — this reads it for you.
+- **`trantor telemetry ship [--all]`** sends turn history to the hub: this seat's log, or every
+  log in `~/.agent-bus/logs` with `--all`. Runners report each turn on their own after it ends;
+  this command is for history written before a hub could receive it, and for a hub that was
+  unreachable for a while. Safe to run twice: the hub ignores rows it already has. See
+  `docs/CONTRACT-turn-telemetry.md`.
 - **`trantor down`** kills crew processes via their ttys and closes windows without macOS
   "Terminate?" dialogs.
 
