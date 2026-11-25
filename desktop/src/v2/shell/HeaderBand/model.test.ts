@@ -38,9 +38,9 @@ it("uses creation stamps for new cards and the most recent completed phase when 
 });
 
 it("places and clips turn bars on a 60 minute scale", () => {
-  expect(barPlacement(900_000, 1_800_000, 3_600_000)).toEqual({ left: "25%", width: "25%" });
-  expect(barPlacement(-300_000, 900_000, 3_600_000)).toEqual({ left: "0%", width: "25%" });
-  expect(barPlacement(2_700_000, 4_000_000, 3_600_000)).toEqual({ left: "75%", width: "25%" });
+  expect(barPlacement(900_000, 1_800_000, 3_600_000)).toEqual({ left: "25%", width: "25%", minWidth: "3px" });
+  expect(barPlacement(-300_000, 900_000, 3_600_000)).toEqual({ left: "0%", width: "25%", minWidth: "3px" });
+  expect(barPlacement(2_700_000, 4_000_000, 3_600_000)).toEqual({ left: "75%", width: "25%", minWidth: "3px" });
   expect(barPlacement(-2, -1, 3_600_000).width).toBe("0%");
 });
 
@@ -87,4 +87,23 @@ it("includes the orchestrator from presence and ranks recent turns ahead of idle
   expect(rows.map(r => r.persona)).toEqual(["orchestrator", "z", "a"]);
   expect(rows[0]).toMatchObject({ status: "working", rows: [], lastEnd: null });
   expect(laneRows(peers, [], "trantor", 7_200_000).map(r => r.persona)).toEqual(["orchestrator", "a"]);
+});
+
+it("names a derived Setup bucket by its most recent open card, keeping an explicit goal", () => {
+  const bucket = phase("Setup 26", ["doing", "doing", "done"]);
+  bucket.crew[0].title = "Older card"; bucket.crew[0].updated = 10;
+  bucket.crew[1].title = "Newest card"; bucket.crew[1].updated = 20;
+  expect(phaseProgress([bucket])).toMatchObject({ goal: "Newest card", done: 1, total: 3 });
+  expect(phaseProgress([phase("Setup 26", ["doing"], "Ship it")])?.goal).toBe("Ship it");
+  expect(phaseProgress([phase("Setup x", ["doing"])])?.goal).toBe("Setup x");
+});
+
+it("puts a working orchestrator first even when a seat has turns, and gives bars a 3px floor", () => {
+  const peers: Peer[] = [
+    { session: "MacBook-Pro-M1:trantor", online: true, status: "working" },
+    { session: "z:trantor", online: true, status: "working · card" },
+  ];
+  const rows = laneRows(peers, [turn({ persona: "z" })], "trantor", 3_600_000);
+  expect(rows.map(r => r.persona)).toEqual(["orchestrator", "z"]);
+  expect(barPlacement(3_000_000, 3_004_000, 3_600_000).minWidth).toBe("3px");
 });

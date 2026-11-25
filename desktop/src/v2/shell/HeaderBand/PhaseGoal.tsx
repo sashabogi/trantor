@@ -15,7 +15,11 @@ export function phaseProgress(phases: ProjectPhase[]) {
   const current = open[0]?.group ?? recent[0];
   if (!current) return null;
   const done = current.cards.filter(c => CLOSED.has(c.status)).length;
-  return { goal: current.phase.goal || current.phase.key, done, total: current.cards.length,
+  const openCards = current.cards.filter(c => !CLOSED.has(c.status));
+  // #14268: a derived "Setup N" bucket name means nothing to a person, so name the phase by its latest open card.
+  const latest = [...openCards].sort((a, b) => activity(b) - activity(a))[0];
+  const goal = current.phase.goal || (/^Setup \d+$/.test(current.phase.key) && latest ? latest.title : current.phase.key);
+  return { goal, done, total: current.cards.length,
     fraction: done / current.cards.length, open: current.cards.filter(c => !CLOSED.has(c.status)).slice(0, 3) };
 }
 

@@ -47,10 +47,15 @@ fn shape_ci(raw: &str) -> Option<Value> {
 struct Release {
     tag_name: String,
     published_at: Option<String>,
+    #[serde(default)]
+    is_draft: bool,
 }
 
 fn latest_release(raw: &str) -> Option<Release> {
-    serde_json::from_str::<Vec<Release>>(raw).ok()?.into_iter().find(|r| !r.tag_name.is_empty())
+    // #14268: `gh release list` puts the Latest-flagged release first, so pick the newest published one ourselves.
+    serde_json::from_str::<Vec<Release>>(raw).ok()?.into_iter()
+        .filter(|r| !r.tag_name.is_empty() && !r.is_draft)
+        .max_by(|a, b| a.published_at.cmp(&b.published_at))
 }
 
 fn github_repo(remotes: &str) -> Option<String> {
@@ -94,7 +99,7 @@ async fn read_status(dir: &Path, git: &Path, gh: Option<&Path>) -> String {
     let (release, ci) = match (gh, repo.as_deref()) {
         (Some(gh), Some(repo)) => {
             tokio::join!(
-                async { run_text(gh, dir, &["release", "list", "--limit", "1", "--json", "tagName,publishedAt", "--repo", repo])
+                async { run_text(gh, dir, &["release", "list", "--limit", "10", "--json", "tagName,publishedAt,isDraft,isPrerelease", "--repo", repo])
                     .await.and_then(|raw| latest_release(&raw)) },
                 async { match sha.as_deref() {
                     Some(commit) => run_text(gh, dir, &["run", "list", "--commit", commit, "--limit", "5",
@@ -110,7 +115,7 @@ async fn read_status(dir: &Path, git: &Path, gh: Option<&Path>) -> String {
         (None, Some(tag_name)) => {
             let reference = format!("refs/tags/{tag_name}");
             let published_at = run_text(git, dir, &["for-each-ref", "--format=%(creatordate:iso-strict)", &reference]).await;
-            Some(Release { tag_name, published_at })
+            Some(Release { tag_name, published_at, is_draft: false })
         }
         _ => None,
     };
@@ -153,7 +158,7 @@ mod tests {
 
     #[test]
     fn unavailable_ci_preserves_git_facts_only_with_a_remote() {
-        let release = || Some(Release { tag_name: "v2".into(), published_at: None });
+        let release = || Some(Release { tag_name: "v2".into(), published_at: None, is_draft: false });
         let value: Value = serde_json::from_str(&snapshot(Some("abc".into()), release(), None, true, true)).unwrap();
         assert_eq!(value["tag"], "v2");
         assert_eq!(value["sha"], "abc");
@@ -212,7 +217,7 @@ case "$*" in
 esac"#);
         let gh = f.script("gh", r#"
 case "$*" in
-  "release list --limit 1 --json tagName,publishedAt --repo owner/app") echo '[{"tagName":"app-v2","publishedAt":"2026-11-01T00:00:00Z"}]' ;;
+  "release list --limit 10 --json tagName,publishedAt,isDraft,isPrerelease --repo owner/app") echo '[{"tagName":"old-latest","publishedAt":"2026-10-01T00:00:00Z","isDraft":false},{"tagName":"draft","publishedAt":"2026-12-01T00:00:00Z","isDraft":true},{"tagName":"app-v2","publishedAt":"2026-11-01T00:00:00Z","isDraft":false}]' ;;
   "run list --commit abc --limit 5 --json status,conclusion,url,name,databaseId --repo owner/app") echo '[{"status":"completed","conclusion":"success","url":"https://github.com/run/1","name":"Build"}]' ;;
   *) exit 1 ;;
 esac"#);

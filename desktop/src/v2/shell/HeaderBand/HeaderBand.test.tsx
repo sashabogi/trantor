@@ -233,3 +233,14 @@ it("mounts a single line band with only lanes and CI to the right of developer l
   await act(async () => { band?.querySelector<HTMLButtonElement>('[aria-label*="open Workspace"]')?.click(); });
   expect(navigate).toHaveBeenCalledWith("workspace", "trantor");
 });
+
+it("draws a visible, hoverable bar for a short failed turn and a 10 minute bar for a turnless working peer", async () => {
+  const orchestrator = [{ session: "MacBook-Pro-M1:trantor", online: true, status: "working" }];
+  await act(async () => { root.render(<SeatLanes project="trantor" peers={orchestrator} workingSince={{}} onOpen={vi.fn()} now={3_600_000}
+    turns={[turn({ persona: "orchestrator", ts: 3_500_000, duration_ms: 4_000, effExit: 1, outcome: "failed" })]} />); });
+  const mark = host.querySelector<HTMLElement>("[title^='Card']");
+  expect(mark?.style.minWidth).toBe("3px");
+  expect(mark?.querySelector("[data-turn-hit]")?.className).toContain("w-2");
+  await act(async () => { root.render(<SeatLanes project="trantor" peers={orchestrator} turns={[]} now={3_600_000} workingSince={{}} onOpen={vi.fn()} />); });
+  expect(parseFloat(host.querySelector<HTMLElement>("[data-running-bar]")?.style.width ?? "0")).toBeCloseTo(600_000 / 3_600_000 * 100);
+});
