@@ -15,7 +15,7 @@ const fontOptions = {
   lineHeight: 19,
 } as const;
 
-export function CodeView({ value, path, editable, onChange, onSave, onReady, project, seat }: {
+export function CodeView({ value, path, editable, onChange, onSave, onReady, project, seat, showGhostToggle = true }: {
   value: string;
   path: string;
   editable: boolean;
@@ -25,6 +25,8 @@ export function CodeView({ value, path, editable, onChange, onSave, onReady, pro
   onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void;
   project: string;
   seat: string | null;
+  /** #14268: the 2.0 editor hides the classic toggle strip; ghost text itself still follows its saved setting. */
+  showGhostToggle?: boolean;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -134,7 +136,7 @@ export function CodeView({ value, path, editable, onChange, onSave, onReady, pro
 
   return (
     <div className="h-full min-h-0 flex flex-col overflow-hidden rounded-lg">
-      <div className="flex items-center gap-2 px-2 py-1 border-b border-tr-edge bg-tr-panel/40">
+      {showGhostToggle && <div className="flex items-center gap-2 px-2 py-1 border-b border-tr-edge bg-tr-panel/40">
         <button
           type="button"
           onClick={switchGhost}
@@ -144,7 +146,7 @@ export function CodeView({ value, path, editable, onChange, onSave, onReady, pro
         >
           ghost text
         </button>
-      </div>
+      </div>}
       <div ref={host} className="flex-1 min-h-0 overflow-hidden" />
     </div>
   );

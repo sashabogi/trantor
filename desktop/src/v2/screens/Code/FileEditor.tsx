@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { editor as MonacoEditor } from "monaco-editor";
 import { CodeView } from "../../../features/code/CodeView";
-import { ReviewChip } from "../../../features/code/ReviewChip";
+import { ImportedBy } from "./ImportedBy";
 import { Button } from "../../ui/Button";
 import { AskControls, type AskSeat } from "./AskControls";
 import { useAskActions } from "./useAskActions";
@@ -24,8 +24,8 @@ function revealAt(ed: MonacoEditor.IStandaloneCodeEditor, r: Reveal) {
   ed.focus();
 }
 
-function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenGraph, onDirty, onSaved, seats = NO_SEATS, onAsk, onSendToSeat }: {
-  project: string; scope: string | null; path: string; reveal?: Reveal; headRev?: string | null; onOpenGraph: () => void;
+function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenFile, onDirty, onSaved, seats = NO_SEATS, onAsk, onSendToSeat }: {
+  project: string; scope: string | null; path: string; reveal?: Reveal; headRev?: string | null; onOpenFile?: (path: string) => void;
   onDirty?: (dirty: boolean) => void; onSaved?: () => void;
   seats?: AskSeat[]; onAsk?: (text: string) => void; onSendToSeat?: (seat: string, text: string) => void;
 }) {
@@ -47,7 +47,7 @@ function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenGr
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">
         <span className="v2-mono min-w-0 flex-1 truncate">{path.split("/").join(" › ")}</span>
-        <ReviewChip project={project} seat={scope} path={path} onOpenGraph={onOpenGraph} />
+        <ImportedBy project={project} scope={scope} path={path} onOpenFile={onOpenFile} />
         <FileHistoryControl project={project} scope={scope} path={path} />
         {doc.load.truncated && <span className="text-[var(--v2-warn)]">first 512 KB only: saving is off</span>}
         {doc.saveError && <span role="alert" className="text-[var(--v2-bad)]">{doc.saveError}</span>}
@@ -55,7 +55,7 @@ function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenGr
         <Button variant="ghost" onClick={doc.save} disabledReason={doc.load.truncated ? "The file is truncated, so saving would lose the rest" : !doc.dirty ? "No unsaved changes" : null}>Save</Button>
       </div>
       <div className="min-h-0 flex-1">
-        <CodeView value={doc.draft} path={path} editable={!doc.load.truncated} onChange={doc.edit} onSave={doc.save} project={project} seat={scope}
+        <CodeView value={doc.draft} path={path} editable={!doc.load.truncated} onChange={doc.edit} onSave={doc.save} project={project} seat={scope} showGhostToggle={false}
           onReady={ed => { editorRef.current = ed; setEditorVersion(v => v + 1); if (reveal) revealAt(ed, reveal); }} />
       </div>
       <EditorFooter editorRef={editorRef} version={editorVersion} />

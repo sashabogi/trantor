@@ -175,3 +175,27 @@ describe("DiffView line history", () => {
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain("File history");
   });
 });
+
+// #14268: Unstage on a change that is not staged is a no-op the screen should not offer.
+describe("DiffView patch actions by side", () => {
+  const mountSide = async (side: "staged" | "unstaged" | "both") => {
+    await act(async () => {
+      root.render(<DiffView files={[file]} layout="combined" onLayout={() => {}} onAddToChat={() => {}} onApply={apply} sideOf={() => side} />);
+    });
+    await flush();
+  };
+  it("offers Stage and Discard for unstaged changes", async () => {
+    await mountSide("unstaged");
+    expect(patchLabels()).toEqual(["Stage hunk", "Discard hunk"]);
+  });
+  it("offers only Unstage for staged changes, by hunk and by line", async () => {
+    await mountSide("staged");
+    expect(patchLabels()).toEqual(["Unstage hunk"]);
+    await click(line(1));
+    expect(patchLabels()).toEqual(["Unstage 1 line"]);
+  });
+  it("offers all three when one file is changed on both sides", async () => {
+    await mountSide("both");
+    expect(patchLabels()).toEqual(["Stage hunk", "Unstage hunk", "Discard hunk"]);
+  });
+});

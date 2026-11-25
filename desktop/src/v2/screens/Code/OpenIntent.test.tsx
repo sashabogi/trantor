@@ -69,6 +69,17 @@ describe("open intent", () => {
     expect(takeOpenIntent("trantor")).toBeUndefined();
   });
 
+  // #14268: the source control toolbar means nothing above a file editor.
+  it("mounts the source control toolbar only on the Source control tab", async () => {
+    setOpenIntent("trantor", { kind: "file", path: "src/a.ts", seat: "codex-8" });
+    await mount();
+    expect(host.querySelector('button[title="Switch branch"]')).toBeNull();
+    const source = [...host.querySelectorAll<HTMLElement>('[role="tab"]')].find(t => t.textContent?.includes("Source control"));
+    await act(async () => { source?.click(); });
+    await flush();
+    expect(host.querySelector('button[title="Switch branch"]')).not.toBeNull();
+  });
+
   it("a source-control intent lands on the Source control tab in the seat's scope", async () => {
     setOpenIntent("trantor", { kind: "source-control", seat: "codex-8" });
     await mount();

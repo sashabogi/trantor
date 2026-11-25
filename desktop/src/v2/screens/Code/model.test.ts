@@ -1,6 +1,6 @@
 // #13988: the pure rules of the Code screen.
 import { describe, expect, it } from "vitest";
-import { deriveSeat, filterHistory, groupBranches, parseCardRef, parseSearch, pickChange, sidebarVisible, toRow, type SeatInfo } from "./model";
+import { deriveSeat, filterHistory, changeSide, groupBranches, parseCardRef, parseSearch, pickChange, sidebarVisible, toRow, type SeatInfo } from "./model";
 import { pairHunk, parseUnifiedDiff } from "./diff";
 import { countConflicts, parseConflicts, resolveChunks } from "./conflicts";
 import { closeTab, openTab } from "./useTabs";
@@ -122,5 +122,21 @@ describe("conflict markers", () => {
   });
   it("keeps the markers on a conflict nobody picked", () => {
     expect(resolveChunks(parseConflicts(text), new Map())).toBe(text);
+  });
+});
+
+// #14268: which side of the index a changed path is on decides whether Stage or Unstage is offered.
+describe("changeSide", () => {
+  const status = [
+    { path: "staged.ts", x: "M", y: " " }, { path: "work.ts", x: " ", y: "M" }, { path: "new.ts", x: "?", y: "?" },
+    { path: "both.ts", x: "M", y: "M" }, { path: "added.ts", x: "A", y: " " },
+  ];
+  it("tells staged, unstaged and both apart", () => {
+    expect(changeSide(status, "staged.ts")).toBe("staged");
+    expect(changeSide(status, "added.ts")).toBe("staged");
+    expect(changeSide(status, "work.ts")).toBe("unstaged");
+    expect(changeSide(status, "new.ts")).toBe("unstaged");
+    expect(changeSide(status, "both.ts")).toBe("both");
+    expect(changeSide(status, "unknown.ts")).toBe("both");
   });
 });

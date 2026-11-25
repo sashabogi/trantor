@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_OUTPUT_LINES, mergeOutputLines, Output, OUTPUT_CHANNEL_KEY, type OutputChannel, type OutputLogPage } from "./Output";
+import { clearGitLog, recordGit } from "./gitLog";
+import { isRoutineLine, MAX_OUTPUT_LINES, mergeOutputLines, Output, OUTPUT_CHANNEL_KEY, type OutputChannel, type OutputLogPage } from "./Output";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,6 +51,8 @@ beforeEach(() => {
     removeItem: (key: string) => { mem.delete(key); },
     clear: () => mem.clear(), key: () => null, length: 0,
   });
+  clearGitLog();
+  mem.set(OUTPUT_CHANNEL_KEY, "app-trace");
   calls = [];
   respond = call => call.channel === "crashes" ? page(["panic"], 5) : call.offset === null ? page(["one"], 4) : page([], 4);
   mockIPC((command, args) => {
@@ -87,7 +90,7 @@ describe("Output", () => {
 
   it("remembers the channel and reloads when switching away and back", async () => {
     await mount();
-    expect([...host.querySelectorAll("option")].map(option => option.textContent)).toEqual(["App trace", "App errors", "Crashes"]);
+    expect([...host.querySelectorAll("option")].map(option => option.textContent)).toEqual(["Git", "App trace", "App errors", "Crashes"]);
     await choose("crashes");
     expect(localStorage.getItem(OUTPUT_CHANNEL_KEY)).toBe("crashes");
     expect(log()?.textContent).toBe("panic");
@@ -148,5 +151,42 @@ describe("Output", () => {
     expect(merged[0]).toBe("old 500");
     expect(merged[merged.length - 1]).toBe("new 999");
     expect(mergeOutputLines(current, page(["fresh"], 5, { reset: true }))).toEqual(["fresh"]);
+  });
+
+  it("opens on the Git channel with the commands the Code screen ran, without polling the app log", async () => {
+    localStorage.clear();
+    recordGit("git stage a.txt", true, "first\nsecond\nthird\nfourth");
+    recordGit("git push", false, "rejected");
+    await mount();
+    await advance(2_000);
+    expect(calls).toHaveLength(0);
+    const text = log()?.textContent ?? "";
+    expect(text).toContain("git stage a.txt");
+    expect(text).toContain("ok");
+    expect(text).toContain("third");
+    expect(text).not.toContain("fourth");
+    expect(text).toContain("git push");
+    expect(text).toContain("failed");
+  });
+
+  it("says so when no git command has run, then shows one as it arrives", async () => {
+    localStorage.clear();
+    await mount();
+    expect(host.textContent).toContain("No git commands have run yet.");
+    await act(async () => { recordGit("git fetch", true, ""); });
+    expect(log()?.textContent).toContain("git fetch");
+    await act(async () => { button("Clear output")?.click(); });
+    expect(host.textContent).toContain("No git commands have run yet.");
+  });
+
+  it("hides the quiet tick and emit skipped lines in the app trace until asked", async () => {
+    respond = () => page(["status: quiet tick pane=3", "real event", "emit skipped for x"], 9);
+    await mount();
+    expect(log()?.textContent).toBe("real event");
+    const toggle = [...host.querySelectorAll("button")].find(item => item.textContent === "Show routine lines");
+    await act(async () => { toggle?.click(); });
+    expect(log()?.textContent).toContain("status: quiet tick pane=3");
+    expect(isRoutineLine("emit skipped for x")).toBe(true);
+    expect(isRoutineLine("real event")).toBe(false);
   });
 });

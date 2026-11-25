@@ -111,3 +111,18 @@ export function readAgo(at: number, now: number): string {
   if (s < 60) return `${s}s ago`;
   return `${Math.round(s / 60)} min ago`;
 }
+
+/** Which side of the index a changed path sits on (#14268). file_diff is `git diff HEAD`, one patch for both
+ *  sides, so a path changed on both sides stays "both" until the backend can hand back the staged diff alone. */
+export type ChangeSide = "staged" | "unstaged" | "both";
+
+export function changeSide(status: readonly { path: string; x: string; y: string }[], path: string): ChangeSide {
+  let staged = false;
+  let unstaged = false;
+  for (const e of status) {
+    if (e.path !== path) continue;
+    if (e.x !== " " && e.x !== "?") staged = true;
+    if (e.y !== " " || e.x === "?") unstaged = true;
+  }
+  return staged && !unstaged ? "staged" : unstaged && !staged ? "unstaged" : "both";
+}

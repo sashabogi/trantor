@@ -129,7 +129,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}
       {/* #14241: on the source tab the changes list is its own full-height panel; the bottom panel sits under the editor only. */}
-      {tabs.active.kind === "source" && snap && (
+      {/* #14268: with Explorer or Search open the list is not drawn, so the diff keeps the room. */}
+      {tabs.active.kind === "source" && snap && (!visible || side === "source") && (
         <div data-testid="source-list-panel" className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
           <SourceListColumn project={project} snap={snap} view={view} seats={seatNames} rows={rows} onRows={setHistoryRows}
             selected={selectedChange} onSelect={setPicked} selectedKey={key} onSelectKey={setKey}
@@ -141,7 +142,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
             onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
             onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
-          <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />
+          {/* #14268: source control actions mean nothing above a file editor, so only the Source control tab mounts them. */}
+          {tabs.active.kind === "source" && <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />}
           {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-v2-body text-[var(--v2-bad)]">{notice}</button>}
           <div className="flex min-h-0 min-w-0 flex-1">
             {/* #14071: the tab's body always fills the column, so short content still stretches to the panel. */}
@@ -178,7 +180,7 @@ function Main(p: MainProps) {
     return (
       <Suspense fallback={<div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">Opening the editor</div>}>
         {/* #14072: keyed by tab so a switch remounts cleanly and the draft resumes from the tab's cache. */}
-        <FileEditor key={p.tab.id} project={p.project} scope={p.tab.scope} path={p.tab.path} onOpenGraph={() => p.onNavigate("graph")}
+        <FileEditor key={p.tab.id} project={p.project} scope={p.tab.scope} path={p.tab.path} onOpenFile={p.onOpenFile}
           reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined} headRev={p.snap?.log[0]?.sha ?? null}
           onDirty={d => p.markDirty(p.tab.id, d)} onSaved={p.onMutated}
           seats={p.liveSeats} onAsk={p.onAsk} onSendToSeat={p.onSendToSeat} />

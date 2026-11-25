@@ -5,15 +5,15 @@ import { IconButton } from "../../ui/IconButton";
 import { DiffView, type ApplyPatch, type DiffLayout } from "./DiffView";
 import { parseUnifiedDiff } from "./diff";
 import { Counts, StatusLetter } from "./parts";
-import type { Letter } from "./model";
+import type { ChangeSide, Letter } from "./model";
 
 export type ChipFile = { path: string; letter: Letter | "U"; plus: number | null; minus: number | null };
 export type PatchState = { kind: "loading" } | { kind: "error"; reason: string } | { kind: "ok"; patch: string; truncated?: boolean };
 
-export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpenFile, onApply, empty, project, scope }: {
+export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpenFile, onApply, empty, project, scope, sideOf }: {
   chips: ChipFile[]; selected: string | null; onSelect: (path: string) => void; patch: PatchState;
   onAddToChat: (text: string) => void; onOpenFile?: (path: string) => void; onApply?: ApplyPatch; empty: string;
-  project?: string; scope?: string | null;
+  project?: string; scope?: string | null; sideOf?: (path: string) => ChangeSide;
 }) {
   const [layout, setLayout] = useState<DiffLayout>("combined");
   const [all, setAll] = useState(false);
@@ -39,7 +39,7 @@ export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpen
       {patch.kind === "ok" && patch.truncated && <div className="border-b border-[var(--v2-edge)] px-4 py-1.5 text-v2-body text-[var(--v2-warn)]">The patch is capped at 400 KB, so this diff is partial.</div>}
       {patch.kind === "ok" && (parsed.length === 0
         ? <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">{empty}</div>
-        : <DiffView files={shown} layout={layout} onLayout={setLayout} onAddToChat={onAddToChat} onOpenFile={onOpenFile} onApply={onApply} project={project} scope={scope} />)}
+        : <DiffView files={shown} layout={layout} onLayout={setLayout} onAddToChat={onAddToChat} onOpenFile={onOpenFile} onApply={onApply} project={project} scope={scope} sideOf={sideOf} />)}
     </div>
   );
 }

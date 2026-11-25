@@ -1,6 +1,7 @@
 // The Code screen's git bridge for either checkout (#13988 drill): a seat's worktree by agent, or the
 // project's main checkout (agent null → scope "project"). Developer mode alone enables push/discard there.
-import { invoke } from "@tauri-apps/api/core";
+// #14268: every call goes through the logged invoke so the Output tab can list the git commands this screen ran.
+import { loggedInvoke as invoke } from "../../ui/BottomPanel/gitLog";
 import type { GitPanelSnapshot } from "../../../features/code/gitApi";
 import { MODE_CONFIG, readMode, type Mode } from "../../shell/shellMode";
 

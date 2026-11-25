@@ -9,7 +9,7 @@ import { ChangesList } from "./ChangesList";
 import { CommitDetail, UnlandedDetail } from "./CommitDetail";
 import { DiffPane, type ChipFile } from "./DiffPane";
 import { HistoryView, UNLANDED_KEY } from "./HistoryView";
-import { fileChipLabel, type HistoryRow } from "./model";
+import { changeSide, fileChipLabel, type HistoryRow } from "./model";
 import { useFileDiff, useSeatDiff } from "./usePatch";
 import type { ScmView } from "./Toolbar";
 import type { ScopeSnapshot } from "./useScopeGit";
@@ -84,7 +84,7 @@ function ChangesDetail(p: { project: string; snap: ScopeSnapshot; chips: ChipFil
     finally { p.onMutated(); }
   };
   return (
-    <DiffPane chips={p.chips} selected={p.selected} onSelect={p.onPick} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile} onApply={apply} project={p.project} scope={p.snap.scope}
+    <DiffPane chips={p.chips} selected={p.selected} onSelect={p.onPick} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile} onApply={apply} project={p.project} scope={p.snap.scope} sideOf={path => changeSide(p.snap.status, path)}
       empty={p.chips.length === 0 ? "Nothing has changed on this checkout." : "Git shows no text diff for this file."} />
   );
 }

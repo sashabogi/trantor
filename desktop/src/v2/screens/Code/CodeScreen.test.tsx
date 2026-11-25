@@ -115,6 +115,26 @@ describe("CodeScreen", () => {
     expect(host.querySelector('aside[aria-label="Explorer"]')).not.toBeNull();
   });
 
+  // #14268: three left columns squeezed the diff, so the list gives way to Explorer and Search.
+  it("draws the changes list only when the sidebar is folded or is the source control view", async () => {
+    await mount();
+    expect(host.querySelector('[data-testid="source-list-panel"]')).not.toBeNull();
+    await click('button[aria-label="Explorer"]');
+    expect(host.querySelector('aside[aria-label="Explorer"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="source-list-panel"]')).toBeNull();
+    expect(host.querySelector("[data-diff-scroll]")).not.toBeNull();
+    await click('button[aria-label="Search"]');
+    expect(host.querySelector('[data-testid="source-list-panel"]')).toBeNull();
+    await click('button[aria-label^="Source control"]');
+    expect(host.querySelector('[data-testid="source-list-panel"]')).not.toBeNull();
+  });
+
+  it("shows Stage and Discard for an unstaged change, from the status of the file", async () => {
+    await mount();
+    const labels = [...host.querySelectorAll("button")].map(b => b.textContent).filter(t => /^(Stage|Unstage|Discard) hunk$/.test(t ?? ""));
+    expect(labels).toEqual(["Stage hunk", "Discard hunk"]);
+  });
+
   it("lists the changed file as a chip above the diff and never wraps code", async () => {
     await mount();
     const chip = host.querySelector('[aria-label="Changed files"] button');
