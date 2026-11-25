@@ -17,6 +17,7 @@ import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 import { redactKeys } from "../lib/redact.mjs";
 import { writeTurnState } from "../lib/turnstate.mjs";
+import { completeTurnRow, isTurnRow, shipTurnRows } from "../lib/telemetry-ship.mjs";
 import { alignSeatWorktree, applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWorktreeDeclaration } from "../lib/seat-worktree.mjs";
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
@@ -193,9 +194,18 @@ let TURN = releaseState?.turn || 0;
 // fence assignments against this stamp — cards assigned before it are a predecessor's (#12138).
 // Carried across the in-place release restart; a swap or a fresh `trantor up` stamps anew.
 const BOOT_TS = releaseState?.bootTs || Date.now();
-const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${PERSONA}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
+// #14067: the jsonl stays the write-ahead log; a TURN row is completed (id, v, machine, verdict
+// cut) before it lands on disk, and every turn row drains to the hub right after it is written —
+// never awaited, never able to fail the turn. Boot and text rows are recorded and never shipped.
+const telemetry = (rec) => {
+  const row = isTurnRow(rec) ? completeTurnRow(rec, MACHINE_LABEL) : rec;
+  try { appendFileSync(join(LOGDIR, `${PERSONA}-${PROJ}.jsonl`), JSON.stringify(row) + "\n"); } catch {}
+  if (isTurnRow(rec)) void shipTurnRows({ persona: PERSONA, project: PROJ, hub: HUB, log, machine: MACHINE_LABEL });
+};
 // The boot line records the HUB this runner bound to, so a split-brain is diagnosable from disk.
 telemetry({ ts: Date.now(), persona: PERSONA, agent: AGENT, project: PROJ, boot: true, hub: HUB, pid: process.pid, version: bootVersion });
+// #14067: ship at boot too, so rows written while the hub was down go out without waiting for a turn.
+void shipTurnRows({ persona: PERSONA, project: PROJ, hub: HUB, log, machine: MACHINE_LABEL });
 // A seat can open a terminal window on a machine whose owner never asked for one and does not know
 // what they are looking at. "◤ CLAUDE ◢ trantor crew · fleet" tells that person nothing: not what
 // started, not what it will do, not how to stop it. RUNNER_TITLE names it in full and RUNNER_ABOUT

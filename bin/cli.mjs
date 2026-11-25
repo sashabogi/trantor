@@ -140,6 +140,45 @@ switch (cmd) {
   case "seats": case "seat": run("bin/seats.mjs"); break;
   case "seat-why": case "why": run("bin/seat-why.mjs"); break;
   case "seat-record": run("bin/seat-record.mjs"); break;
+  case "telemetry": {
+    // #14067: `trantor telemetry ship` is how existing history reaches the hub — this seat's log,
+    // or every *.jsonl in the logs folder with --all. Always from the start of the file: a re-run
+    // must come back as duplicates, not as silence.
+    if (args[0] !== "ship") { console.error("usage: trantor telemetry ship [--all]"); process.exit(1); }
+    const { shipTurnRows, seatForTelemetryFile, telemetryDir, telemetryFiles, telemetryFileFor } = await import(join(ROOT, "lib/telemetry-ship.mjs"));
+    const { sessionContext } = await import(join(ROOT, "hooks/lib/api.mjs"));
+    // History rows carry no machine: stamp this machine's label, as the runner does for new rows.
+    const { machineLabel } = await import(join(ROOT, "lib/machine-label.mjs"));
+    const { homedir } = await import("node:os");
+    let machineConfig = {};
+    try { machineConfig = JSON.parse(readFileSync(join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "config.json"), "utf8")); } catch {}
+    const machine = machineLabel(machineConfig);
+    const report = (label, r) => {
+      if (r.ok) console.log(`${label}: stored ${r.stored} · duplicates ${r.duplicates} · dropped ${r.dropped}`);
+      else console.error(`${label}: FAILED — ${r.error}`);
+      return r.ok ? 0 : 1;
+    };
+    if (args.includes("--all")) {
+      const dir = telemetryDir();
+      const files = telemetryFiles();
+      if (!files.length) { console.log(`no telemetry logs in ${dir}`); break; }
+      let failed = 0;
+      for (const name of files) {
+        const seat = seatForTelemetryFile(join(dir, name));
+        if (!seat) { console.log(`${name}: no seat rows — skipped`); continue; }
+        failed += report(`${seat.persona}-${seat.project}`, await shipTurnRows({ ...seat, fromStart: true, machine }));
+      }
+      process.exitCode = failed ? 1 : 0;
+      break;
+    }
+    const { session, project } = sessionContext();
+    const persona = (session.split(":")[0] || session);
+    const file = telemetryFileFor(persona, project);
+    if (!existsSync(file)) { console.error(`no telemetry log for ${persona}-${project} at ${file}`); process.exit(1); }
+    const seat = seatForTelemetryFile(file) || { persona, project };
+    process.exitCode = report(`${seat.persona}-${seat.project}`, await shipTurnRows({ ...seat, fromStart: true, machine }));
+    break;
+  }
   case "orchestrate": run("bin/orchestrate.mjs"); break;
   case "app": run("bin/app.mjs"); break;
   case "patrol": run("bin/patrol.mjs"); break;
@@ -285,6 +324,7 @@ switch (cmd) {
   trantor state       a seat's working memory: show <seat> <card> [--json] · validate · reset --force · gc [--apply]
   trantor seat-why    WHY a seat is down (err file, logs, pids): seat-why <agent> [--json] — quota, auth, crash, or just no pane
   trantor seat-record the per-project seat record the advisor benches from (✓/∅/↩ per difficulty) — [--project p] [--reset <seat>] [--json]
+  trantor telemetry ship  send turn history to the hub — this seat's log, or every log with --all; prints stored/duplicates/dropped per file
   trantor watch       live bus feed in the terminal
   trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
