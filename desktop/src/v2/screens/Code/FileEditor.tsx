@@ -9,6 +9,8 @@ import { Button } from "../../ui/Button";
 import { AskControls, type AskSeat } from "./AskControls";
 import { useAskActions } from "./useAskActions";
 import { useFileDoc } from "./useFileDoc";
+import { EditorFooter } from "./EditorFooter";
+import { useChangeMarkers } from "./useChangeMarkers";
 
 const NO_SEATS: AskSeat[] = [];
 
@@ -20,8 +22,8 @@ function revealAt(ed: MonacoEditor.IStandaloneCodeEditor, r: Reveal) {
   ed.focus();
 }
 
-export default function FileEditor({ project, scope, path, reveal, onOpenGraph, onDirty, onSaved, seats = NO_SEATS, onAsk, onSendToSeat }: {
-  project: string; scope: string | null; path: string; reveal?: Reveal; onOpenGraph: () => void;
+export default function FileEditor({ project, scope, path, reveal, headRev = null, onOpenGraph, onDirty, onSaved, seats = NO_SEATS, onAsk, onSendToSeat }: {
+  project: string; scope: string | null; path: string; reveal?: Reveal; headRev?: string | null; onOpenGraph: () => void;
   onDirty?: (dirty: boolean) => void; onSaved?: () => void;
   seats?: AskSeat[]; onAsk?: (text: string) => void; onSendToSeat?: (seat: string, text: string) => void;
 }) {
@@ -31,6 +33,7 @@ export default function FileEditor({ project, scope, path, reveal, onOpenGraph, 
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
   useAskActions(editorRef, editorVersion, { path, scope, seats, onAsk, onSendToSeat, openMenu: () => setSeatMenu(true) });
   const loaded = doc.load.kind === "ok";
+  useChangeMarkers(editorRef, editorVersion, project, scope, path, doc.load.kind === "ok" ? doc.load.disk : null, headRev);
   // Reveal a search hit once the editor exists and whenever a new click arrives (#14074).
   useEffect(() => {
     if (!loaded) { editorRef.current = null; return; }
@@ -52,6 +55,7 @@ export default function FileEditor({ project, scope, path, reveal, onOpenGraph, 
         <CodeView value={doc.draft} path={path} editable={!doc.load.truncated} onChange={doc.edit} onSave={doc.save} project={project} seat={scope}
           onReady={ed => { editorRef.current = ed; setEditorVersion(v => v + 1); if (reveal) revealAt(ed, reveal); }} />
       </div>
+      <EditorFooter editorRef={editorRef} version={editorVersion} />
     </div>
   );
 }

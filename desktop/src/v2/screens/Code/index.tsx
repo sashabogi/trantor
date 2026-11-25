@@ -145,7 +145,7 @@ function Main(p: MainProps) {
       <Suspense fallback={<div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Opening the editor</div>}>
         {/* #14072: keyed by tab so a switch remounts cleanly and the draft resumes from the tab's cache. */}
         <FileEditor key={p.tab.id} project={p.project} scope={p.tab.scope} path={p.tab.path} onOpenGraph={() => p.onNavigate("graph")}
-          reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined}
+          reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined} headRev={p.snap?.log[0]?.sha ?? null}
           onDirty={d => p.markDirty(p.tab.id, d)} onSaved={p.onMutated}
           seats={p.liveSeats} onAsk={p.onAsk} onSendToSeat={p.onSendToSeat} />
       </Suspense>

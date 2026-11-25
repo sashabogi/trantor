@@ -61,3 +61,11 @@
 .v2-genesis .tr-input { background: var(--v2-panel); border: 1px solid var(--v2-edge-2); color: var(--v2-text); }
 .v2-genesis .tr-input:focus { outline: 2px solid var(--v2-accent); outline-offset: 0; }
 .v2-genesis .tr-seg > button[data-on="true"] { background: var(--v2-accent-soft); color: var(--v2-text); }
+
+/* Change markers beside editor lines: added, changed, removed against HEAD, in the git status colours. */
+.v2-cm-added, .v2-cm-changed { width: 3px !important; margin-left: 3px; }
+.v2-cm-added { background: var(--v2-ok); }
+.v2-cm-changed { background: var(--v2-warn); }
+.v2-cm-removed, .v2-cm-removed-below { width: 8px !important; margin-left: 3px; background-repeat: no-repeat; background-size: 8px 2px; background-image: linear-gradient(var(--v2-bad), var(--v2-bad)); }
+.v2-cm-removed { background-position: top left; }
+.v2-cm-removed-below { background-position: bottom left; }
