@@ -4,7 +4,7 @@ use std::{
     io::{Read, Write},
     path::Path,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread,
@@ -41,8 +41,11 @@ fn avoid_splitting_marker(bytes: &[u8], end: usize) -> usize {
 }
 
 type ByteSink = Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>;
-/// Called once with the sub when a child's output ends (it exited, or detach killed it).
-pub(crate) type EndSink = Arc<dyn Fn(u64) + Send + Sync + 'static>;
+/// Called once with the sub and the exit code when a child's output ends (it exited, or detach killed it).
+/// #14268: the code is None when the child had not been reaped within a moment of its output ending.
+pub(crate) type EndSink = Arc<dyn Fn(u64, Option<u32>) + Send + Sync + 'static>;
+const EXIT_CODE_UNKNOWN: i64 = -1;
+const EXIT_CODE_WAIT: Duration = Duration::from_millis(1500);
 
 struct TerminalSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -136,9 +139,14 @@ impl TerminalManager {
         let reaped = Arc::new(AtomicBool::new(false));
         let reaped_for_waiter = Arc::clone(&reaped);
         let sub = self.next_sub.fetch_add(1, Ordering::SeqCst) + 1;
+        let exit_code = Arc::new(AtomicI64::new(EXIT_CODE_UNKNOWN));
+        let exit_code_for_waiter = Arc::clone(&exit_code);
+        let reaped_for_reader = Arc::clone(&reaped);
 
         thread::spawn(move || {
-            let _ = child.wait();
+            if let Ok(status) = child.wait() {
+                exit_code_for_waiter.store(i64::from(status.exit_code()), Ordering::SeqCst);
+            }
             reaped_for_waiter.store(true, Ordering::SeqCst);
         });
 
@@ -156,7 +164,12 @@ impl TerminalManager {
                 }
             }
             if let Some(end) = on_end {
-                crate::guard_boundary("terminal pty end", || end(sub));
+                let deadline = Instant::now() + EXIT_CODE_WAIT;
+                while !reaped_for_reader.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                let code = u32::try_from(exit_code.load(Ordering::SeqCst)).ok();
+                crate::guard_boundary("terminal pty end", || end(sub, code));
             }
         });
 

@@ -5,7 +5,13 @@ import { useSyncExternalStore } from "react";
 /** The argument shapes the Code screen sends its git commands. */
 export type GitArgs = { [key: string]: string | number | boolean | string[] | null | undefined };
 
-export type GitLogEntry = { id: number; at: number; command: string; ok: boolean; output: string };
+export type GitLogEntry = {
+  id: number; at: number; command: string; ok: boolean; output: string;
+  /** The process exit code when the command reported one, else null: never inferred. */
+  code: number | null;
+  /** Wall time of the call in milliseconds, when it was timed. */
+  ms: number | null;
+};
 
 const MAX_ENTRIES = 300;
 const OUTPUT_LINES = 3;
@@ -19,9 +25,21 @@ const listeners = new Set<() => void>();
 
 const emit = () => { for (const l of listeners) l(); };
 
-export function recordGit(command: string, ok: boolean, output: string, at = Date.now()) {
-  entries = [...entries, { id: nextId++, at, command, ok, output }].slice(-MAX_ENTRIES);
+export function recordGit(command: string, ok: boolean, output: string, at = Date.now(), extra: { code?: number | null; ms?: number | null } = {}) {
+  entries = [...entries, { id: nextId++, at, command, ok, output, code: extra.code ?? null, ms: extra.ms ?? null }].slice(-MAX_ENTRIES);
   emit();
+}
+
+// #14268: the native runner ends a failure with an "exit code N" line; "exited with code N" is what other tools print.
+const EXIT_LINE = /^\s*(?:exit(?:ed)?(?: with)? (?:code|status) |\(exit )(\d+)\)?\s*$/i;
+
+/** Splits a trailing exit-code line off an error's text; no such line means no code. */
+export function parseExit(text: string) {
+  const lines = text.split("\n");
+  const last = lines.length - 1;
+  const hit = EXIT_LINE.exec(lines[last] ?? "");
+  const code = hit ? Number(hit[1]) : null;
+  return { code, text: hit ? lines.slice(0, last).join("\n") : text };
 }
 
 export function clearGitLog() { entries = []; emit(); }
@@ -48,19 +66,24 @@ export function firstLines(text: string, count = OUTPUT_LINES): string[] {
 
 /** Tauri's invoke for a git command, with the call, its time and its result pushed onto the log. */
 export async function loggedInvoke<T>(name: string, args: GitArgs = {}): Promise<T> {
+  const started = Date.now();
   try {
     const result = await invoke<T>(name, args);
+    const ms = Date.now() - started;
     // JSON payloads are the data a screen reads, not output a person wants to see; plain text is.
     const text = result === null || result === undefined ? "" : String(result).trimStart();
-    if (!QUIET.has(name)) recordGit(commandLabel(name, args), true, text.startsWith("{") || text.startsWith("[") ? "" : text);
+    if (!QUIET.has(name)) recordGit(commandLabel(name, args), true, text.startsWith("{") || text.startsWith("[") ? "" : text, started, { ms });
     return result;
   } catch (reason) {
-    recordGit(commandLabel(name, args), false, reason instanceof Error ? reason.message : String(reason));
+    const failure = parseExit(reason instanceof Error ? reason.message : String(reason));
+    recordGit(commandLabel(name, args), false, failure.text, started, { code: failure.code, ms: Date.now() - started });
     throw reason;
   }
 }
 
 export function formatGitEntry(entry: GitLogEntry): string[] {
   const time = new Date(entry.at).toLocaleTimeString([], { hour12: false });
-  return [`${time}  ${entry.command}  ${entry.ok ? "ok" : "failed"}`, ...firstLines(entry.output).map(l => `    ${l}`)];
+  const verdict = entry.ok ? "ok" : "failed";
+  const detail = [entry.code === null ? null : `exit ${entry.code}`, entry.ms === null ? null : `${entry.ms} ms`].filter(Boolean).join(", ");
+  return [`${time}  ${entry.command}  ${verdict}${detail ? ` (${detail})` : ""}`, ...firstLines(entry.output).map(l => `    ${l}`)];
 }

@@ -4,6 +4,8 @@ import { listen } from "@tauri-apps/api/event";
 
 export const SHELL_EXIT_EVENT = "term-shell-exit";
 export const SHELL_LABEL = "zsh";
+/** The exit event from shell_terminal.rs; the code is null when the pty could not report one. */
+export type ShellExit = { sub: number; code: number | null };
 
 /** One xterm behind a narrow surface, so the store and its tests never touch xterm itself. */
 export type ShellSession = {
@@ -13,6 +15,12 @@ export type ShellSession = {
   show(visible: boolean): void;
   fit(): void;
   focus(): void;
+  /** The pty's own title (xterm onTitleChange): the folder or the running command. */
+  onTitle(cb: (title: string) => void): { dispose(): void };
+  /** The selected text, or an empty string. */
+  selection(): string;
+  paste(text: string): void;
+  clear(): void;
   readonly cols: number;
   readonly rows: number;
   dispose(): void;
@@ -24,10 +32,20 @@ export type ShellDeps = {
   write(sub: number, data: string): Promise<string>;
   resize(sub: number, cols: number, rows: number): Promise<void>;
   detach(sub: number): Promise<void>;
-  onExit(handler: (sub: number) => void): Promise<() => void>;
+  onExit(handler: (sub: number, code: number | null) => void): Promise<() => void>;
 };
 
-export type Shell = { sub: number; name: string; session: ShellSession };
+/** `name` is what the list shows: the pty title when it reports one, else the "zsh N" fallback. */
+export type Shell = { sub: number; name: string; fallback: string; session: ShellSession; exited: { code: number | null } | null };
+
+/** "me@host:~/code/app" names the folder, "~" stays "~", any other title is the running command. */
+export function titleName(title: string): string {
+  const text = title.trim();
+  const path = /^[^@\s]+@[^:\s]+:(.+)$/.exec(text)?.[1] ?? (/^[~/]/.test(text) ? text : null);
+  if (path === null) return text;
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed === "" ? "/" : trimmed === "~" ? "~" : trimmed.slice(trimmed.lastIndexOf("/") + 1) || trimmed;
+}
 export type ProjectShells = {
   shells: Shell[];
   active: number | null;
@@ -44,7 +62,7 @@ export const DEFAULT_SHELL_DEPS: Omit<ShellDeps, "createSession"> = {
   write: (sub, data) => invoke<string>("term_write", { sub, data }),
   resize: (sub, cols, rows) => invoke<void>("term_resize", { sub, cols, rows }),
   detach: (sub) => invoke<void>("term_detach", { sub }),
-  onExit: async handler => listen<number>(SHELL_EXIT_EVENT, event => handler(event.payload)),
+  onExit: async handler => listen<ShellExit>(SHELL_EXIT_EVENT, event => handler(event.payload.sub, event.payload.code)),
 };
 
 export type ShellStore = ReturnType<typeof createShellStore>;
@@ -74,31 +92,66 @@ export function createShellStore(deps: ShellDeps) {
   };
 
   const watchExits = () => {
-    exitWatch ??= deps.onExit(sub => {
+    // #14268: a shell that ends by itself stays in the list with its exit code and a Restart, not a dead prompt.
+    exitWatch ??= deps.onExit((sub, code) => {
       for (const [project, state] of projects) {
         if (!state.shells.some(shell => shell.sub === sub)) continue;
-        drop(project, sub);
+        set(project, { ...state, shells: state.shells.map(shell => shell.sub === sub ? { ...shell, exited: { code } } : shell) });
         void deps.detach(sub).catch(() => undefined);
       }
     });
     exitWatch.catch(() => { exitWatch = null; });
   };
 
+  const spawn = async (project: string) => {
+    const session = deps.createSession();
+    try {
+      const sub = await deps.open(project, bytes => session.write(bytes));
+      session.onData(data => { void deps.write(sub, data).catch(() => undefined); });
+      session.onTitle(title => {
+        const name = titleName(title);
+        const current = get(project);
+        if (!name || !current.shells.some(shell => shell.sub === sub)) return;
+        set(project, { ...current, shells: current.shells.map(shell => shell.sub === sub ? { ...shell, name } : shell) });
+      });
+      return { sub, session };
+    } catch (err) {
+      session.dispose();
+      throw err;
+    }
+  };
+
   const open = async (project: string) => {
     if (get(project).starting) return;
     watchExits();
     patch(project, { starting: true, idle: false, error: null });
-    const session = deps.createSession();
     try {
-      const sub = await deps.open(project, bytes => session.write(bytes));
+      const { sub, session } = await spawn(project);
       const seq = (seqs.get(project) ?? 0) + 1;
       seqs.set(project, seq);
-      session.onData(data => { void deps.write(sub, data).catch(() => undefined); });
+      const fallback = `${SHELL_LABEL} ${seq}`;
       const current = get(project);
-      set(project, { ...current, shells: [...current.shells, { sub, name: `${SHELL_LABEL} ${seq}`, session }], active: sub, starting: false });
+      set(project, { ...current, shells: [...current.shells, { sub, name: fallback, fallback, session, exited: null }], active: sub, starting: false });
     } catch (err) {
-      session.dispose();
       patch(project, { starting: false, idle: true, error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
+  /** Replaces an exited shell with a fresh one in the same place and under the same name. */
+  const restart = async (project: string, sub: number) => {
+    if (!get(project).shells.some(shell => shell.sub === sub && shell.exited)) return;
+    try {
+      const fresh = await spawn(project);
+      const current = get(project);
+      const old = current.shells.find(shell => shell.sub === sub);
+      if (!old) { fresh.session.dispose(); void deps.detach(fresh.sub).catch(() => undefined); return; }
+      old.session.dispose();
+      set(project, {
+        ...current, error: null, active: current.active === sub ? fresh.sub : current.active,
+        shells: current.shells.map(shell => shell.sub === sub ? { sub: fresh.sub, name: old.fallback, fallback: old.fallback, session: fresh.session, exited: null } : shell),
+      });
+    } catch (err) {
+      patch(project, { error: err instanceof Error ? err.message : String(err) });
     }
   };
 
@@ -124,5 +177,5 @@ export function createShellStore(deps: ShellDeps) {
     return () => { listeners.delete(listener); };
   };
 
-  return { get, subscribe, open, kill, select, fit };
+  return { get, subscribe, open, restart, kill, select, fit };
 }

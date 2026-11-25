@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Terminals } from "./Terminals";
 import { createShellStore, DEFAULT_SHELL_DEPS, SHELL_EXIT_EVENT, type ShellSession, type ShellStore } from "./shellStore";
 
@@ -23,7 +23,17 @@ class FakeSession implements ShellSession {
   attach(parent: HTMLElement) { parent.appendChild(this.el); }
   show(visible: boolean) { this.visible = visible; }
   fit() { /* no layout under happy-dom */ }
-  focus() { /* no focus under happy-dom */ }
+  focused = 0;
+  cleared = 0;
+  pasted: string[] = [];
+  selected = "";
+  titled: Array<(title: string) => void> = [];
+  focus() { this.focused += 1; }
+  onTitle(cb: (title: string) => void) { this.titled.push(cb); return { dispose() { /* none */ } }; }
+  selection() { return this.selected; }
+  paste(text: string) { this.pasted.push(text); }
+  clear() { this.cleared += 1; }
+  title(value: string) { this.titled.forEach(cb => cb(value)); }
   dispose() { this.disposed = true; this.el.remove(); }
   type(data: string) { this.typed.forEach(cb => cb(data)); }
 }
@@ -120,13 +130,73 @@ describe("Terminals", () => {
     expect(rows()).toEqual(["zsh 2"]);
   });
 
-  it("removes a shell that exits on its own", async () => {
+  it("keeps a shell that exits on its own, shows its code and restarts it in place", async () => {
     await mount();
     await click(button("New terminal"));
-    await act(async () => { await emit(SHELL_EXIT_EVENT, 10); });
+    await click(host.querySelector<HTMLElement>("ul li button"));
+    await act(async () => { await emit(SHELL_EXIT_EVENT, { sub: 10, code: 3 }); });
     await settle();
-    expect(rows()).toEqual(["zsh 2"]);
+    expect(rows()).toEqual(["zsh 1", "zsh 2"]);
+    expect(host.querySelector("[role=status]")?.textContent).toContain("Process exited with code 3");
+    expect(countOf("term_detach")).toBe(1);
+    await click([...host.querySelectorAll<HTMLElement>("[role=status] button")].find(b => b.textContent === "Restart") ?? null);
+    expect(rows()).toEqual(["zsh 1", "zsh 2"]);
     expect(sessions[0].disposed).toBe(true);
+    expect(host.querySelector("[role=status]")).toBeNull();
+    expect(countOf("term_shell_open")).toBe(3);
+    await act(async () => { sessions[2].type("ls\r"); });
+    expect(calls.filter(c => c.command === "term_write").map(c => c.args)).toEqual([{ sub: 12, data: "ls\r" }]);
+  });
+
+  it("says only that the process exited when the pty gave no code", async () => {
+    await mount();
+    await act(async () => { await emit(SHELL_EXIT_EVENT, { sub: 10, code: null }); });
+    await settle();
+    expect(host.querySelector("[role=status]")?.textContent).toContain("Process exited");
+    expect(host.querySelector("[role=status]")?.textContent).not.toContain("code");
+  });
+
+  it("names a shell by its folder or running command and keeps zsh N without a title", async () => {
+    await mount();
+    await click(button("New terminal"));
+    await act(async () => { sessions[0].title("me@mac:~/code/trantor"); sessions[1].title("npm run dev"); });
+    expect(rows()).toEqual(["trantor", "npm run dev"]);
+    await act(async () => { sessions[0].title("me@mac:~"); });
+    expect(rows()[0]).toBe("~");
+    await act(async () => { sessions[1].title("  "); });
+    expect(rows()[1]).toBe("npm run dev");
+  });
+
+  it("focuses the shell when the terminal area is clicked", async () => {
+    await mount();
+    const before = sessions[0].focused;
+    await click(host.querySelector<HTMLElement>("[data-testid=terminal-host]"));
+    expect(sessions[0].focused).toBe(before + 1);
+  });
+
+  it("opens a Copy, Paste, Clear menu on right click and runs each", async () => {
+    await mount();
+    const writes: string[] = [];
+    const clipboard = { writeText: async (text: string) => { writes.push(text); }, readText: async () => "pasted text" };
+    vi.stubGlobal("navigator", { ...navigator, clipboard });
+    sessions[0].selected = "selected text";
+    const area = host.querySelector<HTMLElement>("[data-testid=terminal-host]");
+    const menu = () => host.querySelector("[role=menu]");
+    const item = (label: string) => [...host.querySelectorAll<HTMLElement>("[role=menuitem]")].find(b => b.textContent === label) ?? null;
+    const prevented = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    await act(async () => { area?.dispatchEvent(prevented); });
+    expect(prevented.defaultPrevented).toBe(true);
+    expect([...host.querySelectorAll("[role=menuitem]")].map(b => b.textContent)).toEqual(["Copy", "Paste", "Clear"]);
+    await click(item("Copy"));
+    expect(writes).toEqual(["selected text"]);
+    expect(menu()).toBeNull();
+    await act(async () => { area?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
+    await click(item("Paste"));
+    expect(sessions[0].pasted).toEqual(["pasted text"]);
+    await act(async () => { area?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
+    await click(item("Clear"));
+    expect(sessions[0].cleared).toBe(1);
+    vi.unstubAllGlobals();
   });
 
   it("keeps shells alive across unmount and shows them per project", async () => {

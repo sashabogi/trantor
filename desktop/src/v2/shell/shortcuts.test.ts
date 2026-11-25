@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
-import { formatShortcut, inTerminal, matchesShortcut } from "./shortcuts";
+import { appChordFromTerminal, formatShortcut, inTerminal, isTerminalClear, matchesShortcut } from "./shortcuts";
 
 const key = (init: KeyboardEventInit) => new KeyboardEvent("keydown", init);
 
@@ -43,5 +43,20 @@ describe("inTerminal", () => {
     expect(fire(host.querySelector(".xterm textarea"))).toBe(true);
     expect(fire(host.querySelector("#other"))).toBe(false);
     host.remove();
+  });
+});
+
+describe("terminal keys (#14268)", () => {
+  it("keeps copy, paste and clear with the terminal and gives other Command chords to the app", () => {
+    for (const k of ["c", "v", "k", "a"]) expect(appChordFromTerminal(key({ key: k, metaKey: true }))).toBe(false);
+    expect(appChordFromTerminal(key({ key: "p", metaKey: true }))).toBe(true);
+    expect(appChordFromTerminal(key({ key: "k", ctrlKey: true }))).toBe(false);
+  });
+
+  it("clears on Command+K only", () => {
+    expect(isTerminalClear(key({ key: "k", metaKey: true }))).toBe(true);
+    expect(isTerminalClear(key({ key: "K", metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isTerminalClear(key({ key: "k", ctrlKey: true }))).toBe(false);
+    expect(isTerminalClear(new KeyboardEvent("keyup", { key: "k", metaKey: true }))).toBe(false);
   });
 });

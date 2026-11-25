@@ -42,7 +42,12 @@ export function inTerminal(event: KeyboardEvent): boolean {
   return event.target instanceof Element && event.target.closest(".xterm") !== null;
 }
 
-/** Command chords reach the app from inside a terminal (#14268); Ctrl+key stays with the shell, and copy and paste stay with the terminal. */
+/** Command chords reach the app from inside a terminal (#14268); Ctrl+key stays with the shell, and copy, paste and clear stay with the terminal. */
 export function appChordFromTerminal(event: KeyboardEvent): boolean {
-  return event.metaKey && !event.ctrlKey && !["c", "v", "x", "a"].includes(event.key.toLowerCase());
+  return event.metaKey && !event.ctrlKey && !["c", "v", "x", "a", "k"].includes(event.key.toLowerCase());
+}
+
+/** #14268: Cmd+K clears a focused terminal like VS Code; every other key is the app's or the terminal's as before. */
+export function isTerminalClear(event: KeyboardEvent): boolean {
+  return event.type === "keydown" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "k";
 }

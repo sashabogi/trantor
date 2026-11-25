@@ -1,6 +1,8 @@
 // The Terminal tab: the active project shell on the left, a list of shells on the right (#14080).
-import { useEffect, useRef } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Plus, RotateCw, Trash2 } from "lucide-react";
+import { MenuItem, Popover } from "../../shell/Popover";
+import { Button } from "../Button";
 import type { ShellStore } from "./shellStore";
 import { useShells } from "./useShells";
 
@@ -10,6 +12,22 @@ export function Terminals({ project, store }: { project: string; store?: ShellSt
   // The keyboard goes to a terminal only when the user picked or made one, never just because the screen opened.
   const wantFocus = useRef(false);
   const { open, fit } = shells;
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const current = shells.shells.find(shell => shell.sub === shells.active) ?? null;
+  const closeMenu = () => setMenu(null);
+  // #14268: a click anywhere in the terminal area focuses the shell, as in VS Code.
+  const focusActive = () => { if (current && !current.exited) current.session.focus(); };
+  const copy = () => {
+    const text = current?.session.selection() ?? "";
+    if (text) void navigator.clipboard?.writeText(text).catch(() => undefined);
+    closeMenu();
+  };
+  const paste = () => {
+    const session = current?.session;
+    closeMenu();
+    if (session && !current?.exited) void navigator.clipboard?.readText().then(text => { if (text) session.paste(text); }).catch(() => undefined);
+  };
+  const clear = () => { current?.session.clear(); closeMenu(); focusActive(); };
   const openNew = () => { wantFocus.current = true; open(); };
   const pick = (sub: number) => { wantFocus.current = true; shells.select(sub); };
 
@@ -24,10 +42,10 @@ export function Terminals({ project, store }: { project: string; store?: ShellSt
       shell.session.attach(el);
       shell.session.show(shell.sub === shells.active);
     }
-    const current = shells.shells.find(shell => shell.sub === shells.active);
-    if (!current) return;
-    fit(current.sub);
-    if (wantFocus.current) { wantFocus.current = false; current.session.focus(); }
+    const active = shells.shells.find(shell => shell.sub === shells.active);
+    if (!active) return;
+    fit(active.sub);
+    if (wantFocus.current) { wantFocus.current = false; active.session.focus(); }
   }, [shells.shells, shells.active, fit]);
 
   useEffect(() => {
@@ -45,7 +63,28 @@ export function Terminals({ project, store }: { project: string; store?: ShellSt
   return (
     <div className="flex h-full min-h-0">
       <div className="relative min-w-0 flex-1 bg-[var(--v2-panel)]">
-        <div ref={host} className="absolute inset-0 px-2 py-1" />
+        <div ref={host} data-testid="terminal-host" onClick={focusActive}
+          onContextMenu={event => {
+            event.preventDefault();
+            const box = event.currentTarget.getBoundingClientRect();
+            setMenu({ x: event.clientX - box.left, y: event.clientY - box.top });
+          }}
+          className="absolute inset-0 px-2 py-1" />
+        {menu && (
+          <div className="absolute h-0 w-0" style={{ left: menu.x, top: menu.y - 6 }}>
+            <Popover open onClose={closeMenu} label="Terminal actions">
+              <MenuItem onSelect={copy}>Copy</MenuItem>
+              <MenuItem onSelect={paste}>Paste</MenuItem>
+              <MenuItem onSelect={clear}>Clear</MenuItem>
+            </Popover>
+          </div>
+        )}
+        {current?.exited && (
+          <div role="status" className="absolute inset-x-0 bottom-0 flex items-center gap-3 border-t border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-3 py-1.5 text-v2-body text-[var(--v2-text-2)]">
+            <span>{current.exited.code === null ? "Process exited" : `Process exited with code ${current.exited.code}`}</span>
+            <Button variant="ghost" icon={<RotateCw size={12} aria-hidden />} onClick={() => { wantFocus.current = true; shells.restart(current.sub); }}>Restart</Button>
+          </div>
+        )}
         {!shells.shells.length && (
           <Empty starting={shells.starting} error={shells.error} onNew={openNew} />
         )}

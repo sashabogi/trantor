@@ -2,7 +2,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import { appChordFromTerminal } from "../../shell/shortcuts";
+import { appChordFromTerminal, isTerminalClear } from "../../shell/shortcuts";
 import type { ShellSession } from "./shellStore";
 
 const THEME = {
@@ -22,11 +22,15 @@ export function createXtermShell(): ShellSession {
     fontFamily: '"SF Mono", ui-monospace, "Menlo", monospace',
     theme: THEME,
     scrollback: 5000,
+    cursorBlink: true,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
   // #14268: Cmd chords belong to the app, so xterm leaves them alone; Ctrl keys still reach the shell.
-  term.attachCustomKeyEventHandler(e => !appChordFromTerminal(e));
+  term.attachCustomKeyEventHandler(e => {
+    if (isTerminalClear(e)) { term.clear(); return false; }
+    return !appChordFromTerminal(e);
+  });
   term.open(el);
   return {
     write: bytes => term.write(bytes),
@@ -35,6 +39,10 @@ export function createXtermShell(): ShellSession {
     show: visible => { el.style.display = visible ? "block" : "none"; },
     fit: () => fit.fit(),
     focus: () => term.focus(),
+    onTitle: cb => term.onTitleChange(cb),
+    selection: () => term.getSelection(),
+    paste: text => term.paste(text),
+    clear: () => term.clear(),
     get cols() { return term.cols; },
     get rows() { return term.rows; },
     // Teardown must not throw: it runs from a list update inside a React render path.

@@ -56,6 +56,14 @@ pub(crate) fn parse_untracked_porcelain(raw: &str) -> Vec<SeatDiffFile> {
         .collect()
 }
 
+/// #14268: a last "exit code N" line the Output tab's Git channel reads; the first line stays what callers already show.
+fn with_exit_line(message: String, status: &std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("{message}\nexit code {code}"),
+        None => message,
+    }
+}
+
 pub(crate) fn run_git_text(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
         .arg("-C")
@@ -73,11 +81,14 @@ pub(crate) fn run_git_text(dir: &Path, args: &[&str]) -> Result<String, String> 
     })
     .trim()
     .to_string();
-    Err(if err.is_empty() {
-        format!("git {} failed", args.join(" "))
-    } else {
-        format!("git {} failed: {err}", args.join(" "))
-    })
+    Err(with_exit_line(
+        if err.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            format!("git {} failed: {err}", args.join(" "))
+        },
+        &out.status,
+    ))
 }
 
 pub(crate) fn merge_base(dir: &Path) -> Result<String, String> {
@@ -249,11 +260,14 @@ pub(crate) async fn git_run(dir: &Path, args: &[&str]) -> Result<(), String> {
     })
     .trim()
     .to_string();
-    Err(if err.is_empty() {
-        format!("git {} failed", args.join(" "))
-    } else {
-        format!("git {} failed: {err}", args.join(" "))
-    })
+    Err(with_exit_line(
+        if err.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            format!("git {} failed: {err}", args.join(" "))
+        },
+        &out.status,
+    ))
 }
 
 /// The async twin of run_git_text — same failure text, but the subprocess wait happens on the
@@ -277,11 +291,14 @@ pub(crate) async fn run_git_text_io(dir: &Path, args: &[&str]) -> Result<String,
     })
     .trim()
     .to_string();
-    Err(if err.is_empty() {
-        format!("git {} failed", args.join(" "))
-    } else {
-        format!("git {} failed: {err}", args.join(" "))
-    })
+    Err(with_exit_line(
+        if err.is_empty() {
+            format!("git {} failed", args.join(" "))
+        } else {
+            format!("git {} failed: {err}", args.join(" "))
+        },
+        &out.status,
+    ))
 }
 
 pub(crate) const MERGE_BASE_BRANCHES: [&str; 4] = ["main", "master", "origin/main", "origin/master"];
@@ -682,6 +699,19 @@ mod git_panel_tests {
         assert!(seat_worktree(&bus, "trantor", "a/b").is_err());
         assert!(seat_worktree(&bus, "", "glm").is_err());
         assert!(seat_worktree(&bus, "trantor", "glm").is_err());
+    }
+}
+
+#[cfg(test)]
+mod exit_line_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_command_ends_with_its_exit_code() {
+        let dir = std::env::temp_dir();
+        let err = run_git_text(&dir, &["rev-parse", "--verify", "no-such-ref-14268"]).expect_err("must fail");
+        assert!(err.starts_with("git rev-parse --verify no-such-ref-14268 failed"), "got {err:?}");
+        assert!(err.lines().last().unwrap_or_default().starts_with("exit code "), "got {err:?}");
     }
 }
 

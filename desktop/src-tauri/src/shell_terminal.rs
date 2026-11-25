@@ -11,6 +11,23 @@ pub(crate) const SHELL_EXIT_EVENT: &str = "term-shell-exit";
 /// scrub covers the rest (TRANTOR_ORCH, HERDR_*, RELAY_*, CLAUDE_CODE_*, CLAUDECODE).
 const EXTRA_IDENTITY_KEYS: &[&str] = &["TRANTOR_PROJECT"];
 
+/// What the shell is told about the terminal it runs in.
+const TERMINAL_ENV: &[(&str, &str)] = &[
+    ("TERM", "xterm-256color"),
+    ("COLORTERM", "truecolor"),
+    ("TERM_PROGRAM", "Trantor"),
+    ("SHELL_SESSIONS_DISABLE", "1"),
+];
+/// Apple Terminal's own session markers, which an app launched from Terminal would otherwise pass on.
+const INHERITED_TERMINAL_KEYS: &[&str] = &["TERM_SESSION_ID", "TERM_PROGRAM_VERSION"];
+
+/// The exit event payload: the code is absent when the child could not be reaped in time (#14268).
+#[derive(Clone, serde::Serialize)]
+struct ShellExit {
+    sub: u64,
+    code: Option<u32>,
+}
+
 pub(crate) fn shell_command(dir: &Path, shell: Option<String>, carried_env: &[(&str, &str)]) -> CommandBuilder {
     let program = shell
         .map(|value| value.trim().to_string())
@@ -22,8 +39,11 @@ pub(crate) fn shell_command(dir: &Path, shell: Option<String>, carried_env: &[(&
     }
     cmd.arg("-l");
     cmd.cwd(dir);
-    cmd.env("TERM", "xterm-256color");
-    for key in EXTRA_IDENTITY_KEYS {
+    // #14268: macOS zsh restores a per-session history ("Restored session: ...") when it sees Apple Terminal's variables.
+    for (key, value) in TERMINAL_ENV {
+        cmd.env(key, value);
+    }
+    for key in EXTRA_IDENTITY_KEYS.iter().chain(INHERITED_TERMINAL_KEYS) {
         cmd.env_remove(key);
     }
     cmd
@@ -38,8 +58,8 @@ pub fn term_shell_open(
 ) -> Result<u64, String> {
     let dir = crate::files::source_root(project.trim(), None)?;
     let cmd = shell_command(&dir, std::env::var("SHELL").ok(), &[]);
-    let on_end: EndSink = Arc::new(move |sub| {
-        let _ = app.emit(SHELL_EXIT_EVENT, sub);
+    let on_end: EndSink = Arc::new(move |sub, code| {
+        let _ = app.emit(SHELL_EXIT_EVENT, ShellExit { sub, code });
     });
     terminals.attach_shell(
         cmd,
@@ -87,7 +107,7 @@ mod tests {
                 Arc::new(move |bytes| {
                     let _ = tx.send(bytes);
                 }),
-                Arc::new(move |sub| {
+                Arc::new(move |sub, _code| {
                     let _ = end_tx.send(sub);
                 }),
             )
@@ -164,5 +184,32 @@ mod tests {
         }
         assert!(shell.seen.contains("TERM=xterm-256color"));
         assert!(manager.detach(shell.sub).expect("detach").reaped);
+    }
+
+    #[test]
+    fn the_shell_env_names_trantor_and_drops_apple_terminal_session_markers() {
+        std::env::set_var("TERM_SESSION_ID", "w0t0p0:ABC");
+        std::env::set_var("TERM_PROGRAM", "Apple_Terminal");
+        let cmd = shell_command(Path::new("/tmp"), Some("/bin/zsh".into()), &[]);
+        assert_eq!(cmd.get_env("SHELL_SESSIONS_DISABLE").and_then(|v| v.to_str()), Some("1"));
+        assert_eq!(cmd.get_env("TERM_PROGRAM").and_then(|v| v.to_str()), Some("Trantor"));
+        assert_eq!(cmd.get_env("TERM").and_then(|v| v.to_str()), Some("xterm-256color"));
+        assert_eq!(cmd.get_env("COLORTERM").and_then(|v| v.to_str()), Some("truecolor"));
+        assert!(cmd.get_env("TERM_SESSION_ID").is_none());
+        assert!(cmd.get_argv().iter().any(|a| a == "-l"));
+    }
+
+    #[test]
+    fn a_shell_that_exits_reports_its_exit_code() {
+        let manager = TerminalManager::default();
+        let dir = temp_dir("code");
+        let (end_tx, ended) = mpsc::channel::<(u64, Option<u32>)>();
+        let cmd = shell_command(&dir, Some("/bin/sh".into()), &[]);
+        let sub = manager
+            .attach_shell(cmd, Arc::new(|_| {}), Arc::new(move |sub, code| { let _ = end_tx.send((sub, code)); }))
+            .expect("attach shell");
+        manager.write(sub, "exit 3\n").expect("write");
+        assert_eq!(ended.recv_timeout(Duration::from_secs(5)), Ok((sub, Some(3))));
+        let _ = manager.detach(sub);
     }
 }
