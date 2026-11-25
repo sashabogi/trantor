@@ -127,6 +127,15 @@ pub(crate) fn source_root(project: &str, seat: Option<&str>) -> Result<std::path
     }
 }
 
+/// #14300: the read-only twin of source_root; a `wt:<path>` seat is an agent worktree git lists for the project.
+/// Only reads go through it, so every file write still refuses a worktree scope.
+pub(crate) fn source_root_read(project: &str, seat: Option<&str>) -> Result<std::path::PathBuf, String> {
+    match seat.and_then(|s| s.strip_prefix(WORKTREE_PREFIX)) {
+        Some(path) => listed_worktree_path(&project_checkout_in(&identity::dev_root(), project)?, path),
+        None => source_root(project, seat),
+    }
+}
+
 /// A file's text, for the viewer. Guarded on two axes because a file tree will eventually be
 /// pointed at something that is neither small nor text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -151,7 +160,7 @@ pub(crate) struct FileStat {
 
 #[tauri::command]
 pub(crate) fn file_stat(project: String, path: String, seat: Option<String>) -> Result<String, String> {
-    let root = source_root(&project, seat.as_deref())?;
+    let root = source_root_read(&project, seat.as_deref())?;
     if path.contains("..") {
         return Err("path escapes the project".into());
     }
@@ -172,7 +181,7 @@ pub(crate) fn file_stat(project: String, path: String, seat: Option<String>) -> 
 
 #[tauri::command]
 pub(crate) fn read_file(project: String, path: String, seat: Option<String>) -> Result<String, String> {
-    let root = source_root(&project, seat.as_deref())?;
+    let root = source_root_read(&project, seat.as_deref())?;
     if path.contains("..") {
         return Err("path escapes the project".into());
     }
@@ -211,7 +220,7 @@ pub(crate) fn read_file_at_head(
     path: String,
     seat: Option<String>,
 ) -> Result<String, String> {
-    let root = source_root(&project, seat.as_deref())?;
+    let root = source_root_read(&project, seat.as_deref())?;
     if path.contains("..") {
         return Err("path escapes the project".into());
     }
@@ -243,7 +252,7 @@ pub(crate) fn file_diff(
     seat: Option<String>,
     side: Option<FileDiffSide>,
 ) -> Result<String, String> {
-    let root = source_root(&project, seat.as_deref())?;
+    let root = source_root_read(&project, seat.as_deref())?;
     file_diff_at(&root, &path, side)
 }
 
@@ -294,7 +303,7 @@ fn file_diff_at(root: &Path, path: &str, side: Option<FileDiffSide>) -> Result<S
 /// and count: autocomplete must reach a file three folders deep, and this runs on every keystroke.
 #[tauri::command]
 pub(crate) fn search_files(project: String, query: String, seat: Option<String>) -> Result<String, String> {
-    let root = source_root(&project, seat.as_deref())?;
+    let root = source_root_read(&project, seat.as_deref())?;
     let q = query.to_lowercase();
     let mut hits: Vec<String> = Vec::new();
     let mut stack: Vec<(std::path::PathBuf, String, usize)> = vec![(root, String::new(), 0)];
@@ -345,7 +354,7 @@ pub(crate) fn project_files(
     sub: Option<String>,
     seat: Option<String>,
 ) -> Result<String, String> {
-    let root = source_root(&project, seat.as_deref())?;
+    let root = source_root_read(&project, seat.as_deref())?;
     let rel = sub.unwrap_or_default();
     // Refuse to escape the project root: `sub` comes from the front end and a "../" would walk out.
     if rel.contains("..") {

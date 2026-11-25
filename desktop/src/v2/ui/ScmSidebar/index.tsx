@@ -2,15 +2,17 @@
 // share: Changes (flat list with the commit box), Files, Recent commits, Stashes, every section collapsible
 // and remembered in localStorage; every git mutation reuses the Code screen's scoped bridge.
 // #14047: ahead/behind + seats rows. #14058: every header stays on screen, bodies scroll alone.
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { ago } from "../../../shared/time";
 import { ExplorerTree } from "../ExplorerTree";
 import { aheadLabel } from "../../../features/code/gitApi";
 import { MainCheckoutMark } from "../../screens/Code/parts";
 import type { SeatInfo } from "../../screens/Code/model";
-import type { ScopeState } from "../../screens/Code/useScopeGit";
-import { scopeFetch } from "../../screens/Code/scopeGitApi";
+import { useScopeGit, type ScopeState } from "../../screens/Code/useScopeGit";
+import { isWorktreeScope, scopeFetch } from "../../screens/Code/scopeGitApi";
+import { scopeWorktreeLabel, useAgentWorktrees, type AgentWorktree } from "../../screens/Code/useAgentWorktrees";
+import { AgentsSection } from "./AgentsSection";
 import { BranchesSection } from "./BranchesSection";
 import { ChangesSection } from "./ChangesSection";
 import { CollapsibleSection } from "./CollapsibleSection";
@@ -34,6 +36,8 @@ export type ScmSidebarProps = {
   onOpenConflict?: (path: string) => void;
   /** the change whose diff the host is showing, if any */
   selectedPath?: string | null;
+  /** true when the host follows onPickScope to a worktree scope itself (Code); else the sidebar reads it alone */
+  hostPicksWorktree?: boolean;
   /** header-row extras: the column's collapse button, the open-full-tab button */
   actions?: ReactNode;
 };
@@ -73,7 +77,31 @@ function useFetch(project: string, scope: string | null, onMutated: () => void) 
   return { busy, run, error: failure?.key === key ? failure.reason : null, fetchedAt: fetchTimes.get(key) };
 }
 
+type ViewProps = ScmSidebarProps & { worktrees: AgentWorktree[] };
+
+/** #14300: an agent worktree picked where the host does not scope by it (the Workspace) is read by the sidebar alone. */
+function WorktreeScoped(p: ViewProps & { own: string }) {
+  const { state, refresh } = useScopeGit(p.project, p.own);
+  return <ScmSidebarView {...p} scope={p.own} state={state} onMutated={() => { refresh(); p.onMutated(); }}
+    scopeName={scopeWorktreeLabel(p.own, p.worktrees)} />;
+}
+
 export function ScmSidebar(p: ScmSidebarProps) {
+  const worktrees = useAgentWorktrees(p.project);
+  const [own, setOwn] = useState<string | null>(null);
+  // The host's own scope changing (a seat picked in its strip) hands the sidebar back to it.
+  useEffect(() => { setOwn(null); }, [p.scope, p.project]);
+  const onPickScope = (scope: string | null) => {
+    setOwn(scope !== null && isWorktreeScope(scope) && !p.hostPicksWorktree ? scope : null);
+    p.onPickScope(scope);
+  };
+  const view = { ...p, worktrees, onPickScope };
+  if (own) return <WorktreeScoped {...view} own={own} />;
+  const scopeName = p.scope && isWorktreeScope(p.scope) ? scopeWorktreeLabel(p.scope, worktrees) : p.scopeName;
+  return <ScmSidebarView {...view} scopeName={scopeName} />;
+}
+
+function ScmSidebarView(p: ViewProps) {
   const snap = p.state.kind === "ok" ? p.state.snap : null;
   const fetch = useFetch(p.project, p.scope, p.onMutated);
   const upstreamTitle = snap?.upstream ? `upstream ${snap.upstream}` : "no upstream: ahead counts unlanded work against main";
@@ -120,11 +148,16 @@ export function ScmSidebar(p: ScmSidebarProps) {
           <ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} />
         </CollapsibleSection>
         <CollapsibleSection section="commits" title="Recent commits" badge={snap ? <CountBadge n={snap.log.length} /> : undefined}>
-          {snap ? <CommitsSection log={snap.log} onOpen={p.onOpenCommit} /> : <Pending state={p.state} />}
+          {snap ? <CommitsSection key={p.scope ?? "project"} log={snap.log} onOpen={p.onOpenCommit} /> : <Pending state={p.state} />}
         </CollapsibleSection>
         <CollapsibleSection section="stashes" title="Stashes">
           {snap ? <StashesSection project={p.project} scope={p.scope} onMutated={p.onMutated} /> : <Pending state={p.state} />}
         </CollapsibleSection>
+        {p.worktrees.length > 0 && (
+          <CollapsibleSection section="agents" title="Agents working" badge={<CountBadge n={p.worktrees.length} />}>
+            <AgentsSection worktrees={p.worktrees} scope={p.scope} onPickScope={p.onPickScope} />
+          </CollapsibleSection>
+        )}
         <CollapsibleSection section="branches" title="Branches and seats" badge={<CountBadge n={1 + p.seats.length} />}>
           <BranchesSection project={p.project} scope={p.scope} seats={p.seats} onPickScope={p.onPickScope} />
         </CollapsibleSection>

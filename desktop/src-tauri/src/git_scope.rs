@@ -11,13 +11,21 @@ use super::*;
 pub(crate) enum GitScope {
     Seat(String),
     Project,
+    /// #14300: an agent's or helper's worktree by path, read-only, only ever one `git worktree list` reports.
+    Worktree(String),
 }
+
+/// The agent argument that names a worktree scope: `wt:<absolute path>`.
+pub(crate) const WORKTREE_PREFIX: &str = "wt:";
 
 /// `scope` absent or "seat" is the seat path exactly as before (agent required); "project" is the
 /// main checkout and takes no agent, so a stray seat name can never land on the wrong tree.
 pub(crate) fn parse_scope(agent: Option<&str>, scope: Option<&str>) -> Result<GitScope, String> {
     match scope.map(str::trim) {
-        None | Some("") | Some("seat") => Ok(GitScope::Seat(agent.unwrap_or_default().to_string())),
+        None | Some("") | Some("seat") => Ok(match agent.and_then(|a| a.strip_prefix(WORKTREE_PREFIX)) {
+            Some(path) => GitScope::Worktree(path.to_string()),
+            None => GitScope::Seat(agent.unwrap_or_default().to_string()),
+        }),
         Some("project") => {
             if agent.is_some_and(|a| !a.trim().is_empty()) {
                 return Err("the project scope takes no agent".into());
@@ -46,12 +54,16 @@ pub(crate) fn scope_dir_in(
     match scope {
         GitScope::Seat(agent) => seat_worktree(bus, project, agent),
         GitScope::Project => project_checkout_in(dev_root, project),
+        GitScope::Worktree(path) => listed_worktree_path(&project_checkout_in(dev_root, project)?, path),
     }
 }
 
 /// Resolve the directory and, for a seat, refuse while it is mid-turn. The main checkout has no
 /// seat to wait on; the operator's own finger is the only writer the panel adds there.
 pub(crate) async fn scope_dir_for_mutation(project: &str, scope: &GitScope) -> Result<std::path::PathBuf, String> {
+    if matches!(scope, GitScope::Worktree(_)) {
+        return Err("Agent worktrees are read-only here; the agent changes its own worktree".into());
+    }
     let dir = scope_dir_in(&identity::dev_root(), &desktop_bus_dir(), project, scope)?;
     if let GitScope::Seat(agent) = scope {
         git_mutation_guard(agent).await?;

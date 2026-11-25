@@ -53,6 +53,7 @@ mod git_checkout;
 mod git_branch;
 mod git_commit;
 mod git_history;
+mod git_worktrees;
 mod remote_seat;
 mod update;
 mod native_notify;
@@ -92,6 +93,8 @@ use git_branch::*;
 use git_commit::*;
 #[allow(unused_imports)]
 use git_history::*;
+#[allow(unused_imports)]
+use git_worktrees::*;
 #[allow(unused_imports)]
 use remote_seat::*;
 #[allow(unused_imports)]

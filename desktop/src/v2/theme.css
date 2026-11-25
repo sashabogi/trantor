@@ -115,3 +115,10 @@
 @media (prefers-reduced-motion: reduce) {
   .v2-header-band *, .v2-header-band *::before, .v2-header-band *::after { animation: none !important; transition: none !important; }
 }
+
+/* #14300: a working agent's dot pulses and a commit that just arrived fades its highlight out; both stop under reduced motion. */
+.v2-agent-pulse { animation: v2-agent-pulse 1400ms ease-in-out infinite; }
+@keyframes v2-agent-pulse { 50% { opacity: 0.35; } }
+.v2-commit-new { background: var(--v2-accent-soft); animation: v2-commit-new 2500ms ease-out 1 forwards; }
+@keyframes v2-commit-new { to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .v2-agent-pulse, .v2-commit-new { animation: none; } }

@@ -8,6 +8,11 @@ import { MODE_CONFIG, readMode, type Mode } from "../../shell/shellMode";
 /** null is the project's main checkout. */
 export type GitScopeArg = string | null;
 
+/** #14300: an agent or helper worktree is a scope named `wt:<absolute path>`; Rust only resolves paths git lists. */
+export const WORKTREE_SCOPE_PREFIX = "wt:";
+export const isWorktreeScope = (scope: GitScopeArg): boolean => !!scope && scope.startsWith(WORKTREE_SCOPE_PREFIX);
+export const WORKTREE_REFUSAL = "Agent worktrees are read-only here; the agent changes its own worktree";
+
 export function scopeArgs(agent: GitScopeArg): { agent: string } | { scope: "project" } {
   return agent ? { agent } : { scope: "project" };
 }
@@ -180,6 +185,7 @@ export const HISTORY_REFUSAL = "On the main checkout, changing a commit goes thr
 
 /** Amend and undo rewrite a commit, so they follow the same mode rule as push and discard. */
 export function historyMutationRefusal(agent: GitScopeArg, mode: Mode = readMode()): string | null {
+  if (isWorktreeScope(agent)) return WORKTREE_REFUSAL;
   return agent || MODE_CONFIG[mode].ownCheckoutMutations ? null : HISTORY_REFUSAL;
 }
 
@@ -187,10 +193,12 @@ export const BRANCH_REFUSAL = "On the main checkout, branch changes go through t
 
 /** Creating, switching, renaming, deleting, merging and rebasing follow the same mode rule as push and discard. */
 export function branchMutationRefusal(agent: GitScopeArg, mode: Mode = readMode()): string | null {
+  if (isWorktreeScope(agent)) return WORKTREE_REFUSAL;
   return agent || MODE_CONFIG[mode].ownCheckoutMutations ? null : BRANCH_REFUSAL;
 }
 
 export function checkoutMutationRefusal(agent: GitScopeArg, mode: Mode = readMode()): string | null {
+  if (isWorktreeScope(agent)) return WORKTREE_REFUSAL;
   return agent || MODE_CONFIG[mode].ownCheckoutMutations ? null : CHECKOUT_REFUSAL;
 }
 

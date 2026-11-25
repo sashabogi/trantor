@@ -195,6 +195,7 @@ pub fn run() {
             git_apply_patch,
             git_show,
             git_history,
+            git_worktrees,
             git_commit_meta,
             git_blame,
             git_operation,

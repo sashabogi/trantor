@@ -14,6 +14,7 @@ import { BranchDialogs } from "./BranchDialogs";
 import { useBranchOps, useBranchRows, type BranchOps, type ErrorHandler } from "./useBranchOps";
 import type { GitBranch, GitScopeArg } from "./scopeGitApi";
 import type { ScopeSnapshot } from "./useScopeGit";
+import { useAgentWorktrees, worktreeCounts, worktreeLabel, worktreeScope } from "./useAgentWorktrees";
 
 export { CreateBranchDialog } from "./BranchDialogs";
 
@@ -128,6 +129,8 @@ export function BranchPicker({ project, seats, snap, scope, acts, onClose, onMut
   const branchState = useBranchOps({ project, seats, snap, scope, onClose, onMutated, onError, onOpenConflict });
   const { filter, setFilter, show, setShow, sort, setSort, groups, locals, remotes } = useBranchRows(seats, branchState.branches);
   const { ops, dialog, setDialog, busy } = branchState;
+  const needle = filter.trim().toLowerCase();
+  const worktrees = useAgentWorktrees(project).filter(w => !needle || `${worktreeLabel(w)} ${w.branch ?? ""}`.toLowerCase().includes(needle));
   const filterField = useRef<HTMLInputElement>(null);
   useTypeAhead(filterField);
   return (
@@ -154,6 +157,21 @@ export function BranchPicker({ project, seats, snap, scope, acts, onClose, onMut
         <SectionLabel>Seats · each in its own worktree</SectionLabel>
         {groups.seats.length === 0 && <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">{seats.some(seat => seat.hasWorktree) ? "No seat matches." : "No seat has a worktree for this project."}</div>}
         {groups.seats.map(seat => <SeatRow key={seat.seat} s={seat} current={scope === seat.seat} acts={acts} ops={ops} onClose={onClose} />)}
+        {worktrees.length > 0 && <>
+          <SectionLabel>Agent worktrees</SectionLabel>
+          {worktrees.map(w => {
+            const id = worktreeScope(w);
+            return (
+              <button key={w.path} type="button" data-agent-worktree={w.path} data-current={scope === id || undefined} title={`Read ${w.branch ?? w.path}, read-only`}
+                onClick={() => { acts.onSeat(id); onClose(); }}
+                className={`flex w-full items-center gap-2 border-0 px-3 py-1.5 text-left text-v2-body ${scope === id ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
+                <GitBranchIcon size={13} aria-hidden className="shrink-0 text-[var(--v2-muted)]" />
+                <span className="shrink-0 text-[var(--v2-text)]">{worktreeLabel(w)}</span>
+                <span className="v2-mono min-w-0 flex-1 truncate text-v2-small text-[var(--v2-muted)]">{w.branch ?? "detached"} · {worktreeCounts(w)}</span>
+              </button>
+            );
+          })}
+        </>}
         {show === "all" && <>
           <SectionLabel>Other local</SectionLabel>
           {branchState.readError && <div role="alert" className="px-3 py-1.5 text-v2-body text-[var(--v2-bad)]">{branchState.readError}</div>}

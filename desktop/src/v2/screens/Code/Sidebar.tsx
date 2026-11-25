@@ -72,7 +72,7 @@ export function Sidebar(p: SidebarProps) {
     return (
       <aside aria-label="Source control" className={panel}>
         <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scope ?? "project checkout"} state={p.state} seats={p.seats}
-          onPickScope={p.onPickSeat} selectedPath={p.selected}
+          onPickScope={p.onPickSeat} hostPicksWorktree selectedPath={p.selected}
           onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onOpenConflict={p.onOpenConflict}
           actions={<IconButton label="Open the full source control tab" title="Open the full tab" size={24} onClick={p.onOpenSource}><Maximize2 size={13} aria-hidden /></IconButton>} />
       </aside>

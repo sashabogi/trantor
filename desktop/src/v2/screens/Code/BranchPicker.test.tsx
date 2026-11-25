@@ -21,6 +21,7 @@ let close: ReturnType<typeof vi.fn>;
 let mutated: ReturnType<typeof vi.fn>;
 let conflict: ReturnType<typeof vi.fn>;
 let errors: ReturnType<typeof vi.fn>;
+let worktreeRows: unknown[] = [];
 
 const branches = [
   { name: "main", sha: "a".repeat(40), committed_at: 100, ahead: 0, behind: 0, current: true, remote: false, worktree: null },
@@ -34,6 +35,7 @@ const snapshot: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin
 
 beforeEach(() => {
   calls = [];
+  worktreeRows = [];
   close = vi.fn(); mutated = vi.fn(); conflict = vi.fn(); errors = vi.fn();
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -49,6 +51,7 @@ beforeEach(() => {
       const current = args.scope === "project" ? "main" : "seat/dev";
       return JSON.stringify({ current, branches: branches.map(branch => ({ ...branch, current: !branch.remote && branch.name === current })) });
     }
+    if (command === "git_worktrees") return JSON.stringify(worktreeRows);
     if (command === "git_branch_switch" || command === "git_branch_merge" || command === "git_branch_rebase") return JSON.stringify({ status: "done", reason: "ok", conflicts: [] });
     if (command === "git_branch_delete") return JSON.stringify(args.force ? { status: "deleted", unique: 2 } : { status: "confirm", unique: 2 });
     return null;
@@ -169,5 +172,22 @@ describe("BranchPicker", () => {
     expect(rebase?.disabled).toBe(true);
     expect(rebase?.title).toContain("dev is working");
     expect(calls.some(call => call.command === "git_branch_rebase")).toBe(false);
+  });
+
+  // #14300: active agent worktrees are scopes too, listed under their own heading and hidden when there are none.
+  it("lists active agent worktrees under Agent worktrees and picks one as the scope", async () => {
+    await mount();
+    expect(host.textContent).not.toContain("Agent worktrees");
+    worktreeRows = [{ path: "/r/.claude/worktrees/agent-abcdef123", branch: "worktree-agent-abcdef123", head: "a", locked: true, kind: "agent", last_activity: Math.floor(Date.now() / 1000), changed: 2, ahead: 0 }];
+    await act(async () => { root.unmount(); });
+    root = createRoot(host);
+    await mount();
+    expect(host.textContent).toContain("Agent worktrees");
+    const row = host.querySelector<HTMLButtonElement>("button[data-agent-worktree]");
+    expect(row?.textContent).toContain("agent abcdef1");
+    expect(row?.textContent).toContain("2 files changed · 0 commits");
+    await click(row ?? undefined);
+    expect(acts.onSeat).toHaveBeenCalledWith("wt:/r/.claude/worktrees/agent-abcdef123");
+    expect(close).toHaveBeenCalled();
   });
 });

@@ -16,7 +16,7 @@ export type GitLogEntry = {
 const MAX_ENTRIES = 300;
 const OUTPUT_LINES = 3;
 // The panel poll runs every few seconds and would bury the commands a person ran; only its failures are logged.
-const QUIET = new Set(["git_panel", "git_operation"]);
+const QUIET = new Set(["git_panel", "git_operation", "git_worktrees"]);
 const HIDDEN_ARGS = new Set(["project", "agent", "scope", "patch"]);
 
 let entries: GitLogEntry[] = [];
