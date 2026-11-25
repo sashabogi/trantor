@@ -16,13 +16,13 @@ const BODIES = new Map<string, unknown>([
     { id: 12, project: "ibkr", title: "Exact-price markers", status: "testing", updated: now - 3_600_000 },
   ] }],
   ["/peers", { peers: [
-    { session: "kimi-9", project: "trantor", status: "working · card", lastSeen: now, online: true, model: "kimi", machine: "netcup" },
-    { session: "glm-5", project: "trantor", status: "idle", lastSeen: now, online: true, model: "glm-5.3", machine: "netcup" },
-    { session: "codex-2", project: "crebral-cortex", status: "working", lastSeen: now, online: true },
+    { session: "kimi-9:trantor", project: "trantor", status: "working · card", lastSeen: now, online: true, model: "kimi", machine: "netcup" },
+    { session: "glm-5:trantor", project: "trantor", status: "idle", lastSeen: now, online: true, model: "glm-5.3", machine: "netcup" },
+    { session: "codex-2:crebral-cortex", project: "crebral-cortex", status: "working", lastSeen: now, online: true },
   ] }],
-  ["/holds", { holds: [{ id: 7, project: "trantor", file: "panes.rs", session: "kimi-9", other: "glm-5", status: "pending", ts: now - 360_000 }] }],
-  ["/proposals", { proposals: [{ id: 3, session: "glm-5", project: "trantor", scope: "push to seat branch", condition: "c", exclusions: "e", status: "pending", ts: now - 120_000 }], pendingCount: 1 }],
-  ["/inbox", { messages: [{ id: 5, ts: now - 60_000, from: "kimi-9", to: "sasha", project: "trantor", text: "keep the tab for 60 s?" }], cursor: 5 }],
+  ["/holds", { holds: [{ id: 7, project: "trantor", file: "panes.rs", session: "kimi-9:trantor", other: "glm-5:trantor", status: "pending", ts: now - 360_000 }] }],
+  ["/proposals", { proposals: [{ id: 3, session: "glm-5:trantor", project: "trantor", scope: "push to seat branch", condition: "c", exclusions: "e", status: "pending", ts: now - 120_000 }], pendingCount: 1 }],
+  ["/inbox", { messages: [{ id: 5, ts: now - 60_000, from: "kimi-9:trantor", to: "sasha", project: "trantor", text: "keep the tab for 60 s?" }], cursor: 5 }],
   ["/economics", { windows: { lifetime: { calls: 10, tokens_in: 1, tokens_out: 1, cost_usd: 1.5, opus_equiv_usd: 40, saved_usd: 38.5 } } }],
   ["/machines/health", { machines: [{ machine: "netcup", cpuPct: 8, memUsed: 35, memTotal: 63, ts: now }], staleAfterMs: 90_000 }],
 ]);
@@ -45,7 +45,7 @@ beforeEach(() => {
   });
   mockIPC(command => {
     if (command === "identity_name") return "sasha";
-    if (command === "known_projects") return ["crebral-cortex", "ibkr", "trantor"];
+    if (command === "known_projects") return ["attic", "crebral-cortex", "ibkr", "trantor"];
     if (command === "local_sessions") return [];
     if (command === "orch_restorables") return [];
     if (command === "dismissed_sessions_list") return "[]";
@@ -93,6 +93,33 @@ describe("Dashboard", () => {
     const tiles = [...host.querySelectorAll("article")].map(a => a.getAttribute("aria-label"));
     expect(tiles).toEqual(["codex-2", "glm-5", "kimi-9"]);
     expect(host.querySelector('button[aria-label="Focus kimi-9 full window"]')).not.toBeNull();
+  });
+
+  it("counts only actionable work in the headline and never prints raw session ids", async () => {
+    await mount();
+    expect(host.querySelector("main p")?.textContent).toContain("3 things need you. 2 agents are moving.");
+    expect(byText("h2", "Needs you")?.textContent).toBe("Needs you 3");
+    expect(host.querySelector("h3")?.textContent).toBe("Waiting for a drill 1");
+    expect(host.textContent).not.toContain("kimi-9:trantor");
+    expect(host.textContent).not.toContain("codex-2:crebral-cortex");
+  });
+
+  it("regroups by project and by seat, remembering the layout", async () => {
+    await mount();
+    await click(byText('button[aria-pressed]', "By project"));
+    expect(localStorage.getItem("trantor.v2.dashboard.layout")).toBe("project");
+    expect([...host.querySelectorAll("main section[aria-label]")].map(s => s.getAttribute("aria-label"))).toEqual(["crebral-cortex", "ibkr", "trantor"]);
+    await click(byText('button[aria-pressed]', "By agent"));
+    expect(localStorage.getItem("trantor.v2.dashboard.layout")).toBe("agent");
+    expect([...host.querySelectorAll("main section[aria-label]")].map(s => s.getAttribute("aria-label"))).toEqual(["codex-2", "glm-5", "ibkr reviews", "kimi-9"]);
+  });
+
+  it("keeps inactive projects behind a remembered Show all control", async () => {
+    await mount();
+    expect(byText("aside[aria-label='Projects'] button", "attic")).toBeNull();
+    await click(byText("button", "Show all 1"));
+    expect(byText("aside[aria-label='Projects'] button", "attic")).not.toBeNull();
+    expect(localStorage.getItem("trantor.v2.dashboard.projects.show-all")).toBe("true");
   });
 
   it("sends go/no-go and proposal decisions to the hub and drops the row", async () => {

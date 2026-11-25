@@ -3,6 +3,7 @@ import { Eye, MessageSquare, Repeat, Square } from "lucide-react";
 import type { Navigate } from "../../routes";
 import { Chip } from "../../ui/Chip";
 import { IconButton } from "../../ui/IconButton";
+import { seatLabel } from "../../ui/identity";
 import type { Seat } from "./model";
 
 export const NO_STOP = "Stopping a seat from the app needs a hub stop endpoint that does not exist yet";
@@ -24,7 +25,7 @@ export function MayDo({ level }: { level: number | undefined }) {
 }
 
 export function SeatActions({ seat, onNavigate }: { seat: Seat; onNavigate: Navigate }) {
-  const name = seat.session;
+  const name = seatLabel(seat.session);
   return (
     <span className="flex shrink-0 items-center gap-0.5">
       <IconButton label={`Watch ${name} live`} title="Watch live: open its terminal and changes" onClick={() => onNavigate("workspace", seat.project)}>

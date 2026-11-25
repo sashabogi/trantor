@@ -4,14 +4,20 @@ import { Play, Plus, Search } from "lucide-react";
 import { computeProjectActivity, activityLine, activityRank, activityTitle } from "../../../app/projectActivity";
 import { orchestratorOpen, type RestorableSession } from "../../../features/workspace/herdr";
 import { dismissedSessionsApi } from "../../../features/workspace/dismissedSessions";
-import type { LocalSession, Peer } from "../../../shared/api/client";
+import type { Card, LocalSession, Peer } from "../../../shared/api/client";
 import type { Navigate } from "../../routes";
 import type { Interrupted } from "./useDashboardData";
 import { ProjectTile } from "../../ui/ProjectTile";
 import type { Presence } from "../../ui/identity";
+import { activeProjects } from "./model";
+
+const SHOW_ALL_KEY = "trantor.v2.dashboard.projects.show-all";
+function savedShowAll(): boolean {
+  try { return localStorage.getItem(SHOW_ALL_KEY) === "true"; } catch { return false; }
+}
 
 type Props = {
-  projects: string[]; open: LocalSession[]; peers: Peer[];
+  projects: string[]; cards: Card[]; open: LocalSession[]; peers: Peer[];
   interrupted: Interrupted;
   onNavigate: Navigate;
   onStartProject?: () => void;
@@ -28,13 +34,22 @@ function Heading({ label, count, action }: { label: string; count?: number; acti
 
 const DOT = { "needs-you": "needs-you", working: "working", idle: "ready", unknown: "offline" } as const satisfies Record<string, Presence>;
 
-export function ProjectSidebar({ projects, open, peers, interrupted, onNavigate, onStartProject }: Props) {
+export function ProjectSidebar({ projects, cards, open, peers, interrupted, onNavigate, onStartProject }: Props) {
   const [filter, setFilter] = useState("");
+  const [showAll, setShowAll] = useState(savedShowAll);
   const [error, setError] = useState("");
   const activity = useMemo(() => computeProjectActivity(open, peers), [open, peers]);
+  const active = useMemo(() => activeProjects(projects, cards, activity.keys()), [projects, cards, activity]);
   const match = (p: string) => p.toLowerCase().includes(filter.trim().toLowerCase());
   const live = [...activity.keys()].filter(match).sort((a, b) => activityRank(activity.get(a)) - activityRank(activity.get(b)) || a.localeCompare(b));
-  const rest = projects.filter(p => !activity.has(p) && match(p));
+  const rest = projects.filter(p => !activity.has(p) && active.has(p) && match(p));
+  const inactive = projects.filter(p => !activity.has(p) && !active.has(p) && match(p));
+  const shownRest = showAll || filter.trim() ? [...rest, ...inactive] : rest;
+  const toggleAll = () => {
+    const next = !showAll;
+    setShowAll(next);
+    try { localStorage.setItem(SHOW_ALL_KEY, String(next)); } catch { /* storage blocked: keep the session choice */ }
+  };
   const resume = async (project: string) => {
     setError("");
     try { await orchestratorOpen(project); interrupted.drop(project); }
@@ -87,12 +102,17 @@ export function ProjectSidebar({ projects, open, peers, interrupted, onNavigate,
           <Plus size={13} aria-hidden />
         </button>
       )} />
-      {rest.map(p => (
+      {shownRest.map(p => (
         <button key={p} type="button" onClick={() => onNavigate("workspace", p)} className={row}>
           <ProjectTile name={p} size={22} /><span className="min-w-0 flex-1 truncate">{p}</span>
         </button>
       ))}
-      {rest.length === 0 && live.length === 0 && <p className="m-0 px-2 text-[11.5px] text-[var(--v2-muted)]">No projects match.</p>}
+      {!filter.trim() && inactive.length > 0 && (
+        <button type="button" onClick={toggleAll} className="mt-1 rounded-lg px-2 py-1.5 text-left text-[11.5px] text-[var(--v2-muted)] v2-hover">
+          {showAll ? "Show fewer projects" : `Show all ${inactive.length}`}
+        </button>
+      )}
+      {!projects.some(match) && live.length === 0 && <p className="m-0 px-2 text-[11.5px] text-[var(--v2-muted)]">No projects match.</p>}
     </aside>
   );
 }

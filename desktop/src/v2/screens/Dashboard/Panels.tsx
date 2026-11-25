@@ -4,6 +4,7 @@ import type { Economics, FileHold, MachinesHealthReport } from "../../../shared/
 import { machineHealthLine, machineStale } from "../../../features/fleet/MachineHealth";
 import type { Navigate } from "../../routes";
 import { Avatar } from "../../ui/Avatar";
+import { seatLabel } from "../../ui/identity";
 import { Button } from "../../ui/Button";
 import { ProjectTile } from "../../ui/ProjectTile";
 import { Section } from "../../ui/Section";
@@ -58,7 +59,7 @@ export function YourMove({ moves }: { moves: Move[] }) {
 
 export function idleMoves(seats: Seat[], go: Navigate): Move[] {
   return seats.filter(s => s.presence === "ready" && !s.card).map(s => ({
-    key: `idle:${s.project}:${s.session}`, project: s.project, title: `Give ${s.session} its next card`,
+    key: `idle:${s.project}:${s.session}`, project: s.project, title: `Give ${seatLabel(s.session)} its next card`,
     sub: `idle ${span(s.lastSeen)}`, action: "Open board", go: () => go("board", s.project),
   }));
 }
@@ -73,12 +74,12 @@ function HoldCard({ hold, d }: { hold: FileHold; d: Decisions }) {
         <span className="text-[11px] text-[var(--v2-muted)]">held {span(hold.ts)}</span>
       </div>
       <div className="mt-2 flex items-center gap-4 text-[12px] text-[var(--v2-text-2)]">
-        <span className="flex items-center gap-1.5"><Avatar name={hold.session} size={18} />{hold.session} wants to edit</span>
-        <span className="flex items-center gap-1.5"><Avatar name={hold.other} size={18} />{hold.other} holds the claim</span>
+        <span className="flex items-center gap-1.5"><Avatar name={hold.session} size={18} />{seatLabel(hold.session)} wants to edit</span>
+        <span className="flex items-center gap-1.5"><Avatar name={hold.other} size={18} />{seatLabel(hold.other)} holds the claim</span>
       </div>
       <div className="mt-2.5 flex flex-wrap gap-1.5">
-        <Button disabledReason={off} onClick={() => void d.decideHold(hold, "go")}>{hold.session} goes first</Button>
-        <Button disabledReason={off} onClick={() => void d.decideHold(hold, "nogo")}>{hold.other} goes first</Button>
+        <Button disabledReason={off} onClick={() => void d.decideHold(hold, "go")}>{seatLabel(hold.session)} goes first</Button>
+        <Button disabledReason={off} onClick={() => void d.decideHold(hold, "nogo")}>{seatLabel(hold.other)} goes first</Button>
         <Button variant="quiet" disabledReason="Comparing both changes needs a diff API the hub does not have yet">Compare both changes</Button>
       </div>
     </div>

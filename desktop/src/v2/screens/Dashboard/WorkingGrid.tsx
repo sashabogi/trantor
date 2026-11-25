@@ -4,6 +4,7 @@ import type { Navigate } from "../../routes";
 import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
+import { seatLabel } from "../../ui/identity";
 import { seatTime, type QueueItem, type Seat } from "./model";
 import { CardChip, MayDo, SeatActions } from "./SeatParts";
 import type { Decisions } from "./useDecisions";
@@ -28,8 +29,8 @@ function PendingStrip({ item, d }: { item: QueueItem; d: Decisions }) {
       )}
       {hold && (
         <>
-          <Button variant="primary" disabledReason={off} onClick={() => void d.decideHold(hold, "go")}>{hold.session} first</Button>
-          <Button disabledReason={off} onClick={() => void d.decideHold(hold, "nogo")}>{hold.other} first</Button>
+          <Button variant="primary" disabledReason={off} onClick={() => void d.decideHold(hold, "go")}>{seatLabel(hold.session)} first</Button>
+          <Button disabledReason={off} onClick={() => void d.decideHold(hold, "nogo")}>{seatLabel(hold.other)} first</Button>
         </>
       )}
     </div>
@@ -38,15 +39,15 @@ function PendingStrip({ item, d }: { item: QueueItem; d: Decisions }) {
 
 function Tile({ seat, pending, autonomy, d, onNavigate }: { seat: Seat; pending?: QueueItem; autonomy: ReadonlyMap<string, number>; d: Decisions; onNavigate: Navigate }) {
   return (
-    <article aria-label={seat.session} className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--v2-edge)] bg-[var(--v2-panel-2)]">
+    <article aria-label={seatLabel(seat.session)} className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-[var(--v2-edge)] bg-[var(--v2-panel-2)]">
       <header className="flex items-center gap-2.5 px-3 py-2.5">
         <Avatar name={seat.session} size={26} presence={seat.presence} />
         <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium text-[var(--v2-text)]">{seat.session}</span>
-          <span className="block truncate text-[11px] text-[var(--v2-muted)]">{[seat.model, seat.machine].filter(Boolean).join(" · ") || seat.project}</span>
+          <span className="block truncate text-[13px] font-medium text-[var(--v2-text)]">{seatLabel(seat.session)}</span>
+          <span className="block truncate text-[11px] text-[var(--v2-muted)]">{[seat.project, seat.model, seat.machine].filter(Boolean).join(" · ")}</span>
           <CardChip seat={seat} />
         </span>
-        <IconButton label={`Focus ${seat.session} full window`} title="Focus: open full window" onClick={() => onNavigate("workspace", seat.project)}>
+        <IconButton label={`Focus ${seatLabel(seat.session)} full window`} title="Focus: open full window" onClick={() => onNavigate("workspace", seat.project)}>
           <Maximize2 size={14} aria-hidden />
         </IconButton>
       </header>

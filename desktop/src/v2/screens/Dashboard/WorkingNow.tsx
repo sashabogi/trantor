@@ -3,6 +3,7 @@ import { useState } from "react";
 import { LayoutGrid, List, Users } from "lucide-react";
 import type { Navigate } from "../../routes";
 import { Avatar } from "../../ui/Avatar";
+import { seatLabel } from "../../ui/identity";
 import { ProjectTile } from "../../ui/ProjectTile";
 import { Section } from "../../ui/Section";
 import { Seg } from "../../ui/Seg";
@@ -34,11 +35,11 @@ function Tabs({ seats, tab, setTab }: { seats: Seat[]; tab: string; setTab: (t: 
 
 function SeatRow({ seat, autonomy, onNavigate }: { seat: Seat; autonomy: ReadonlyMap<string, number>; onNavigate: Navigate }) {
   return (
-    <div data-seat={seat.session} className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3.5 py-2 last:border-b-0">
+    <div data-seat={seatLabel(seat.session)} className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3.5 py-2 last:border-b-0">
       <Avatar name={seat.session} size={28} presence={seat.presence} surface="var(--v2-panel)" />
       <span className="w-[150px] shrink-0">
-        <span className="block truncate text-[13px] font-medium text-[var(--v2-text)]">{seat.session}</span>
-        <span className="block truncate text-[11px] text-[var(--v2-muted)]">{[seat.model, seat.machine].filter(Boolean).join(" · ") || seat.project}</span>
+        <span className="block truncate text-[13px] font-medium text-[var(--v2-text)]">{seatLabel(seat.session)}</span>
+        <span className="block truncate text-[11px] text-[var(--v2-muted)]">{[seat.project, seat.model, seat.machine].filter(Boolean).join(" · ")}</span>
       </span>
       <span className="min-w-0 flex-1"><CardChip seat={seat} /></span>
       <MayDo level={autonomy.get(seat.project)} />
