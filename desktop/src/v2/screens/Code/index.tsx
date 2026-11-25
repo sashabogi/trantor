@@ -81,6 +81,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     onMessage: seat => { setChatWant(seat); setChatOpen(true); },
     onCopy: copy,
   };
+  // A seat that is not offline can take a message (#14073).
+  const liveSeats = useMemo(() => seats.filter(s => s.presence !== "offline"), [seats]);
   const onIcon = (v: SideView) => {
     if (v === "source") { tabs.activate("source"); setSide("source"); setOverride(false); return; }
     setSide(v);
@@ -104,7 +106,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
         {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
         <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
           selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
-          onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty} />
+          onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty}
+          liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
         <BottomPanel />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
@@ -118,6 +121,7 @@ type MainProps = {
   onMutated: () => void; onOpenFile: (p: string) => void; onOpenConflict: (p: string | null) => void; conflictPath: string | null;
   reveal: { tab: string; line: number; column?: number; nonce: number } | null;
   markDirty: (id: string, dirty: boolean) => void;
+  liveSeats: { seat: string }[]; onAsk: (text: string) => void; onSendToSeat: (seat: string, text: string) => void;
 };
 
 function Main(p: MainProps) {
@@ -127,7 +131,8 @@ function Main(p: MainProps) {
         {/* #14072: keyed by tab so a switch remounts cleanly and the draft resumes from the tab's cache. */}
         <FileEditor key={p.tab.id} project={p.project} scope={p.tab.scope} path={p.tab.path} onOpenGraph={() => p.onNavigate("graph")}
           reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined}
-          onDirty={d => p.markDirty(p.tab.id, d)} onSaved={p.onMutated} />
+          onDirty={d => p.markDirty(p.tab.id, d)} onSaved={p.onMutated}
+          seats={p.liveSeats} onAsk={p.onAsk} onSendToSeat={p.onSendToSeat} />
       </Suspense>
     );
   }

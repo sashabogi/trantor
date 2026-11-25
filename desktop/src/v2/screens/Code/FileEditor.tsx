@@ -1,12 +1,16 @@
 // A file tab (#13988): the classic Monaco CodeView, imported not forked, with a save button, the
 // review chip and breadcrumbs. Loaded lazily so Monaco and its workers stay out of every other screen.
 // #14072: dirty and save live in useFileDoc, reported up for the tab's dot and the git refresh.
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { editor as MonacoEditor } from "monaco-editor";
 import { CodeView } from "../../../features/code/CodeView";
 import { ReviewChip } from "../../../features/code/ReviewChip";
 import { Button } from "../../ui/Button";
+import { AskControls, type AskSeat } from "./AskControls";
+import { useAskActions } from "./useAskActions";
 import { useFileDoc } from "./useFileDoc";
+
+const NO_SEATS: AskSeat[] = [];
 
 export type Reveal = { line: number; column?: number; nonce: number };
 
@@ -16,12 +20,16 @@ function revealAt(ed: MonacoEditor.IStandaloneCodeEditor, r: Reveal) {
   ed.focus();
 }
 
-export default function FileEditor({ project, scope, path, reveal, onOpenGraph, onDirty, onSaved }: {
+export default function FileEditor({ project, scope, path, reveal, onOpenGraph, onDirty, onSaved, seats = NO_SEATS, onAsk, onSendToSeat }: {
   project: string; scope: string | null; path: string; reveal?: Reveal; onOpenGraph: () => void;
   onDirty?: (dirty: boolean) => void; onSaved?: () => void;
+  seats?: AskSeat[]; onAsk?: (text: string) => void; onSendToSeat?: (seat: string, text: string) => void;
 }) {
   const doc = useFileDoc(project, scope, path, onDirty, onSaved);
+  const [seatMenu, setSeatMenu] = useState(false);
+  const [editorVersion, setEditorVersion] = useState(0);
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  useAskActions(editorRef, editorVersion, { path, scope, seats, onAsk, onSendToSeat, openMenu: () => setSeatMenu(true) });
   const loaded = doc.load.kind === "ok";
   // Reveal a search hit once the editor exists and whenever a new click arrives (#14074).
   useEffect(() => {
@@ -37,11 +45,12 @@ export default function FileEditor({ project, scope, path, reveal, onOpenGraph, 
         <ReviewChip project={project} seat={scope} path={path} onOpenGraph={onOpenGraph} />
         {doc.load.truncated && <span className="text-[var(--v2-warn)]">first 512 KB only: saving is off</span>}
         {doc.saveError && <span role="alert" className="text-[var(--v2-bad)]">{doc.saveError}</span>}
+        <AskControls getEditor={() => editorRef.current} path={path} scope={scope} seats={seats} menuOpen={seatMenu} onMenuOpen={setSeatMenu} onAsk={onAsk} onSendToSeat={onSendToSeat} />
         <Button variant="ghost" onClick={doc.save} disabledReason={doc.load.truncated ? "The file is truncated, so saving would lose the rest" : !doc.dirty ? "No unsaved changes" : null}>Save</Button>
       </div>
       <div className="min-h-0 flex-1">
         <CodeView value={doc.draft} path={path} editable={!doc.load.truncated} onChange={doc.edit} onSave={doc.save} project={project} seat={scope}
-          onReady={ed => { editorRef.current = ed; if (reveal) revealAt(ed, reveal); }} />
+          onReady={ed => { editorRef.current = ed; setEditorVersion(v => v + 1); if (reveal) revealAt(ed, reveal); }} />
       </div>
     </div>
   );
