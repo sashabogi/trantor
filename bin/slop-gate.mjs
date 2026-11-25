@@ -60,7 +60,7 @@ if (SURFACE) {
 } else if (ALL) {
   files = walk(".", []);
 } else {
-  const changed = sh("git diff --name-only HEAD");
+  const changed = sh("git diff --name-only --diff-filter=d HEAD"); // a deleted file has nothing left to read
   const untracked = sh("git ls-files --others --exclude-standard");
   files = [...new Set([...changed.split("\n"), ...untracked.split("\n")])].filter(f => f && COMMENTABLE.test(f));
   if (!files.length) { console.log("slop-gate: no lintable changes — pass."); process.exit(0); }
