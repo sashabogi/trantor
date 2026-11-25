@@ -1,13 +1,12 @@
 // A file tab (#13988): the classic Monaco CodeView, imported not forked, with a save button, the
 // review chip and breadcrumbs. Loaded lazily so Monaco and its workers stay out of every other screen.
-import { useEffect, useRef, useState } from "react";
+// #14072: dirty and save live in useFileDoc, reported up for the tab's dot and the git refresh.
+import { useEffect, useRef } from "react";
 import type { editor as MonacoEditor } from "monaco-editor";
 import { CodeView } from "../../../features/code/CodeView";
 import { ReviewChip } from "../../../features/code/ReviewChip";
-import { readFile, writePlain } from "../../../features/code/fileApi";
 import { Button } from "../../ui/Button";
-
-type Load = { kind: "loading" } | { kind: "error"; reason: string } | { kind: "ok"; disk: string; truncated: boolean };
+import { useFileDoc } from "./useFileDoc";
 
 export type Reveal = { line: number; column?: number; nonce: number };
 
@@ -17,43 +16,31 @@ function revealAt(ed: MonacoEditor.IStandaloneCodeEditor, r: Reveal) {
   ed.focus();
 }
 
-export default function FileEditor({ project, scope, path, reveal, onOpenGraph }: { project: string; scope: string | null; path: string; reveal?: Reveal; onOpenGraph: () => void }) {
-  const [load, setLoad] = useState<Load>({ kind: "loading" });
-  const [draft, setDraft] = useState("");
-  const [saveError, setSaveError] = useState<string | null>(null);
+export default function FileEditor({ project, scope, path, reveal, onOpenGraph, onDirty, onSaved }: {
+  project: string; scope: string | null; path: string; reveal?: Reveal; onOpenGraph: () => void;
+  onDirty?: (dirty: boolean) => void; onSaved?: () => void;
+}) {
+  const doc = useFileDoc(project, scope, path, onDirty, onSaved);
   const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const loaded = doc.load.kind === "ok";
   // Reveal a search hit once the editor exists and whenever a new click arrives (#14074).
   useEffect(() => {
-    if (load.kind !== "ok") { editorRef.current = null; return; }
+    if (!loaded) { editorRef.current = null; return; }
     if (reveal && editorRef.current) revealAt(editorRef.current, reveal);
-  }, [reveal, load.kind]);
-  useEffect(() => {
-    let alive = true;
-    setLoad({ kind: "loading" });
-    readFile(project, path, scope ?? undefined)
-      .then(b => { if (alive) { setLoad({ kind: "ok", disk: b.text, truncated: b.truncated }); setDraft(b.text); } })
-      .catch(e => { if (alive) setLoad({ kind: "error", reason: e instanceof Error ? e.message : String(e) }); });
-    return () => { alive = false; };
-  }, [project, scope, path]);
-  if (load.kind === "loading") return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Reading {path}</div>;
-  if (load.kind === "error") return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{load.reason}</div>;
-  const dirty = draft !== load.disk;
-  const save = () => {
-    writePlain(project, path, scope ?? undefined, draft)
-      .then(() => { setSaveError(null); setLoad({ kind: "ok", disk: draft, truncated: load.truncated }); })
-      .catch(e => setSaveError(e instanceof Error ? e.message : String(e)));
-  };
+  }, [reveal, loaded]);
+  if (doc.load.kind === "loading") return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Reading {path}</div>;
+  if (doc.load.kind === "error") return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{doc.load.reason}</div>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">
         <span className="v2-mono min-w-0 flex-1 truncate">{path.split("/").join(" › ")}</span>
         <ReviewChip project={project} seat={scope} path={path} onOpenGraph={onOpenGraph} />
-        {load.truncated && <span className="text-[var(--v2-warn)]">first 512 KB only: saving is off</span>}
-        {saveError && <span role="alert" className="text-[var(--v2-bad)]">{saveError}</span>}
-        <Button variant="ghost" onClick={save} disabledReason={load.truncated ? "The file is truncated, so saving would lose the rest" : !dirty ? "No unsaved changes" : null}>Save</Button>
+        {doc.load.truncated && <span className="text-[var(--v2-warn)]">first 512 KB only: saving is off</span>}
+        {doc.saveError && <span role="alert" className="text-[var(--v2-bad)]">{doc.saveError}</span>}
+        <Button variant="ghost" onClick={doc.save} disabledReason={doc.load.truncated ? "The file is truncated, so saving would lose the rest" : !doc.dirty ? "No unsaved changes" : null}>Save</Button>
       </div>
       <div className="min-h-0 flex-1">
-        <CodeView value={draft} path={path} editable={!load.truncated} onChange={setDraft} onSave={save} project={project} seat={scope}
+        <CodeView value={doc.draft} path={path} editable={!doc.load.truncated} onChange={doc.edit} onSave={doc.save} project={project} seat={scope}
           onReady={ed => { editorRef.current = ed; if (reveal) revealAt(ed, reveal); }} />
       </div>
     </div>

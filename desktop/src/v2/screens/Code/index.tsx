@@ -32,7 +32,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const { state, refresh } = useScopeGit(project, scope);
   const { seats, peers } = useSeats(client, project);
   const cards = useTasks(client, project);
-  const tabs = useTabs();
+  const tabs = useTabs(project);
   const [side, setSide] = useState<SideView>("source");
   const [override, setOverride] = useState(false);
   const [viewPick, setViewPick] = useState<ScmView | null>(null);
@@ -97,13 +97,14 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} onActivate={tabs.activate} onClose={tabs.close}
+        <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
+          onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
           onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
         <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} />
         {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
         <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
           selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
-          onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} />
+          onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty} />
         <BottomPanel />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
@@ -116,13 +117,17 @@ type MainProps = {
   seats: string[]; selectedKey: string | null; focusChange: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: ScreenProps["onNavigate"];
   onMutated: () => void; onOpenFile: (p: string) => void; onOpenConflict: (p: string | null) => void; conflictPath: string | null;
   reveal: { tab: string; line: number; column?: number; nonce: number } | null;
+  markDirty: (id: string, dirty: boolean) => void;
 };
 
 function Main(p: MainProps) {
   if (p.tab.kind === "file" && p.tab.path) {
     return (
       <Suspense fallback={<div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Opening the editor</div>}>
-        <FileEditor project={p.project} scope={p.tab.scope} path={p.tab.path} reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined} onOpenGraph={() => p.onNavigate("graph")} />
+        {/* #14072: keyed by tab so a switch remounts cleanly and the draft resumes from the tab's cache. */}
+        <FileEditor key={p.tab.id} project={p.project} scope={p.tab.scope} path={p.tab.path} onOpenGraph={() => p.onNavigate("graph")}
+          reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined}
+          onDirty={d => p.markDirty(p.tab.id, d)} onSaved={p.onMutated} />
       </Suspense>
     );
   }
