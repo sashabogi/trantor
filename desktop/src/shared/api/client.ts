@@ -155,6 +155,11 @@ export type TurnRow = {
   cutSignal?: string; extensions?: number; boxMs?: number; containers?: string[];
 };
 
+// #14256: phase cards arrive in two groups, both of which contribute to progress.
+export type PhaseCard = Pick<Card, "id" | "title" | "status">;
+export type ProjectPhase = { key: string; goal: string; crew: PhaseCard[]; orchestrators: PhaseCard[] };
+export type ProjectPhases = { brief: string; phases: ProjectPhase[] };
+
 /** POST /invite's answer: the token plus the scopes the hub actually stored (it may fold a role it does not know down to read). */
 export type PairInviteResponse = {
   ok: boolean;
@@ -205,6 +210,9 @@ export class HubClient {
     return this.request<{ tasks: Card[] }>("GET", `/tasks?${q.toString()}`).then(r => r.tasks ?? []);
   }
   peers()   { return this.request<{ peers: Peer[] }>("GET", "/peers").then(r => r.peers ?? []); }
+  phases(project: string) {
+    return this.request<ProjectPhases>("GET", `/phases?${new URLSearchParams({ project })}`);
+  }
   health() { return this.request<HubHealth>("GET", "/health"); }
   events(opts: { project?: string; type?: string; since?: number; limit?: number } = {}) {
     const q = new URLSearchParams();

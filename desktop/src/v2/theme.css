@@ -100,3 +100,18 @@
 .v2-cm-removed, .v2-cm-removed-below { width: 8px !important; margin-left: 3px; background-repeat: no-repeat; background-size: 8px 2px; background-image: linear-gradient(var(--v2-bad), var(--v2-bad)); }
 .v2-cm-removed { background-position: top left; }
 .v2-cm-removed-below { background-position: bottom left; }
+
+/* #14256: the goal yields space to lanes and only current work or new decisions move. */
+.v2-header-band { container-type: inline-size; }
+.v2-header-band button { transition: none; }
+.v2-band-phase { width: 250px; }
+.v2-band-running { transition: width 5s linear; }
+.v2-band-pulse { animation: v2-band-pulse 650ms ease-out 1; }
+@keyframes v2-band-pulse { 50% { opacity: 0.4; } }
+@container (max-width: 760px) {
+  .v2-band-phase { width: 52px; }
+  .v2-band-goal { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .v2-header-band *, .v2-header-band *::before, .v2-header-band *::after { animation: none !important; transition: none !important; }
+}

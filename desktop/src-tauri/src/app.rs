@@ -173,6 +173,7 @@ pub fn run() {
             herdr_seats,
             seat_diff,
             git_panel,
+            crate::ci_status::ci_status,
             git_stage,
             git_commit,
             git_push,

@@ -47,6 +47,7 @@ mod local_sessions;
 mod succession;
 mod drafts;
 mod git_panel;
+mod ci_status;
 mod git_scope;
 mod git_checkout;
 mod git_branch;

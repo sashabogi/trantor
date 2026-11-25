@@ -7,6 +7,7 @@ import { useTasks } from "../../shared/tasks";
 import { ProjectTile } from "../ui/ProjectTile";
 import { LENS_LABEL, LENS_SCREENS, type LensScreen, type Navigate } from "../routes";
 import { MODE_CONFIG, useShellMode } from "./shellMode";
+import { HeaderBand } from "./HeaderBand";
 
 const LENS_ICON = {
   workspace: <LayoutPanelLeft size={13} aria-hidden />,
@@ -52,7 +53,7 @@ export type ProjectFrameProps = {
   project: string;
   lens: LensScreen;
   onNavigate: Navigate;
-  /** Right side of the header; screen owners add Branch, Ask the Advisor, Add seat here. */
+  /** #14256: screen actions sit beside the lens tabs to preserve the overview's single row. */
   actions?: ReactNode;
   /** A status strip under the lens tabs (#13984). */
   notice?: ReactNode;
@@ -69,17 +70,19 @@ export function ProjectFrame({ client, project, lens, onNavigate, actions, notic
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {!compactHeader && (
-        <div className="flex flex-wrap items-center gap-3 px-5 pt-4">
-          <ProjectTile name={project} size={34} />
-          <div className="min-w-0 flex-[1_1_260px]">
-            <h1 className="m-0 text-v2-heading font-[650] tracking-[-0.01em]">{project}</h1>
-            <div className="text-v2-body text-[var(--v2-muted)]">{summary}</div>
+        <div className="flex h-16 shrink-0 items-center gap-3 px-5 pt-4">
+          <div className="flex w-44 min-w-0 shrink-0 items-center gap-3 xl:w-56">
+            <ProjectTile name={project} size={34} />
+            <div className="min-w-0">
+              <h1 className="m-0 truncate text-v2-heading font-[650] tracking-[-0.01em]">{project}</h1>
+              <div className="truncate text-v2-body text-[var(--v2-muted)]" title={summary}>{summary}</div>
+            </div>
           </div>
-          {actions}
+          <HeaderBand key={`${client.baseUrl}:${project}`} client={client} project={project} onNavigate={onNavigate} />
         </div>
       )}
       <LensTabs lens={lens} openCards={open} onNavigate={onNavigate} order={lenses} compact={compactHeader}
-        summary={compactHeader ? <>{summary}{actions}</> : undefined} />
+        summary={compactHeader ? <>{summary}{actions}</> : actions} />
       {notice}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">{children}</div>
     </div>
