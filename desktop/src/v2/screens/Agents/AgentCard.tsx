@@ -7,7 +7,7 @@ import { seatName } from "../../../features/workspace/paneTargets";
 import { dictGet } from "../../../shared/dict";
 import { ago } from "../../../shared/presence";
 import type { Card, HubClient } from "../../../shared/api/client";
-import { Avatar, Chip, IconButton, modelHue, PRESENCE_LABEL, seatLabel, type Navigate } from "../../index";
+import { Avatar, Chip, IconButton, modelHue, PRESENCE_LABEL, seatAgent, seatLabel, type Navigate } from "../../index";
 import { PopMenu } from "../Workspace/PopMenu";
 import { isHostSession } from "../Workspace/seatModel";
 import type { Crew } from "../Workspace/useCrew";
@@ -97,7 +97,7 @@ function Actions({ view, onNavigate, duty, crew, onMessage }: Pick<AgentCardProp
       {crew && (host
         ? <IconButton label={`Swap ${name}`} title={ORCH_NOTE} disabled><ArrowLeftRight size={14} /></IconButton>
         : <PopMenu heading={`Swap ${name} to`} empty="No other agent is installed, enabled and within quota"
-            items={crew.available.filter(a => a.id !== seat).map(a => ({ id: a.id, label: a.label, sub: "keeps the card", disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.swap(seat, a.id) }))}
+            items={crew.available.filter(a => a.id !== seatAgent(view.peer.session)).map(a => ({ id: a.id, label: a.label, sub: "keeps the card", disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.swap(seat, a.id) }))}
             trigger={p => (
               <IconButton {...p} label={`Swap ${name}`} title="Swap model, keep the card"><ArrowLeftRight size={14} /></IconButton>
             )} />)}

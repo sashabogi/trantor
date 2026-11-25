@@ -43,6 +43,12 @@ export function seatLabel(name: string): string {
   return head;
 }
 
+/** The agent a seat runs: a persona is "<agent>" or "<agent>-<n>", so "glm-5:trantor" → "glm" (#14062).
+ *  Swap must never offer a seat the agent it already runs. */
+export function seatAgent(session: string): string {
+  return session.split(":")[0].replace(/-\d+$/, "");
+}
+
 /** codex-8 → C8, orchestrator → OR, trantor-duty → TD. */
 export function monogram(name: string): string {
   const label = seatLabel(name).trim();

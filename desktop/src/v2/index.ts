@@ -10,6 +10,6 @@ export { Seg, type SegProps, type SegOption } from "./ui/Seg"; // segmented cont
 export { Section, type SectionProps } from "./ui/Section"; // titled panel card with optional sub line and actions
 export { Kbd } from "./ui/Kbd"; // keyboard hint, e.g. ⌘K
 export { Composer2, type Composer2Props, type Choice } from "./ui/Composer2"; // the 2.0 message composer; its chips open menus built from Choice lists
-export { monogram, seatLabel, seatPalette, projectGradient, modelHue, PRESENCE_COLOR, PRESENCE_LABEL, type Presence } from "./ui/identity"; // naming and colour helpers behind the primitives
+export { monogram, seatLabel, seatAgent, seatPalette, projectGradient, modelHue, PRESENCE_COLOR, PRESENCE_LABEL, type Presence } from "./ui/identity"; // naming and colour helpers behind the primitives
 export { ProjectFrame, LensTabs, type ProjectFrameProps } from "./shell/ProjectFrame"; // project header plus lens tabs, already wrapped around in-project screens
 export { NotWired } from "./shell/ClassicLenses"; // the honest "not wired yet" state with the artboard's label

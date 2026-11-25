@@ -2,7 +2,7 @@
 import type { BalanceEntry, BalancesReport, Card, Peer } from "../../../shared/api/client";
 import { chipFrom, type BalanceChip } from "../../../features/fleet/balanceChips";
 import { BUSY_MS, ONLINE_MS } from "../../../shared/presence";
-import type { Presence } from "../../ui/identity";
+import { seatLabel, type Presence } from "../../ui/identity";
 
 export type SeatView = { peer: Peer; presence: Presence; vendor: string; project: string };
 export type StateFilter = "all" | "working" | "needs-you" | "idle";
@@ -58,6 +58,12 @@ export function applyFilters(views: SeatView[], scope: Scope, project: string, s
 
 export type HeaderCounts = { live: number; working: number; needsYou: number; offline: number; offlineNames: string[] };
 
+/** "orchestrator in Ember": a seat name a person reads, in the project it was last seen in (#14062). */
+function offlineName(v: SeatView): string {
+  const label = seatLabel(v.peer.session);
+  return v.project ? `${label} in ${v.project}` : label;
+}
+
 export function headerCounts(views: SeatView[]): HeaderCounts {
   const off = views.filter(v => v.presence === "offline");
   return {
@@ -65,7 +71,7 @@ export function headerCounts(views: SeatView[]): HeaderCounts {
     working: views.filter(v => v.presence === "working").length,
     needsYou: views.filter(v => v.presence === "needs-you").length,
     offline: off.length,
-    offlineNames: off.slice(0, 3).map(v => v.peer.session),
+    offlineNames: off.slice(0, 3).map(offlineName),
   };
 }
 

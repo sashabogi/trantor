@@ -13,18 +13,21 @@ import { AgentsScreen } from "./index";
 const now = Date.now();
 const PEERS = { peers: [
   { session: "codex-8", project: "trantor", lastSeen: now - 5_000, model: "gpt-x", machine: "netcup" },
+  { session: "glm-5:trantor", project: "trantor", lastSeen: now - 5_000 },
   { session: "kimi-9", project: "trantor", lastSeen: now - 120_000 },
-  { session: "glm-5", project: "other", lastSeen: now - 5_000 },
+  { session: "deepseek-2:other", project: "other", lastSeen: now - 5_000 },
+  { session: "MacBook-Pro-M1:Ember", project: "Ember", lastSeen: now - 3 * 3600_000 },
 ] };
 const OVERSEER = { engine: true, lastTickTs: now - 2_000, tickMs: 30_000, clearMs: 1, dutySession: "claude:trantor-duty",
   watching: { sessions: 3, projects: 2, claims: 0, links: 0 }, autonomy: { trantor: 2 }, links: [], warnings: [], standing: 0 };
 const EMPTY = { tasks: [], proposals: [], holds: [], entries: [], machines: [], events: [], ts: now, staleAfterMs: 90_000 };
 
-// The crew catalog the CLI serves: two installed, enabled agents with quota.
+// The crew catalog the CLI serves: three installed, enabled agents with quota.
 type CliOutcome = { ok: boolean; reason?: string };
 const SETTINGS = JSON.stringify({ default: "codex", agents: [
   { id: "codex", label: "Codex", launch: "codex", cli: "codex", installed: true, enabled: true, isDefault: true, homepage: "https://codex", install: "npm i -g codex" },
   { id: "kimi", label: "Kimi", launch: "kimi", cli: "kimi", installed: true, enabled: true, isDefault: false, homepage: "https://kimi", install: "npm i -g kimi" },
+  { id: "glm", label: "GLM", launch: "glm:zai-coding-plan", cli: "opencode", installed: true, enabled: true, isDefault: false, homepage: "https://glm", install: "npm i -g opencode" },
 ] });
 const BALANCES = JSON.stringify({ balances: [] });
 const WHY = JSON.stringify({ state: "stopped", why: "PARKED (window closed)", advice: "trantor up" });
@@ -84,13 +87,19 @@ const pick = async (triggerText: string, menuLabel: string, item: string) => {
 describe("AgentsScreen", () => {
   it("lists this project's seats, sorted, with titled icon actions and the Overseer column", async () => {
     const onNavigate = await mount();
-    // working codex-8 sorts before ready kimi-9; glm-5 lives in another project so it is not on the roster
-    expect([...host.querySelectorAll("article")].map(a => a.getAttribute("aria-label"))).toEqual(["codex-8", "kimi-9"]);
+    // working codex-8 and glm-5 sort before ready kimi-9; deepseek-2 lives in another project
+    expect([...host.querySelectorAll("article")].map(a => a.getAttribute("aria-label"))).toEqual(["codex-8", "glm-5", "kimi-9"]);
     for (const b of host.querySelectorAll<HTMLButtonElement>("article button[aria-label]")) expect(b.title).not.toBe("");
     expect(host.querySelector('[aria-label="Autonomy ladder"]')).not.toBeNull();
     expect(host.textContent).toContain("trantor-duty");
     act(() => { host.querySelector<HTMLElement>('[aria-label="Open its terminal"]')?.click(); });
     expect(onNavigate).toHaveBeenCalledWith("workspace", "trantor");
+  });
+
+  it("the header names offline seats by seat and project, never by raw host session id (#14062)", async () => {
+    await mount();
+    expect(host.textContent).toContain("1 offline (orchestrator in Ember)");
+    expect(host.textContent).not.toContain("MacBook");
   });
 
   it("Add seat opens the Workspace picker and starts the chosen agent through the crew CLI", async () => {
@@ -110,6 +119,8 @@ describe("AgentsScreen", () => {
     await mount();
     await act(async () => { button("Swap codex-8")?.click(); });
     const items = [...host.querySelectorAll<HTMLElement>('[role="menu"][aria-label="Swap codex-8 to"] [role="menuitem"]')];
+    // a seat is never offered the agent it already runs: no Codex row on codex-8 (#14062)
+    expect(items.some(e => e.textContent?.startsWith("Codex"))).toBe(false);
     await act(async () => { items.find(e => e.textContent?.startsWith("Kimi"))?.click(); });
     await settle();
     expect(cliCalls).toContainEqual({ project: "trantor", args: ["swap", "codex-8", "kimi", "--json"] });
@@ -117,6 +128,15 @@ describe("AgentsScreen", () => {
     expect(button("Restart codex-8")).toBeNull();
     expect(button("Restart kimi-9")).toBeNull();
     expect(cliCalls).not.toContainEqual({ project: "trantor", args: ["down", "codex-8", "--json"] });
+  });
+
+  it("Swap never offers a seat its own agent: no GLM row on glm-5's card (#14062)", async () => {
+    await mount();
+    await act(async () => { button("Swap glm-5")?.click(); });
+    const items = [...host.querySelectorAll<HTMLElement>('[role="menu"][aria-label="Swap glm-5 to"] [role="menuitem"]')];
+    expect(items.some(e => e.textContent?.startsWith("GLM"))).toBe(false);
+    expect(items.some(e => e.textContent?.startsWith("Kimi"))).toBe(true);
+    expect(items.some(e => e.textContent?.startsWith("Codex"))).toBe(true);
   });
 
   it("a failed seat action shows its real error on the card that acted", async () => {
@@ -142,8 +162,8 @@ describe("AgentsScreen", () => {
     // seats in another project get no crew buttons: their actions would run against the wrong project
     await act(async () => { textButton("All projects")?.click(); });
     await settle();
-    expect(button("Swap glm-5")).toBeNull();
-    expect(button("Stop glm-5")).toBeNull();
-    expect(button("Restart glm-5")).toBeNull();
+    expect(button("Swap deepseek-2")).toBeNull();
+    expect(button("Stop deepseek-2")).toBeNull();
+    expect(button("Restart deepseek-2")).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 // #v2-F: monograms and colours match the artboard swatches.
 import { describe, expect, it } from "vitest";
-import { modelHue, modelLabel, monogram, projectGradient, seatLabel, seatPalette } from "./identity";
+import { modelHue, modelLabel, monogram, projectGradient, seatAgent, seatLabel, seatPalette } from "./identity";
 
 describe("monogram", () => {
   it("reads seat names the way the artboards print them", () => {
@@ -26,6 +26,14 @@ describe("monogram", () => {
     expect(seatLabel("claude:trantor-duty")).toBe("trantor-duty");
     expect(seatPalette("MacBook-Pro-M1:trantor")).toEqual({ bg: "#3A2A24", fg: "#E39A7E" });
     expect(seatLabel("sasha@mac")).toBe("sasha@mac");
+  });
+
+  it("reads the agent a seat runs, so Swap never offers it back (#14062)", () => {
+    expect(seatAgent("glm-5:trantor")).toBe("glm");
+    expect(seatAgent("codex-8:trantor")).toBe("codex");
+    expect(seatAgent("kimi:trantor")).toBe("kimi");
+    expect(seatAgent("codex:codex-8")).toBe("codex");
+    expect(seatAgent("claude:trantor-duty")).toBe("claude");
   });
 });
 

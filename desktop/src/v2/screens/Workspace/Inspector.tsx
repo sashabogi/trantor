@@ -6,6 +6,7 @@ import { gitPanel } from "../../../features/code/gitApi";
 import { Avatar } from "../../ui/Avatar";
 import { Chip } from "../../ui/Chip";
 import { IconButton } from "../../ui/IconButton";
+import { seatAgent } from "../../ui/identity";
 import type { Navigate } from "../../routes";
 import { PopMenu } from "./PopMenu";
 import type { SeatView } from "./seatModel";
@@ -66,7 +67,7 @@ export function Inspector({ project, seat, card, mayDo, crew, onNavigate, onMess
         <IconButton label={`Open ${name}'s worktree in Code`} title="Open its worktree in Code" onClick={() => onNavigate("code")}><Code2 size={15} aria-hidden /></IconButton>
         <IconButton label={`Hand off ${name}'s session`} title="Hand off is wired for the orchestrator only, in its chat panel" disabled><ArrowRightToLine size={15} aria-hidden /></IconButton>
         <PopMenu heading={`Swap ${name} to`} empty="No other agent is installed, enabled and within quota"
-          items={crew.available.filter(a => a.id !== seat.agent).map(a => ({ id: a.id, label: a.label, sub: "keeps the card", disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.swap(seat.agent, a.id) }))}
+          items={crew.available.filter(a => a.id !== seatAgent(seat.session)).map(a => ({ id: a.id, label: a.label, sub: "keeps the card", disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.swap(seat.agent, a.id) }))}
           trigger={p => (
             <IconButton {...p} label={`Swap ${name}`} title={seat.isOrchestrator ? orchNote : "Swap model, keep the card"} disabled={seat.isOrchestrator}>
               <Shuffle size={15} aria-hidden />

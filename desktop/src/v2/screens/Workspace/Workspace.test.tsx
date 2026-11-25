@@ -30,6 +30,12 @@ const PEERS: Peer[] = [
   { session: "MacBook-Pro:trantor", project: "trantor", online: true, lastSeen: now },
   { session: "kimi-9:other", project: "other", online: true, lastSeen: now, kind: "agent" },
 ];
+// The crew catalog the CLI serves: three installed, enabled agents with quota.
+const CREW = JSON.stringify({ agents: [
+  { id: "codex", label: "Codex", launch: "codex", cli: "codex", installed: true, enabled: true, isDefault: true, homepage: "https://codex", install: "npm i -g codex" },
+  { id: "kimi", label: "Kimi", launch: "kimi", cli: "kimi", installed: true, enabled: true, isDefault: false, homepage: "https://kimi", install: "npm i -g kimi" },
+  { id: "glm", label: "GLM", launch: "glm:zai-coding-plan", cli: "opencode", installed: true, enabled: true, isDefault: false, homepage: "https://glm", install: "npm i -g opencode" },
+], balances: [] });
 const CARDS = [{ id: 13970, project: "trantor", title: "Restore at login", status: "doing", assignee: "codex-8:trantor" }];
 const HOLD: FileHold = { id: 7, project: "trantor", file: "src/a.ts", session: "codex-8:trantor", other: "glm-5:trantor", status: "pending", ts: now };
 
@@ -59,7 +65,11 @@ beforeEach(() => {
     if (command === "git_panel") return JSON.stringify({ branch: "seat/codex-8", upstream: null, ahead: 1, behind: null, status: [], counts: [], log: [] });
     if (command === "seat_diff") return JSON.stringify({ branch: "seat/codex-8", base: "main", files: [{ path: "a.ts", plus: 3, minus: 1, untracked: false }], patch: "" });
     if (command === "pane_send") return { outcome: "delivered", error: null };
-    if (command === "workspace_cli") return JSON.stringify({ agents: [], balances: [] });
+    if (command === "workspace_cli") {
+      // SAFETY: workspace_cli is invoked with { project, args } by the crew control bridge.
+      const argv = (args as { project: string; args: string[] }).args;
+      return argv[0] === "agent-settings" || argv[0] === "balances" ? CREW : JSON.stringify({ ok: true, action: argv[0], seat: argv[1] ?? "" });
+    }
     if (command === "plugin:event|listen") return 1;
     return null;
   });
@@ -131,6 +141,20 @@ describe("selection and inspector", () => {
     await mountScreen(fakeClient([]), go);
     await click(host.querySelector('button[aria-label="Open codex-8\'s worktree in Code"]'));
     expect(go).toHaveBeenCalledWith("code");
+  });
+
+  it("Swap on a seat offers every agent but its own: no GLM row on glm-5, and the CLI swaps the seat (#14062)", async () => {
+    await mountScreen(fakeClient([]));
+    await click(chipFor("glm-5"));
+    await click(host.querySelector('button[aria-label="Swap glm-5"]'));
+    const items = [...host.querySelectorAll<HTMLElement>('[role="menu"][aria-label="Swap glm-5 to"] [role="menuitem"]')];
+    expect(items.some(e => e.textContent?.startsWith("GLM"))).toBe(false);
+    expect(items.some(e => e.textContent?.startsWith("Kimi"))).toBe(true);
+    await act(async () => { items.find(e => e.textContent?.startsWith("Kimi"))?.click(); });
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+    // SAFETY: ipc records every Tauri call as { command, args }; the crew bridge sends { project, args }.
+    const swap = ipc.filter(c => c.command === "workspace_cli").map(c => (c.args as { project: string; args: string[] }).args).find(a => a[0] === "swap");
+    expect(swap).toEqual(["swap", "glm-5", "kimi", "--json"]);
   });
 });
 

@@ -52,6 +52,16 @@ describe("roster", () => {
   });
   it("counts the header from the same views", () => {
     expect(headerCounts(views)).toMatchObject({ live: 4, working: 2, needsYou: 1, offline: 1 });
+    expect(headerCounts(views).offlineNames).toEqual(["gone in trantor"]);
+  });
+  it("names offline seats as a person reads them: seat in project, never a raw host session id (#14062)", () => {
+    const off = toSeatViews([
+      peer("MacBook-Pro-M1:Ember", 9 * 60_000, { project: "Ember" }),
+      peer("MacBook-Pro-M1:rock-os", 9 * 60_000, { project: "" }),
+      peer("glm-2:trantor", 9 * 60_000),
+    ], new Set(), NOW);
+    expect(headerCounts(off).offlineNames).toEqual(["orchestrator in Ember", "orchestrator in rock-os", "glm-2 in trantor"]);
+    expect(headerCounts(off).offlineNames.join(", ")).not.toContain("MacBook");
   });
 });
 
