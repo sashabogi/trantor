@@ -6,8 +6,8 @@ import type { WakeRowState } from "../../../features/genesis/wakeRow";
 export const WAKE_DEADLINE_MS = 150_000;
 export const STALLED_TEXT = "No answer from the orchestrator after 2 minutes";
 
-/** Said once after create: wake cannot set a mode before its first prompt lands (#13984). */
-export const PLAN_HINT = "Opened in Agent mode. Switch to Plan from the composer's first chip.";
+/** Said once after create: the composer reads the session's mode instead of assuming one. */
+export const PLAN_HINT = "Read or switch the session mode from the composer's first chip.";
 
 export type WakeLine = { text: string; title?: string; tone: "muted" | "ok" | "danger"; retry: boolean };
 

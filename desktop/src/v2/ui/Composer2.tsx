@@ -37,6 +37,8 @@ export type Composer2Props = {
   modeChoices?: readonly Choice[];
   /** Settles when the switch has been read back or refused; the parent reports a refusal. */
   onModeChange?: (value: string) => Promise<void>;
+  modeReading?: boolean;
+  onModeMenuOpen?: () => void;
   /** Omit where there is no permission level to show. */
   permission?: string;
   permissionChoices?: readonly Choice[];
@@ -77,7 +79,7 @@ function ModeRows({ p, close, busy, setBusy }: {
     p.onModeChange?.(value).then(done, done);
   };
   return (<>
-    <MenuHeading>Mode{p.mode == null ? " · not read yet" : ""}</MenuHeading>
+    <MenuHeading>Mode{p.mode == null ? p.modeReading ? " · reading…" : " · not read yet" : ""}</MenuHeading>
     {p.modeChoices?.map(c => (
       <ChoiceRow key={c.value} choice={c} current={c.value === p.mode} busy={busy === c.value}
         leading={<ChoiceIcon choice={c} size={14} />} onPick={() => pick(c.value)} />
@@ -94,12 +96,12 @@ function AgentChip(p: Composer2Props) {
   const canPick = !!current && !!p.onPermissionChange;
   const hasMode = p.mode !== undefined && !!p.modeChoices?.length && !!p.onModeChange;
   const modeNow = p.modeChoices?.find(c => c.value === p.mode);
-  const modeName = modeNow ? modeNow.short ?? modeNow.label : "Mode unknown";
+  const modeName = modeNow ? modeNow.short ?? modeNow.label : p.modeReading ? "Reading mode…" : "Mode unknown";
   const parts = [who, hasMode ? `mode: ${modeName}` : null, current ? `permission: ${current.label}` : null].filter(Boolean);
   const label = parts.length > 1 ? parts.join(", ") : `Answers: ${who}`;
   return (
     <ChipMenu group="agent" label={label} title={parts.length > 1 ? `${parts.join(" · ")}. Click to change.` : `Answers: ${who}`}
-      menuLabel={hasMode ? "Mode and permission" : "Permission level"} className="py-[2px] pr-[6px] pl-[3px]"
+      menuLabel={hasMode ? "Mode and permission" : "Permission level"} className="py-[2px] pr-[6px] pl-[3px]" onOpen={p.onModeMenuOpen}
       chip={<>
         <Avatar name={p.agent} llm={brandOfModel(p.model.id)} size={20} />
         {hasMode && <span className={`ml-[5px] whitespace-nowrap ${modeNow ? "text-[var(--v2-text)]" : "text-[var(--v2-muted)]"}`}>{modeName}</span>}

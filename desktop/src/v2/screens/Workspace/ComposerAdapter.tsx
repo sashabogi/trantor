@@ -126,7 +126,10 @@ export function ComposerAdapter(p: ClassicProps) {
   const claude = isClaudeHosted(p.model);
   const frac = p.context.frac;
   const shown = note ?? mode.error ?? mode.unverifiedNote ?? harness.error;
-  const modeProps = mode.supported ? { mode: mode.mode, modeChoices: mode.choices, onModeChange: mode.set } : {};
+  const modeProps = mode.supported ? {
+    mode: mode.mode, modeChoices: mode.choices, onModeChange: mode.set,
+    modeReading: mode.reading, onModeMenuOpen: mode.read,
+  } : {};
   return (
     <div className="flex flex-col gap-1.5 border-t border-[var(--v2-edge)] px-3 pb-3 pt-2.5">
       {shown && <div role="status" className="text-[11.5px] text-[var(--v2-warn)]">{shown}</div>}

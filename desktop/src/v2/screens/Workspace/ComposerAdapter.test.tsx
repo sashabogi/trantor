@@ -3,11 +3,12 @@
 // the native closed loop. Fakes sit only at the Tauri IPC boundary.
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import type { AgentCliCompatibility } from "../../../shared/api/client";
 import { ComposerAdapter } from "./ComposerAdapter";
+import { MODE_READ_RETRY_MS, MODE_READ_WINDOW_MS } from "./useAgentMode";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,7 +20,7 @@ let host: HTMLDivElement;
 let root: Root;
 let calls: Calls;
 beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); calls = []; });
-afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); clearMocks(); });
+afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); clearMocks(); vi.useRealTimers(); });
 
 function ipc(reply: Reply) {
   mockIPC((cmd, args) => { calls.push({ cmd, args }); return reply(cmd, args); });
@@ -35,7 +36,7 @@ const props = (over: Partial<ComponentProps<typeof ComposerAdapter>> = {}): Comp
   working: false, userTexts: [], context: { tokens: null, window: 200000, frac: null }, fontStep: "m",
   onFontStep: () => {}, onSent: () => {}, onLongRunChange: () => {}, onDispatch: () => {}, ...over,
 });
-const flush = () => act(async () => { await new Promise(r => setTimeout(r, 0)); });
+const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); });
 async function mount(over?: Partial<ComponentProps<typeof ComposerAdapter>>) {
   await act(async () => { root.render(<ComposerAdapter {...props(over)} />); });
   await flush();
@@ -68,7 +69,9 @@ describe("ComposerAdapter mode menu", () => {
     ipc(claudeAt("default"));
     await mount();
     expect(chip()?.getAttribute("aria-label")).toBe("orchestrator, mode: Agent, permission: Ask me");
+    const readsBeforeOpen = calls.filter(c => c.cmd === "pane_mode_get").length;
     await open();
+    expect(calls.filter(c => c.cmd === "pane_mode_get").length).toBe(readsBeforeOpen + 1);
     expect(rows().map(r => r.querySelector("span span")?.textContent)).toEqual(
       ["Agent", "Agent, accept edits", "Plan", "Ask me", "Full auto"]);
     expect(headings()).toContain("For new sessions and handoffs");
@@ -99,10 +102,33 @@ describe("ComposerAdapter mode menu", () => {
       "Mode not changed: A prompt is waiting in the pane; answer it first. Nothing was pressed.");
   });
 
-  it("says Mode unknown when the parser cannot tell", async () => {
+  it("says Reading mode while the pane is still booting", async () => {
     ipc(claudeAt("unknown"));
     await mount();
-    expect(chip()?.textContent).toContain("Mode unknown");
+    expect(chip()?.textContent).toContain("Reading mode…");
+    expect(chip()?.textContent).not.toContain("Mode unknown");
+  });
+
+  it("re-reads every two seconds and stops as soon as a mode arrives, without pressing a key", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    ipc(cmd => {
+      if (cmd === "pane_mode_get") {
+        reads += 1;
+        return { mode: reads < 3 ? "unknown" : "plan", prompt_showing: false };
+      }
+      return null;
+    });
+    await mount();
+    const bootReads = reads;
+    expect(chip()?.textContent).toContain("Reading mode…");
+    await act(async () => { await vi.advanceTimersByTimeAsync(MODE_READ_RETRY_MS); });
+    await flush();
+    expect(reads).toBe(bootReads + 1);
+    expect(chip()?.textContent).toContain("Plan");
+    await act(async () => { await vi.advanceTimersByTimeAsync(MODE_READ_WINDOW_MS); });
+    expect(reads).toBe(bootReads + 1);
+    expect(calls.filter(c => c.cmd === "pane_mode_set")).toEqual([]);
   });
 
   it("renders no Mode section for a pane that is not Claude Code, or with no pane", async () => {
@@ -167,16 +193,25 @@ describe("ComposerAdapter Mode menu × the version table", () => {
     expect(calls.filter(c => c.cmd === "pane_mode_set").map(c => c.args)).toEqual([{ target: "w4:p1", mode: "default" }]);
   });
 
-  it("above the verified range: the read stays the guard, and an unreadable mode line is explained", async () => {
+  it("above the verified range: retries stop at one minute before the version is blamed", async () => {
+    vi.useFakeTimers();
     ipc(cmd => {
       if (cmd === "agent_cli_compatibility") return [compat("2.1.400")];
       if (cmd === "pane_mode_get") return { mode: "unknown", prompt_showing: false };
       return null;
     });
     await mount();
+    const bootReads = calls.filter(c => c.cmd === "pane_mode_get").length;
+    expect(chip()?.textContent).toContain("Reading mode…");
+    expect(host.querySelector('[role="status"]')).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(MODE_READ_WINDOW_MS); });
+    await flush();
+    expect(calls.filter(c => c.cmd === "pane_mode_get").length).toBe(bootReads + MODE_READ_WINDOW_MS / MODE_READ_RETRY_MS);
     expect(chip()?.textContent).toContain("Mode unknown");
     expect(host.querySelector('[role="status"]')?.textContent).toBe(
       "Claude Code 2.1.400 is newer than the version mode switching was checked on (2.1.326), and its mode line could not be read.");
-    expect(calls.filter(c => c.cmd === "pane_mode_get").length).toBeGreaterThan(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(MODE_READ_WINDOW_MS); });
+    expect(calls.filter(c => c.cmd === "pane_mode_get").length).toBe(bootReads + MODE_READ_WINDOW_MS / MODE_READ_RETRY_MS);
+    expect(calls.filter(c => c.cmd === "pane_mode_set")).toEqual([]);
   });
 });

@@ -27,9 +27,9 @@ export function ChoiceIcon({ choice, size = 13 }: { choice?: Choice; size?: numb
 }
 
 /** A chip that opens a menu above the composer; without a menu it is a plain label, never a dead button. */
-export function ChipMenu({ label, title, group, className = "", chip, menuLabel, children }: {
+export function ChipMenu({ label, title, group, className = "", chip, menuLabel, onOpen, children }: {
   label: string; title: string; group: string; className?: string; chip: ReactNode; menuLabel: string;
-  children?: (close: () => void) => ReactNode;
+  onOpen?: () => void; children?: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -47,7 +47,7 @@ export function ChipMenu({ label, title, group, className = "", chip, menuLabel,
   return (
     <div ref={ref} data-group={group} className={`min-w-0 ${className.includes("shrink") ? "shrink" : "flex-none"}`}>
       <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={label} title={title}
-        onClick={() => setOpen(o => !o)} className={`${PILL} v2-hover max-w-full ${className}`}>
+        onClick={() => { if (!open) onOpen?.(); setOpen(!open); }} className={`${PILL} v2-hover max-w-full ${className}`}>
         {chip}
         <ChevronDown size={10} aria-hidden className="ml-[3px] flex-none text-[var(--v2-muted)]" style={{ transform: open ? "rotate(180deg)" : undefined }} />
       </button>

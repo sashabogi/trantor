@@ -27,6 +27,8 @@ export function modeChoicesFor(catalog: readonly Choice[], always: readonly stri
 
 // A refusal that means "this pane has no Claude Code modes", as opposed to a read that failed this once.
 const NOT_HERE = /not a Claude Code pane|not supported for remote panes/;
+export const MODE_READ_RETRY_MS = 2_000;
+export const MODE_READ_WINDOW_MS = 60_000;
 
 export type AgentMode = {
   /** False: no section at all. */
@@ -38,8 +40,10 @@ export type AgentMode = {
   error: string | null;
   clearError: () => void;
   read: () => void;
+  /** True while a booting pane's unknown mode is still being re-read. */
+  reading: boolean;
   /** #14030: set when a NEWER-than-verified Claude Code's mode line could not be read — the
-   * explanation replaces a bare "Mode unknown" in the status line. */
+   * explanation replaces a bare "Mode unknown" in the status line after the retry window. */
   unverifiedNote: string | null;
 };
 
@@ -60,6 +64,7 @@ export function useAgentMode(target: string | null, working: boolean, range?: Fe
   const [mode, setMode] = useState<string | null>(null);
   const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [exhaustedTarget, setExhaustedTarget] = useState<string | null>(null);
   const gated = range?.verdict === "below";
   const live = useRef(target);
   live.current = target;
@@ -83,6 +88,20 @@ export function useAgentMode(target: string | null, working: boolean, range?: Fe
   useEffect(() => { setSeen(new Set()); setError(null); read(); }, [read]);
   useEffect(() => { if (!working) read(); }, [working, read]);
   useEffect(() => {
+    setExhaustedTarget(null);
+    if (gated || !target || !supported || mode !== null) return;
+    let remaining = MODE_READ_WINDOW_MS / MODE_READ_RETRY_MS;
+    const iv = window.setInterval(() => {
+      read();
+      remaining -= 1;
+      if (remaining === 0) {
+        window.clearInterval(iv);
+        setExhaustedTarget(target);
+      }
+    }, MODE_READ_RETRY_MS);
+    return () => window.clearInterval(iv);
+  }, [gated, target, supported, mode, read]);
+  useEffect(() => {
     window.addEventListener("focus", read);
     return () => window.removeEventListener("focus", read);
   }, [read]);
@@ -99,14 +118,15 @@ export function useAgentMode(target: string | null, working: boolean, range?: Fe
       read();
     });
   };
-  // #14030: above the verified range the read stays the guard — an unknown mode is explained,
-  // never silently "Mode unknown". In range and unknown data: no change.
-  const unverifiedNote = range?.verdict === "above" && supported && mode === null
+  // #14030: above the verified range the read stays the guard — an unknown mode is explained
+  // only after boot has had the full retry window. In range and unknown data: no change.
+  const unverifiedNote = range?.verdict === "above" && supported && mode === null && exhaustedTarget === target
     ? `Claude Code ${range.installed ?? ""} is newer than the version mode switching was checked on (${range.verifiedTo ?? "?"}), and its mode line could not be read.`
     : null;
   return {
     supported: gated ? true : supported,
     mode: gated ? "needs-update" : mode,
+    reading: !gated && !!target && supported && mode === null && exhaustedTarget !== target,
     error, read, set, clearError: () => setError(null),
     choices: gated ? [gatedChoice(range)] : modeChoicesFor(CLAUDE_MODES, CLAUDE_ALWAYS, seen),
     unverifiedNote,

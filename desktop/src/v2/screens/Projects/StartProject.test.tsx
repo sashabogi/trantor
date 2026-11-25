@@ -201,7 +201,7 @@ describe("Start a project in the 2.0 shell", () => {
     expect(byText('[role="status"] button', "Try again")).not.toBeNull();
   });
 
-  it("does not offer a Plan first checkbox, and says the session opened in Agent mode", async () => {
+  it("does not offer a Plan first checkbox or assume the session's starting mode", async () => {
     await mount();
     await click(q('button[title="Switch project"]'));
     await click(byText('[role="menuitem"]', "Start a project"));
@@ -209,10 +209,11 @@ describe("Start a project in the 2.0 shell", () => {
     expect(dialog()?.textContent).not.toMatch(/plan first/i);
     await key(need('[role="dialog"]'), { key: "Escape" });
     await createProject("fresh-one");
-    expect(status()).toContain("Opened in Agent mode. Switch to Plan from the composer's first chip.");
+    expect(status()).toContain("Read or switch the session mode from the composer's first chip.");
+    expect(status()).not.toContain("Opened in Agent mode");
     expect(calls.some(c => c.cmd === "pane_mode_set")).toBe(false);
     await click(q('button[aria-label="Dismiss this note"]'));
-    expect(status()).not.toContain("Agent mode");
+    expect(status()).not.toContain("session mode");
   });
 
   it("shows one centred Start a project card when there are no projects", async () => {

@@ -162,6 +162,12 @@ describe("Composer2", () => {
     expect(onModeChange).toHaveBeenCalledWith("default");
   });
 
+  it("says Reading mode during the boot retry window instead of Mode unknown", () => {
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ mode: null, modeReading: true, modeChoices: MODES, onModeChange: () => Promise.resolve() }} />));
+    expect(q('[data-group="agent"] button')?.textContent).toContain("Reading mode…");
+    expect(q('[data-group="agent"] button')?.textContent).not.toContain("Mode unknown");
+  });
+
   it("renders no Mode section without mode props", () => {
     act(() => root.render(<Harness onSend={vi.fn()} />));
     expect(modeMenu()).toHaveLength(2);

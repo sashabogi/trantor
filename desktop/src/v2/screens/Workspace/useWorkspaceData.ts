@@ -78,8 +78,8 @@ export function useMayDo(project: string): MayDo {
       if (!r) return;
       const auto = r.harness === "bypass";
       setMayDo({
-        label: auto ? "Full auto" : "Asks first",
-        title: `${auto ? "Runs without asking" : "Asks before edits and commands"}; commit ${r.commit ? "allowed" : "asks"}; push ${r.push ? "allowed" : "asks"}`,
+        label: auto ? "New sessions: full auto" : "New sessions: asks first",
+        title: `${auto ? "Runs without asking" : "Asks before edits and commands"}; applies to new sessions and handoffs; commit ${r.commit ? "allowed" : "asks"}; push ${r.push ? "allowed" : "asks"}`,
       });
     }).catch(() => {});
     return () => { alive = false; };

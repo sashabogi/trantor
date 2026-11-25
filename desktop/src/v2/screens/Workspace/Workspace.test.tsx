@@ -110,6 +110,8 @@ describe("selection and inspector", () => {
     expect(host.querySelector('button[aria-label="Message codex-8"]')).not.toBeNull();
     expect(host.textContent).toContain("#13970");
     expect(host.textContent).toContain("seat/codex-8 ↑1");
+    expect(host.textContent).toContain("New sessions: asks first");
+    expect(host.querySelector('[title*="applies to new sessions and handoffs"]')).not.toBeNull();
     await click(chipFor("glm-5"));
     expect(terminalAgents()).toEqual(["glm-5"]);
     expect(host.querySelector('button[aria-label="Message glm-5"]')).not.toBeNull();
