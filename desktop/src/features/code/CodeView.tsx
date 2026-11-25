@@ -15,12 +15,14 @@ const fontOptions = {
   lineHeight: 19,
 } as const;
 
-export function CodeView({ value, path, editable, onChange, onSave, project, seat }: {
+export function CodeView({ value, path, editable, onChange, onSave, onReady, project, seat }: {
   value: string;
   path: string;
   editable: boolean;
   onChange?: (v: string) => void;
   onSave?: () => void;
+  /** The live editor, once per mount: callers add actions or reveal a line (#14074). */
+  onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void;
   project: string;
   seat: string | null;
 }) {
@@ -36,6 +38,8 @@ export function CodeView({ value, path, editable, onChange, onSave, project, sea
   cb.current = onChange;
   const saveCb = useRef(onSave);
   saveCb.current = onSave;
+  const readyCb = useRef(onReady);
+  readyCb.current = onReady;
 
   useEffect(() => {
     if (!host.current) return;
@@ -84,6 +88,7 @@ export function CodeView({ value, path, editable, onChange, onSave, project, sea
     // the typed text, and remount resumes stale disk text. The value effect still raises and
     // lowers the guard around its own push.
     setupRef.current = false;
+    readyCb.current?.(ed);
     return () => {
       sub.dispose();
       ghostDispRef.current?.dispose();
