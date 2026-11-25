@@ -1,6 +1,6 @@
 // Width and open state of the Workspace side columns (chat on the right, files on the left), persisted per user (#13987 drill).
 import { useCallback, useState } from "react";
-import { readMode } from "../../routes";
+import { readMode } from "../../shell/shellMode";
 
 export const WIDTH_KEY = "trantor.v2.workspace.chatWidth";
 export const OPEN_KEY = "trantor.v2.workspace.chatOpen";

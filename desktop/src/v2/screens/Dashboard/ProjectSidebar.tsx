@@ -6,6 +6,7 @@ import { orchestratorOpen, type RestorableSession } from "../../../features/work
 import { dismissedSessionsApi } from "../../../features/workspace/dismissedSessions";
 import type { Card, LocalSession, Peer } from "../../../shared/api/client";
 import type { Navigate } from "../../routes";
+import { landingLens } from "../../shell/shellMode";
 import type { Interrupted } from "./useDashboardData";
 import { ProjectTile } from "../../ui/ProjectTile";
 import type { Presence } from "../../ui/identity";
@@ -74,7 +75,7 @@ export function ProjectSidebar({ projects, cards, open, peers, interrupted, onNa
         const act = activity.get(p);
         const line = activityLine(act);
         return (
-          <button key={p} type="button" title={activityTitle(act)} onClick={() => onNavigate("workspace", p)} className={row}>
+          <button key={p} type="button" title={activityTitle(act)} onClick={() => onNavigate(landingLens(), p)} className={row}>
             <ProjectTile name={p} size={22} dot={act ? DOT[act.state] : undefined} />
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium text-[var(--v2-text)]">{p}</span>
@@ -103,7 +104,7 @@ export function ProjectSidebar({ projects, cards, open, peers, interrupted, onNa
         </button>
       )} />
       {shownRest.map(p => (
-        <button key={p} type="button" onClick={() => onNavigate("workspace", p)} className={row}>
+        <button key={p} type="button" onClick={() => onNavigate(landingLens(), p)} className={row}>
           <ProjectTile name={p} size={22} /><span className="min-w-0 flex-1 truncate">{p}</span>
         </button>
       ))}

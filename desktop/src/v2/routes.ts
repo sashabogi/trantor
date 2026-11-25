@@ -29,17 +29,3 @@ export const LENS_LABEL = {
 export function isLensScreen(s: Screen): s is LensScreen {
   return LENS_SCREENS.some(l => l === s);
 }
-
-export type Mode = "orchestrator" | "mixed" | "developer";
-export const MODE_KEY = "trantor.v2.mode";
-
-export function readMode(): Mode {
-  try {
-    const m = localStorage.getItem(MODE_KEY);
-    return m === "mixed" || m === "developer" ? m : "orchestrator";
-  } catch { return "orchestrator"; }
-}
-
-export function saveMode(m: Mode) {
-  try { localStorage.setItem(MODE_KEY, m); } catch { /* storage blocked: the mode lasts the session */ }
-}

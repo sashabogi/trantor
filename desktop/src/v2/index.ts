@@ -1,5 +1,6 @@
 // What a 2.0 screen owner imports from the foundations, one line each (#v2-F).
-export type { ScreenProps, Screen, LensScreen, Navigate, Mode } from "./routes"; // the props every screen receives, and where it can navigate
+export type { ScreenProps, Screen, LensScreen, Navigate } from "./routes"; // the props every screen receives, and where it can navigate
+export { useShellMode, MODE_CONFIG, type Mode } from "./shell/shellMode"; // the mode on screen (Orchestrator or Developer) and what each one changes
 export { Avatar, type AvatarProps } from "./ui/Avatar"; // seat monogram in its seat colour, optional presence dot
 export { ProjectTile, type ProjectTileProps } from "./ui/ProjectTile"; // project monogram tile with its gradient, optional corner dot
 export { Chip, type ChipProps, type ChipTone } from "./ui/Chip"; // small status label: neutral, ok, warn, bad, info

@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import "./theme.css";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { backToClassic } from "./toggle";
-import { isLensScreen, readMode, saveMode, type Mode, type Navigate, type Screen, type ScreenProps } from "./routes";
+import { isLensScreen, type Navigate, type Screen, type ScreenProps } from "./routes";
+import { MODE_CONFIG, saveMode, useShellMode, type Mode } from "./shell/shellMode";
 import { useShellData } from "./shell/useShellData";
 import { TopBar } from "./shell/TopBar";
 import { AgentCliBanner } from "./shell/AgentCliBanner";
@@ -65,12 +66,19 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
   const data = useShellData();
   const { setActive } = data;
   const [screen, setScreen] = useState<Screen>("dashboard");
-  const [mode, setMode] = useState<Mode>(readMode);
+  const mode = useShellMode();
+  const landing = MODE_CONFIG[mode].landing;
   const [palette, setPalette] = useState<PaletteScope | null>(null);
   const onNavigate: Navigate = useCallback((next, project) => {
     if (project) setActive(project);
     setScreen(next);
   }, [setActive]);
+  // #14070: a mode moves the project on screen to its own landing lens; Developer also leaves a fleet screen for the code.
+  const onMode = (next: Mode) => {
+    if (next === mode || MODE_CONFIG[next].unavailable) return;
+    saveMode(next);
+    if (data.active && (isLensScreen(screen) || next === "developer")) setScreen(MODE_CONFIG[next].landing);
+  };
   const togglePalette = useCallback(() => setPalette(cur => (cur ? null : { kind: "global" })), []);
   usePaletteKey(togglePalette);
   const start = useStartProject({ addProject: data.addProject, onNavigate, deps: startDeps });
@@ -82,8 +90,8 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
   ) : null;
   return (
     <div className="v2-root flex flex-col" {...start.rootProps}>
-      <TopBar projects={data.projects} project={data.active} onProject={p => onNavigate(isLensScreen(screen) ? screen : "workspace", p)}
-        mode={mode} onMode={m => { setMode(m); saveMode(m); }}
+      <TopBar projects={data.projects} project={data.active} onProject={p => onNavigate(isLensScreen(screen) ? screen : landing, p)}
+        mode={mode} onMode={onMode}
         onSearch={() => setPalette(data.active ? { kind: "project", project: data.active } : { kind: "global" })}
         needsYou={data.needsYou} me={data.me} onNavigate={onNavigate} onStartProject={start.startProject} onBackToClassic={backToClassic}
         notice={<WakeNotice wakes={start.wakes} wakeStarts={start.wakeStarts} activeProject={data.active} />} />
@@ -104,7 +112,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
         <Palette scope={palette} projects={data.projects}
           searchProjects={palette.kind === "project" ? [palette.project] : data.projects}
           onClose={() => setPalette(null)}
-          onJumpProject={p => { setPalette(null); onNavigate("workspace", p); }}
+          onJumpProject={p => { setPalette(null); onNavigate(landing, p); }}
           onOpenCard={p => { setPalette(null); onNavigate("board", p); }} />
       )}
     </div>

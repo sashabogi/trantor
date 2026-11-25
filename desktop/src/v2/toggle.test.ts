@@ -2,7 +2,8 @@
 // #v2-F: one key or ?ui=v2 opens 2.0; Back to classic clears both.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backToClassic, enterV2, UI_KEY, wantsV2 } from "./toggle";
-import { isLensScreen, readMode, saveMode, type Screen } from "./routes";
+import { isLensScreen, type Screen } from "./routes";
+import { MODE_CONFIG, MODE_KEY, readMode, saveMode } from "./shell/shellMode";
 
 // happy-dom under this Node exposes no localStorage, so each test gets an in-memory one.
 beforeEach(() => {
@@ -58,5 +59,17 @@ describe("routes", () => {
     expect(readMode()).toBe("orchestrator");
     saveMode("developer");
     expect(readMode()).toBe("developer");
+  });
+
+  // #14070: Mixed is shown and cannot be picked, so neither a click nor an old stored value selects it.
+  it("never reads or stores a mode that cannot be picked", () => {
+    saveMode("developer");
+    saveMode("mixed");
+    expect(readMode()).toBe("developer");
+    localStorage.setItem(MODE_KEY, "mixed");
+    expect(readMode()).toBe("orchestrator");
+    expect(MODE_CONFIG.mixed.unavailable).toContain("Mixed mode comes next");
+    expect(MODE_CONFIG.developer.landing).toBe("code");
+    expect(MODE_CONFIG.developer.lenses[0]).toBe("code");
   });
 });

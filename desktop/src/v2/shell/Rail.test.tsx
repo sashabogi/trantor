@@ -66,6 +66,20 @@ describe("Rail", () => {
     expect(localStorage.getItem("trantor.v2.rail.expanded")).toBe("false");
   });
 
+  // #14070: Developer starts on icons whatever Orchestrator stored, keeps its own choice, and opens a project on Code.
+  it("keeps a separate choice per mode and opens a project on the mode's lens", () => {
+    localStorage.setItem("trantor.v2.rail.expanded", "true");
+    localStorage.setItem("trantor.v2.mode", "developer");
+    const onNavigate = vi.fn();
+    mount({ onNavigate });
+    expect(nav()?.dataset.expanded).toBe("false");
+    act(() => host.querySelector<HTMLButtonElement>('button[aria-label="trantor"]')?.click());
+    expect(onNavigate).toHaveBeenCalledWith("code", "trantor");
+    toggle();
+    expect(localStorage.getItem("trantor.v2.rail.expanded.developer")).toBe("true");
+    expect(localStorage.getItem("trantor.v2.rail.expanded")).toBe("true");
+  });
+
   it("keeps the Inbox count and needs-you dot visible in both states", () => {
     mount({ unread: 7, needsYou: 2 });
     expect(host.querySelector('button[aria-label="Inbox, 7 unread"] [data-badge]')?.textContent).toBe("7");

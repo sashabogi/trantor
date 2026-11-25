@@ -30,12 +30,13 @@ beforeEach(() => {
     if (command === "hub_request") return { status: 200, body: EMPTY };
     if (command === "plugin:event|listen") return 1;
     return null;
-  });
+  }, { shouldMockEvents: true });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+// The unmount is awaited so Chat's event unlisten settles before the mocks are cleared.
+afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); clearMocks(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 const mount = () => act(async () => { root.render(<ShellV2 />); });
 const click = (sel: string) => act(async () => { host.querySelector<HTMLElement>(sel)?.click(); });
@@ -73,6 +74,27 @@ describe("ShellV2", () => {
     await click('[role="tab"]:nth-child(4)');
     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain("Board");
     expect(host.querySelector("main")?.getAttribute("data-screen")).toBe("board");
+  });
+
+  // #14070: the mode switch was a dead control; it now moves the project on screen and reorders the tabs.
+  it("opens the project on Code in Developer mode and goes back in Orchestrator", async () => {
+    await mount();
+    await click('nav button[title="trantor"]');
+    const mode = (name: string) => [...host.querySelectorAll<HTMLElement>('[role="group"][aria-label="Mode"] button')].find(b => b.textContent === name);
+    const tabs = () => [...host.querySelectorAll('[role="tablist"][aria-label="Lenses"] [role="tab"]')].map(t => t.textContent?.replace(/\d+$/, ""));
+    await act(async () => { mode("Developer")?.click(); });
+    expect(host.querySelector("main")?.getAttribute("data-screen")).toBe("code");
+    expect(tabs()[0]).toBe("Code");
+    expect(host.querySelector("main h1")).toBeNull();
+    expect(mode("Developer")?.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => { mode("Mixed")?.click(); });
+    expect(mode("Mixed")?.getAttribute("aria-disabled")).toBe("true");
+    expect(mode("Mixed")?.getAttribute("title")).toContain("Mixed mode comes next");
+    expect(mode("Developer")?.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => { mode("Orchestrator")?.click(); });
+    expect(host.querySelector("main")?.getAttribute("data-screen")).toBe("workspace");
+    expect(tabs()).toEqual(["Workspace", "Code", "Graph", "Board", "Feed", "Bus"]);
+    expect(host.querySelector("main h1")?.textContent).toBe("trantor");
   });
 
   it("offers Back to classic in the account menu", async () => {

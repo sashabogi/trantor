@@ -7,7 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
-import { MODE_KEY } from "../../routes";
+import { MODE_KEY } from "../../shell/shellMode";
 import { takeOpenIntent } from "../../shell/openIntent";
 import { WorkspaceScreen } from "./index";
 import { DEFAULT_PANES, WorkspacePanesContext } from "./panes";

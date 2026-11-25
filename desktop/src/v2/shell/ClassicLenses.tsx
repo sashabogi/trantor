@@ -9,6 +9,7 @@ import { Conversation } from "../../features/chat/Conversation";
 import { Messages } from "../../features/messages/Messages";
 import { ProjectTile } from "../ui/ProjectTile";
 import type { LensScreen, Navigate } from "../routes";
+import { landingLens } from "./shellMode";
 
 export type ClassicLensProps = { client: HubClient; project: string; me: string; lens: Exclude<LensScreen, "workspace" | "code" | "board">; onNavigate: Navigate };
 
@@ -60,7 +61,7 @@ export function AllProjects({ projects, live, onNavigate, onStartProject }: { pr
       <ul className="mt-4 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 p-0">
         {projects.map(p => (
           <li key={p}>
-            <button type="button" onClick={() => onNavigate("workspace", p)}
+            <button type="button" onClick={() => onNavigate(landingLens(), p)}
               className="v2-hover flex w-full items-center gap-2.5 rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2 text-left text-[13px] text-[var(--v2-text)]">
               <ProjectTile name={p} size={26} />
               <span className="min-w-0 flex-1 truncate">{p}</span>

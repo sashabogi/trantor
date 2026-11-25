@@ -4,11 +4,10 @@ import { Blocks, Bot, ChevronsLeft, ChevronsRight, FolderOpen, Gauge, Inbox, Lay
 import { ProjectTile } from "../ui/ProjectTile";
 import { PRESENCE_COLOR } from "../ui/identity";
 import { isLensScreen, type Navigate, type Screen } from "../routes";
+import { MODE_CONFIG, useShellMode } from "./shellMode";
 
-const EXPANDED_KEY = "trantor.v2.rail.expanded";
-
-function readExpanded() {
-  try { return localStorage.getItem(EXPANDED_KEY) === "true"; } catch { return false; }
+function readExpanded(key: string) {
+  try { return localStorage.getItem(key) === "true"; } catch { return false; }
 }
 
 function RailButton({ label, title, active, onClick, badge, dot, expanded, className = "", children }: {
@@ -51,14 +50,17 @@ const FLEET: { screen: Screen; label: string; icon: ReactNode }[] = [
 ];
 
 export function Rail({ screen, project, live, unread, needsYou, onNavigate }: RailProps) {
-  const [expanded, setExpanded] = useState(readExpanded);
+  // #14070: each mode keeps its own choice, so Developer starts on icons whatever Orchestrator shows.
+  const { railKey, landing } = MODE_CONFIG[useShellMode()];
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const expanded = picked[railKey] ?? readExpanded(railKey);
   const tiles = [...new Set([project, ...live].filter(Boolean))].slice(0, 6);
   const inProject = isLensScreen(screen);
-  const toggle = () => setExpanded(current => {
-    const next = !current;
-    try { localStorage.setItem(EXPANDED_KEY, String(next)); } catch {}
-    return next;
-  });
+  const toggle = () => {
+    const next = !expanded;
+    try { localStorage.setItem(railKey, String(next)); } catch {}
+    setPicked(current => ({ ...current, [railKey]: next }));
+  };
   const action = expanded ? "Collapse the sidebar" : "Expand the sidebar";
   return (
     <nav aria-label="Primary" data-expanded={expanded} className={`flex ${expanded ? "w-[200px] items-stretch px-2" : "w-[58px] items-center"} shrink-0 flex-col gap-1 overflow-y-auto overflow-x-hidden border-r border-[var(--v2-edge)] bg-[var(--v2-chrome)] pt-2.5`}>
@@ -76,7 +78,7 @@ export function Rail({ screen, project, live, unread, needsYou, onNavigate }: Ra
         const open = inProject && p === project;
         const needs = p === project && !!needsYou;
         return (
-          <RailButton key={p} label={open ? `${p}, open` : p} title={p} active={open} expanded={expanded} dot={needs} onClick={() => onNavigate("workspace", p)}>
+          <RailButton key={p} label={open ? `${p}, open` : p} title={p} active={open} expanded={expanded} dot={needs} onClick={() => onNavigate(landing, p)}>
             <ProjectTile name={p} size={26} dot={!expanded && needs ? "needs-you" : undefined} />
           </RailButton>
         );

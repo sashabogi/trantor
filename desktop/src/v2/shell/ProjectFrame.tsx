@@ -6,6 +6,7 @@ import { usePeers, stateOf } from "../../shared/presence";
 import { useTasks } from "../../shared/tasks";
 import { ProjectTile } from "../ui/ProjectTile";
 import { LENS_LABEL, LENS_SCREENS, type LensScreen, type Navigate } from "../routes";
+import { MODE_CONFIG, useShellMode } from "./shellMode";
 
 const LENS_ICON = {
   workspace: <LayoutPanelLeft size={13} aria-hidden />,
@@ -18,10 +19,17 @@ const LENS_ICON = {
 
 const CLOSED = new Set(["done", "archived", "cancelled", "rejected"]);
 
-export function LensTabs({ lens, openCards, onNavigate }: { lens: LensScreen; openCards: number | null; onNavigate: Navigate }) {
+export function LensTabs({ lens, openCards, onNavigate, order = LENS_SCREENS, compact, summary }: {
+  lens: LensScreen; openCards: number | null; onNavigate: Navigate;
+  /** Tabs left to right; a mode may put its own lens first (#14070). */
+  order?: readonly LensScreen[];
+  /** The tabs row is the whole project header: less padding, the summary at its right end. */
+  compact?: boolean;
+  summary?: ReactNode;
+}) {
   return (
-    <div role="tablist" aria-label="Lenses" className="flex gap-0.5 overflow-x-auto border-b border-[var(--v2-edge)] px-5 pt-3">
-      {LENS_SCREENS.map(l => {
+    <div role="tablist" aria-label="Lenses" className={`flex items-center gap-0.5 overflow-x-auto border-b border-[var(--v2-edge)] ${compact ? "px-3 pt-1" : "px-5 pt-3"}`}>
+      {order.map(l => {
         const on = l === lens;
         return (
           <button key={l} type="button" role="tab" aria-selected={on} onClick={() => onNavigate(l)}
@@ -34,6 +42,7 @@ export function LensTabs({ lens, openCards, onNavigate }: { lens: LensScreen; op
           </button>
         );
       })}
+      {summary != null && <span className="ml-auto whitespace-nowrap pl-3 text-[12px] text-[var(--v2-muted)]">{summary}</span>}
     </div>
   );
 }
@@ -55,19 +64,22 @@ export function ProjectFrame({ client, project, lens, onNavigate, actions, notic
   const cards = useTasks(client, project);
   const live = (peers ?? []).filter(p => p.project === project && stateOf(p) !== "offline").length;
   const open = cards.filter(c => !CLOSED.has(c.status)).length;
+  const { lenses, compactHeader } = MODE_CONFIG[useShellMode()];
+  const summary = `${peers == null ? "Reading seats" : `${live} ${live === 1 ? "seat" : "seats"} live`} · ${open} open ${open === 1 ? "card" : "cards"}`;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex flex-wrap items-center gap-3 px-5 pt-4">
-        <ProjectTile name={project} size={34} />
-        <div className="min-w-0 flex-[1_1_260px]">
-          <h1 className="m-0 text-[20px] font-[650] tracking-[-0.01em]">{project}</h1>
-          <div className="text-[12px] text-[var(--v2-muted)]">
-            {peers == null ? "Reading seats" : `${live} ${live === 1 ? "seat" : "seats"} live`} · {open} open {open === 1 ? "card" : "cards"}
+      {!compactHeader && (
+        <div className="flex flex-wrap items-center gap-3 px-5 pt-4">
+          <ProjectTile name={project} size={34} />
+          <div className="min-w-0 flex-[1_1_260px]">
+            <h1 className="m-0 text-[20px] font-[650] tracking-[-0.01em]">{project}</h1>
+            <div className="text-[12px] text-[var(--v2-muted)]">{summary}</div>
           </div>
+          {actions}
         </div>
-        {actions}
-      </div>
-      <LensTabs lens={lens} openCards={open} onNavigate={onNavigate} />
+      )}
+      <LensTabs lens={lens} openCards={open} onNavigate={onNavigate} order={lenses} compact={compactHeader}
+        summary={compactHeader ? <>{summary}{actions}</> : undefined} />
       {notice}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">{children}</div>
     </div>

@@ -7,11 +7,12 @@ import { Kbd } from "../ui/Kbd";
 import { ProjectTile } from "../ui/ProjectTile";
 import { Avatar } from "../ui/Avatar";
 import { Popover, MenuItem } from "./Popover";
-import type { Mode, Navigate } from "../routes";
+import type { Navigate } from "../routes";
+import { MODE_CONFIG, type Mode } from "./shellMode";
 
 const MODES: readonly SegOption<Mode>[] = [
   { value: "orchestrator", label: "Orchestrator", icon: <Network size={13} aria-hidden />, title: "Run the crew: board, seats, decisions" },
-  { value: "mixed", label: "Mixed", icon: <SplitSquareHorizontal size={13} aria-hidden />, title: "Crew and code side by side" },
+  { value: "mixed", label: "Mixed", icon: <SplitSquareHorizontal size={13} aria-hidden />, title: MODE_CONFIG.mixed.unavailable, disabled: true },
   { value: "developer", label: "Developer", icon: <Code2 size={13} aria-hidden />, title: "Code first: files, diffs, terminal" },
 ];
 
