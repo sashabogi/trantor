@@ -68,13 +68,10 @@ export async function notifyDutyDark(d: { lastSeenMs: number; queuedEscalations?
   const ago = d.lastSeenMs < 60_000 ? "under a minute"
     : d.lastSeenMs < 3_600_000 ? `${Math.floor(d.lastSeenMs / 60_000)}m`
     : `${Math.floor(d.lastSeenMs / 3_600_000)}h`;
-  try {
-    sendNotification({
-      title: "Duty seat dark — nobody is watching the bus",
-      body: `Duty last reported ${ago} ago${d.queuedEscalations ? ` · ${d.queuedEscalations} escalation${d.queuedEscalations === 1 ? "" : "s"} queued` : ""}. Bring it back: trantor duty up.`,
-    });
-    return true;
-  } catch { return false; }
+  return deliver({
+    title: "Duty seat dark — nobody is watching the bus",
+    body: `Duty last reported ${ago} ago${d.queuedEscalations ? ` · ${d.queuedEscalations} escalation${d.queuedEscalations === 1 ? "" : "s"} queued` : ""}. Bring it back: trantor duty up.`,
+  });
 }
 
 // A single calm, one-line notification for a fire-and-forget action that has no dialog of its
@@ -84,7 +81,8 @@ export async function notifyDutyDark(d: { lastSeenMs: number; queuedEscalations?
 export async function notifyOnce(n: { title: string; body: string }): Promise<boolean> {
   if (!notificationsEnabled()) return false;
   if (!(await ensurePermission())) return false;
-  try { sendNotification(n); return true; } catch { return false; }
+  // The answer to the operator's own click and its only feedback: it shows in front too (#14108).
+  return deliver(n, true);
 }
 
 // The user's off-switch, persisted locally. Read at fire time so the Settings toggle takes
@@ -96,10 +94,29 @@ export function setNotificationsEnabled(on: boolean) {
   try { localStorage.setItem("tr.notifications", on ? "on" : "off"); } catch {}
 }
 
+// Default on: a person looking at the app already sees what a notification would say.
+export function backgroundOnly(): boolean {
+  try { return localStorage.getItem("tr.notifications.background") !== "off"; } catch { return true; }
+}
+export function setBackgroundOnly(on: boolean) {
+  try { localStorage.setItem("tr.notifications.background", on ? "on" : "off"); } catch {}
+}
+
+// Hidden or unfocused counts as background.
+function windowInForeground(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus();
+}
+
+// The only path to the OS: every send goes through here so the foreground rule lives once.
+function deliver(n: { title: string; body: string }, inFrontToo = false): boolean {
+  if (!inFrontToo && backgroundOnly() && windowInForeground()) return false;
+  try { sendNotification(n); return true; } catch { return false; }
+}
+
 export async function notifyIfWorthIt(ev: HubEvent, me: string, isOffline?: (session: string) => boolean) {
   if (!notificationsEnabled()) return false;
   const n = notificationFor(ev, me, isOffline);
   if (!n) return false;
   if (!(await ensurePermission())) return false;
-  try { sendNotification(n); return true; } catch { return false; }
+  return deliver(n);
 }

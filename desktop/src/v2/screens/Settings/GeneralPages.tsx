@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { appUpdateCheck, appUpdateInstall, editorPref, isEditorPref, setEditorPref, type AppUpdate, type EditorPref } from "../../../shared/api/client";
-import { notificationsEnabled, setNotificationsEnabled } from "../../../shared/notify";
+import { backgroundOnly, notificationsEnabled, setBackgroundOnly, setNotificationsEnabled } from "../../../shared/notify";
 import { onboardingApi } from "../../../features/onboarding/onboardingApi";
 import { Button } from "../../ui/Button";
 import { Section } from "../../ui/Section";
@@ -95,11 +95,16 @@ export function GeneralPage({ onBackToClassic }: { onBackToClassic?: () => void 
 
 export function NotificationsPage() {
   const [on, setOn] = useState(notificationsEnabled());
+  const [bg, setBg] = useState(backgroundOnly());
   return (
     <Section title="Notifications" flush sub="Native, and deliberately narrow: a notification for everything is a notification for nothing.">
       <Row title="Notify me when something needs a human" body="Direct messages to you, verify gates opening, and crew seats going offline. Broadcasts, card moves and presence never interrupt.">
         <input type="checkbox" role="switch" aria-label="Notify me when something needs a human" checked={on}
           onChange={e => { setOn(e.target.checked); setNotificationsEnabled(e.target.checked); }} />
+      </Row>
+      <Row title="Only when Trantor is in the background" body="Skip the notification while this window is open and in front of you.">
+        <input type="checkbox" role="switch" aria-label="Only when Trantor is in the background" checked={bg}
+          onChange={e => { setBg(e.target.checked); setBackgroundOnly(e.target.checked); }} />
       </Row>
     </Section>
   );
