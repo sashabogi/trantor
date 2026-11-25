@@ -1,21 +1,27 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { notifyDutyDark, notifyOnce, setBackgroundOnly } from "./notify";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 
-// The plugin sends through the web Notification constructor, so a faithful fake counts those.
+// The two native commands are faked at the IPC seam; the permission answer is chosen per test.
 let sent = 0;
-class FakeNotification {
-  static permission = "granted";
-  constructor() { sent += 1; }
-}
+let asked = 0;
+let answer = "granted";
+type Notify = typeof import("./notify");
+let mod: Notify;
 
 let focused = true;
 let visible: "visible" | "hidden" = "visible";
 
-beforeEach(() => {
-  sent = 0;
-  vi.stubGlobal("Notification", FakeNotification);
+beforeEach(async () => {
+  sent = 0; asked = 0; answer = "granted";
+  mockIPC(command => {
+    if (command === "notify_permission") { asked += 1; return answer; }
+    if (command === "notify_send") { sent += 1; return null; }
+    return null;
+  });
+  vi.resetModules();
+  mod = await import("./notify");
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
@@ -26,38 +32,48 @@ beforeEach(() => {
   vi.spyOn(document, "hasFocus").mockImplementation(() => focused);
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visible);
 });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { clearMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 const n = { title: "t", body: "b" };
 const dark = { lastSeenMs: 1000 };
 
 describe("notifications only in the background", () => {
   it("sends nothing while the window is focused and the setting is unset", async () => {
-    expect(await notifyDutyDark(dark)).toBe(false);
+    expect(await mod.notifyDutyDark(dark)).toBe(false);
     expect(sent).toBe(0);
   });
 
   it("sends when the window is not focused", async () => {
     focused = false;
-    expect(await notifyDutyDark(dark)).toBe(true);
+    expect(await mod.notifyDutyDark(dark)).toBe(true);
     expect(sent).toBe(1);
   });
 
   it("treats a hidden window as background even if it reports focus", async () => {
     visible = "hidden";
-    expect(await notifyDutyDark(dark)).toBe(true);
+    expect(await mod.notifyDutyDark(dark)).toBe(true);
   });
 
   it("still shows the answer to the operator's own click while the window is in front", async () => {
-    expect(await notifyOnce(n)).toBe(true);
+    expect(await mod.notifyOnce(n)).toBe(true);
     expect(sent).toBe(1);
   });
 
   it("sends in both cases with the setting off", async () => {
-    setBackgroundOnly(false);
-    expect(await notifyDutyDark(dark)).toBe(true);
+    mod.setBackgroundOnly(false);
+    expect(await mod.notifyDutyDark(dark)).toBe(true);
     focused = false;
-    expect(await notifyDutyDark(dark)).toBe(true);
+    expect(await mod.notifyDutyDark(dark)).toBe(true);
     expect(sent).toBe(2);
+  });
+
+  it("sends nothing and asks only once per run when permission is denied", async () => {
+    answer = "denied";
+    focused = false;
+    expect(await mod.notifyDutyDark(dark)).toBe(false);
+    expect(await mod.notifyDutyDark(dark)).toBe(false);
+    expect(await mod.notifyOnce(n)).toBe(false);
+    expect(sent).toBe(0);
+    expect(asked).toBe(1);
   });
 });

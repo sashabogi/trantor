@@ -133,6 +133,7 @@ pub fn run() {
             // #6317 acceptance drill: TRANTOR_KEY_DRILL=post|throw posts a real right-arrow key
             // event through AppKit once the webview is live (src/key_drill.rs). Inert otherwise.
             key_drill::arm(app.handle());
+            native_notify::install_delegate();
             remote::start(app.handle().clone());
             // #6668 acceptance drill: TRANTOR_HANDOFF_DRILL=<project> opens that project's Chat
             // on a pane holding a bare shell and proves no chain starts (src/handoff_drill.rs).
@@ -324,7 +325,9 @@ pub fn run() {
             terminal::term_write,
             terminal::term_resize,
             terminal::term_detach,
-            shell_terminal::term_shell_open
+            shell_terminal::term_shell_open,
+            native_notify::notify_permission,
+            native_notify::notify_send
             ];
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || handler(invoke))) {
                 Ok(handled) => handled,

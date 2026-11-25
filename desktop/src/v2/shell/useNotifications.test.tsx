@@ -2,17 +2,14 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { HubEvent, Peer } from "../../shared/api/client";
 import { useNotifications } from "./useNotifications";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
-// The plugin sends through the web Notification constructor, so a faithful fake counts those.
+// The native commands are faked at the IPC seam; each send records its title.
 let sent: string[] = [];
-class FakeNotification {
-  static permission = "granted";
-  constructor(title: string) { sent.push(title); }
-}
 
 let emit: ((ev: HubEvent) => void) | null = null;
 let stopped = 0;
@@ -30,7 +27,14 @@ const settle = () => act(async () => { await new Promise(resolve => setTimeout(r
 
 beforeEach(() => {
   sent = []; stopped = 0; emit = null;
-  vi.stubGlobal("Notification", FakeNotification);
+  mockIPC((command, args) => {
+    if (command === "notify_permission") return "granted";
+    if (command === "notify_send") {
+      // SAFETY: mockIPC types args as unknown; notify_send is invoked with named title/body.
+      sent.push((args as { title: string }).title);
+    }
+    return null;
+  });
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
@@ -38,7 +42,7 @@ beforeEach(() => {
   });
   vi.spyOn(document, "hasFocus").mockImplementation(() => false);
 });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { clearMocks(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("useNotifications", () => {
   it("turns a direct message to the operator into one notification, and stops listening on unmount", async () => {

@@ -54,6 +54,7 @@ mod git_commit;
 mod git_history;
 mod remote_seat;
 mod update;
+mod native_notify;
 mod app;
 mod changes;
 #[allow(unused_imports)]

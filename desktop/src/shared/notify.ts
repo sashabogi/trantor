@@ -2,18 +2,15 @@
 // Deliberately NARROW: only a direct message, a verify gate opening, or a crew seat failing
 // interrupt. A notification for every event is a notification for nothing, and the fastest way
 // to have someone disable them permanently. Card moves, presence and handoffs stay excluded.
-import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { invoke } from "@tauri-apps/api/core";
 import type { HubEvent } from "./api/client";
 
-let ready: boolean | null = null;
+// The answer is kept for this run, a denial included, so a refusal is asked again next launch only.
+let permission: Promise<boolean> | null = null;
 
-async function ensurePermission(): Promise<boolean> {
-  if (ready !== null) return ready;
-  try {
-    ready = await isPermissionGranted();
-    if (!ready) ready = (await requestPermission()) === "granted";
-  } catch { ready = false; }
-  return ready;
+function ensurePermission(): Promise<boolean> {
+  permission ??= invoke<string>("notify_permission").then(answer => answer === "granted", () => false);
+  return permission;
 }
 
 /** Returns a notification for an event, or null when it does not warrant interrupting a human. */
@@ -108,9 +105,9 @@ function windowInForeground(): boolean {
 }
 
 // The only path to the OS: every send goes through here so the foreground rule lives once.
-function deliver(n: { title: string; body: string }, inFrontToo = false): boolean {
+async function deliver(n: { title: string; body: string }, inFrontToo = false): Promise<boolean> {
   if (!inFrontToo && backgroundOnly() && windowInForeground()) return false;
-  try { sendNotification(n); return true; } catch { return false; }
+  try { await invoke("notify_send", { title: n.title, body: n.body }); return true; } catch { return false; }
 }
 
 export async function notifyIfWorthIt(ev: HubEvent, me: string, isOffline?: (session: string) => boolean) {
