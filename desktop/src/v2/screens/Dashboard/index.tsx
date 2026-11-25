@@ -11,6 +11,7 @@ import { ProjectSidebar } from "./ProjectSidebar";
 import { useDashboardData } from "./useDashboardData";
 import { useDecisions } from "./useDecisions";
 import { WorkingNow } from "./WorkingNow";
+import { StartCard } from "../Projects/StartCard";
 
 type Layout = "overview" | "project" | "agent";
 const LAYOUTS = [
@@ -21,7 +22,7 @@ const LAYOUTS = [
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-export function DashboardScreen({ client, onNavigate }: ScreenProps) {
+export function DashboardScreen({ client, onNavigate, onStartProject }: ScreenProps) {
   const data = useDashboardData(client);
   const d = useDecisions(client);
   const [layout, setLayout] = useState<Layout>("overview");
@@ -42,9 +43,10 @@ export function DashboardScreen({ client, onNavigate }: ScreenProps) {
     ...idleMoves(seats, onNavigate),
   ];
   const working = seats.filter(s => s.presence === "working").length;
+  if (data.knownLoaded && projects.length === 0) return <StartCard onStart={onStartProject} />;
   return (
     <div className="flex h-full min-h-0">
-      <ProjectSidebar projects={projects} open={data.open} peers={data.peers} interrupted={data.interrupted} onNavigate={onNavigate} />
+      <ProjectSidebar projects={projects} open={data.open} peers={data.peers} interrupted={data.interrupted} onNavigate={onNavigate} onStartProject={onStartProject} />
       <main className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mb-4 flex items-end gap-3">
           <div className="min-w-0 flex-1">

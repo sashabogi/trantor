@@ -1,6 +1,6 @@
 // The shell's data, built exactly the way classic AppShell builds it: known projects, the active
 // project's hub, the signed identity, and the same peek-only inbox count (#v2-F).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HubClient, hubForProject, knownProjects, localSessions, type Peer } from "../../shared/api/client";
 import { countUnseen, onSeenChange } from "../../shared/seen";
@@ -17,11 +17,18 @@ function savedProject(): string {
 function useProjects() {
   const [projects, setProjects] = useState<string[]>([]);
   const [active, setActive] = useState<string>(savedProject);
+  // #13984: a project just created is real before the next poll lists it; a poll that began earlier must not drop it.
+  const added = useRef(new Set<string>());
+  const addProject = useCallback((name: string) => {
+    added.current.add(name);
+    setProjects(prev => (prev.includes(name) ? prev : [...prev, name].sort()));
+  }, []);
   useEffect(() => {
     let alive = true;
     const pull = () => knownProjects().catch((): string[] => []).then(found => {
       if (!alive) return;
-      const all = [...new Set(found)].sort();
+      for (const f of found) added.current.delete(f);
+      const all = [...new Set([...found, ...added.current])].sort();
       setProjects(prev => (all.length === prev.length && all.every((v, i) => v === prev[i]) ? prev : all));
       setActive(a => (a && all.includes(a) ? a : all[0] || ""));
     });
@@ -30,7 +37,7 @@ function useProjects() {
     return () => { alive = false; clearInterval(t); };
   }, []);
   useEffect(() => { try { if (active) localStorage.setItem(PROJECT_KEY, active); } catch { /* storage blocked */ } }, [active]);
-  return { projects, active, setActive };
+  return { projects, active, setActive, addProject };
 }
 
 function useIdentity(hub: string) {
@@ -89,7 +96,7 @@ function useLiveProjects(client: HubClient) {
 }
 
 export function useShellData() {
-  const { projects, active, setActive } = useProjects();
+  const { projects, active, setActive, addProject } = useProjects();
   const [hub, setHub] = useState("");
   useEffect(() => { if (active) void hubForProject(active).then(setHub).catch(() => setHub("")); }, [active]);
   const me = useIdentity(hub);
@@ -98,5 +105,5 @@ export function useShellData() {
   const unread = useUnread(client, me);
   const needsYou = usePendingProposals(client).length + usePendingHolds(client).length;
   const live = useLiveProjects(client);
-  return { projects, active, setActive, hub, me, client, unread, needsYou, live };
+  return { projects, active, setActive, addProject, hub, me, client, unread, needsYou, live };
 }

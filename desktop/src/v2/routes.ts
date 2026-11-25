@@ -18,6 +18,8 @@ export type ScreenProps = {
   /** The active project, or "" when none is pinned yet. */
   project: string;
   onNavigate: Navigate;
+  /** Opens the Start a project sheet (#13984). */
+  onStartProject?: () => void;
 };
 
 export const LENS_LABEL = {

@@ -1,6 +1,6 @@
 // The Dashboard's project sidebar: Active now, Interrupted, Projects (#13986).
-import { useMemo, useState } from "react";
-import { Play, Search } from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { Play, Plus, Search } from "lucide-react";
 import { computeProjectActivity, activityLine, activityRank, activityTitle } from "../../../app/projectActivity";
 import { orchestratorOpen, type RestorableSession } from "../../../features/workspace/herdr";
 import { dismissedSessionsApi } from "../../../features/workspace/dismissedSessions";
@@ -14,19 +14,21 @@ type Props = {
   projects: string[]; open: LocalSession[]; peers: Peer[];
   interrupted: Interrupted;
   onNavigate: Navigate;
+  onStartProject?: () => void;
 };
 
-function Heading({ label, count }: { label: string; count?: number }) {
+function Heading({ label, count, action }: { label: string; count?: number; action?: ReactNode }) {
   return (
     <div className="flex items-center gap-1.5 px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--v2-muted)]">
       <span>{label}</span>{count !== undefined && <span className="v2-mono font-normal">{count}</span>}
+      {action && <span className="ml-auto">{action}</span>}
     </div>
   );
 }
 
 const DOT = { "needs-you": "needs-you", working: "working", idle: "ready", unknown: "offline" } as const satisfies Record<string, Presence>;
 
-export function ProjectSidebar({ projects, open, peers, interrupted, onNavigate }: Props) {
+export function ProjectSidebar({ projects, open, peers, interrupted, onNavigate, onStartProject }: Props) {
   const [filter, setFilter] = useState("");
   const [error, setError] = useState("");
   const activity = useMemo(() => computeProjectActivity(open, peers), [open, peers]);
@@ -79,7 +81,12 @@ export function ProjectSidebar({ projects, open, peers, interrupted, onNavigate 
             className="px-1 text-[13px] text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
         </div>
       ))}
-      <Heading label="Projects" />
+      <Heading label="Projects" action={onStartProject && (
+        <button type="button" aria-label="Start a project" title="Start a project (⌘N)" onClick={onStartProject}
+          className="v2-hover inline-flex rounded-md border-0 bg-transparent p-0.5 text-[var(--v2-muted)]">
+          <Plus size={13} aria-hidden />
+        </button>
+      )} />
       {rest.map(p => (
         <button key={p} type="button" onClick={() => onNavigate("workspace", p)} className={row}>
           <ProjectTile name={p} size={22} /><span className="min-w-0 flex-1 truncate">{p}</span>

@@ -52,3 +52,12 @@
 
 /* #13987 drill: no second terminal view inside the 2.0 chat. */
 [data-v2-chat] div:has(> button[title^="The orchestrator's live terminal"]) { display: none; }
+
+/* #13984 drill: the shell root takes focus on click so a shortcut reaches it; it draws no ring. */
+.v2-root:focus { outline: none; }
+
+/* #13984 drill: the classic Start a project sheet wears Graphite inside the 2.0 shell. */
+.v2-genesis .tr-card { background: var(--v2-panel-2); border: 1px solid var(--v2-edge-2); color: var(--v2-text); }
+.v2-genesis .tr-input { background: var(--v2-panel); border: 1px solid var(--v2-edge-2); color: var(--v2-text); }
+.v2-genesis .tr-input:focus { outline: 2px solid var(--v2-accent); outline-offset: 0; }
+.v2-genesis .tr-seg > button[data-on="true"] { background: var(--v2-accent-soft); color: var(--v2-text); }

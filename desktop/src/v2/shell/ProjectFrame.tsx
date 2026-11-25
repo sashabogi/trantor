@@ -46,10 +46,12 @@ export type ProjectFrameProps = {
   onNavigate: Navigate;
   /** Right side of the header; screen owners add Branch, Ask the Advisor, Add seat here. */
   actions?: ReactNode;
+  /** A status strip under the lens tabs (#13984). */
+  notice?: ReactNode;
   children: ReactNode;
 };
 
-export function ProjectFrame({ client, project, lens, onNavigate, actions, children }: ProjectFrameProps) {
+export function ProjectFrame({ client, project, lens, onNavigate, actions, notice, children }: ProjectFrameProps) {
   const { peers } = usePeers(client);
   const cards = useTasks(client, project);
   const live = (peers ?? []).filter(p => p.project === project && stateOf(p) !== "offline").length;
@@ -67,6 +69,7 @@ export function ProjectFrame({ client, project, lens, onNavigate, actions, child
         {actions}
       </div>
       <LensTabs lens={lens} openCards={open} onNavigate={onNavigate} />
+      {notice}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">{children}</div>
     </div>
   );

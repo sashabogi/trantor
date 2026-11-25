@@ -1,6 +1,6 @@
 // Top bar from the Workspace/Dashboard artboards: project switcher, mode, search, bell, account (#v2-F).
 import { useState } from "react";
-import { Bell, ChevronDown, Code2, Network, Search, SplitSquareHorizontal } from "lucide-react";
+import { Bell, ChevronDown, Code2, Network, Plus, Search, SplitSquareHorizontal } from "lucide-react";
 import { Seg, type SegOption } from "../ui/Seg";
 import { IconButton } from "../ui/IconButton";
 import { Kbd } from "../ui/Kbd";
@@ -25,10 +25,11 @@ export type TopBarProps = {
   needsYou: number;
   me: string;
   onNavigate: Navigate;
+  onStartProject: () => void;
   onBackToClassic: () => void;
 };
 
-function ProjectSwitcher({ projects, project, onProject }: Pick<TopBarProps, "projects" | "project" | "onProject">) {
+function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<TopBarProps, "projects" | "project" | "onProject" | "onStartProject">) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
@@ -40,6 +41,9 @@ function ProjectSwitcher({ projects, project, onProject }: Pick<TopBarProps, "pr
         <ChevronDown size={12} aria-hidden />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} label="Projects">
+        <MenuItem onSelect={() => { setOpen(false); onStartProject(); }} title="Create a project and wake its orchestrator (⌘N)">
+          <Plus size={14} aria-hidden /><span className="flex-1">Start a project</span><Kbd>⌘N</Kbd>
+        </MenuItem>
         {projects.map(p => (
           <MenuItem key={p} active={p === project} onSelect={() => { onProject(p); setOpen(false); }}>
             <ProjectTile name={p} size={20} />{p}
@@ -71,7 +75,7 @@ function AccountMenu({ me, onNavigate, onBackToClassic }: Pick<TopBarProps, "me"
 export function TopBar(p: TopBarProps) {
   return (
     <header className="flex h-[50px] shrink-0 items-center gap-3 border-b border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-[14px]">
-      <ProjectSwitcher projects={p.projects} project={p.project} onProject={p.onProject} />
+      <ProjectSwitcher projects={p.projects} project={p.project} onProject={p.onProject} onStartProject={p.onStartProject} />
       <Seg label="Mode" options={MODES} value={p.mode} onChange={p.onMode} />
       <button type="button" onClick={p.onSearch} title="Search cards, messages and files (⌘K)"
         className="flex max-w-[480px] flex-[1_1_280px] items-center gap-2 rounded-[9px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-left text-[12px] text-[var(--v2-muted)]">

@@ -46,10 +46,18 @@ export function MessagesLens({ client, me }: { client: HubClient; me: string }) 
   return <Messages client={client} me={me} />;
 }
 
-export function AllProjects({ projects, live, onNavigate }: { projects: string[]; live: string[]; onNavigate: Navigate }) {
+export function AllProjects({ projects, live, onNavigate, onStartProject }: { projects: string[]; live: string[]; onNavigate: Navigate; onStartProject?: () => void }) {
   return (
     <div className="px-5 py-4">
-      <h1 className="m-0 text-[20px] font-[650]">All projects</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="m-0 flex-1 text-[20px] font-[650]">All projects</h1>
+        {onStartProject && (
+          <button type="button" onClick={onStartProject} title="Create a project and wake its orchestrator (⌘N)"
+            className="rounded-[8px] border-0 bg-[var(--v2-accent)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--v2-ink)]">
+            Start a project
+          </button>
+        )}
+      </div>
       <p className="mt-1 text-[12px] text-[var(--v2-muted)]">{projects.length} known · {live.length} with live sessions</p>
       <ul className="mt-4 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 p-0">
         {projects.map(p => (

@@ -16,6 +16,7 @@ import { visibleRestorables } from "../../../features/workspace/restorables";
 
 const SLOW_MS = 60_000;
 const NO_MESSAGES: Message[] = [];
+const NO_PROJECTS: string[] = [];
 export type Interrupted = { rows: RestorableSession[]; drop: (project: string) => void };
 
 /** Poll `load` on mount and every `ms`; a failed pull keeps the last value, an older hub just stays empty. */
@@ -76,9 +77,11 @@ export function useDashboardData(client: HubClient) {
   const machines = usePoll<MachinesHealthReport | null>(() => client.machinesHealth(), [client], SLOW_MS, null);
   const overseer = usePoll<OverseerStatus | null>(() => client.overseerStatus(), [client], SLOW_MS, null);
   const open = usePoll<LocalSession[]>(() => localSessions(), [], 30_000, []);
-  const known = usePoll<string[]>(() => knownProjects(), [], 5 * SLOW_MS, []);
+  // null until the first answer, so an empty list is told apart from not asked yet (#13984).
+  const knownRaw = usePoll<string[] | null>(() => knownProjects().catch((): string[] => []), [], 5 * SLOW_MS, null);
+  const known = knownRaw ?? NO_PROJECTS;
   const interrupted = useInterrupted();
-  return { me, cards, peers, proposals, holds, messages, allMessages, econ, machines, overseer, open, known, interrupted };
+  return { knownLoaded: knownRaw !== null, me, cards, peers, proposals, holds, messages, allMessages, econ, machines, overseer, open, known, interrupted };
 }
 
 export type DashboardData = ReturnType<typeof useDashboardData>;
