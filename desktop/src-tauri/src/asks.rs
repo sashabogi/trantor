@@ -81,6 +81,12 @@ pub(crate) fn answer_keystrokes(
     answers_keystrokes(vec![question], vec![AskAnswer { picks, other }])
 }
 
+/// Every answer of a multi question ask as one run: each question's keys in order, then the review Enter.
+#[tauri::command]
+pub(crate) fn answer_all_keystrokes(questions: Vec<AskQuestion>, answers: Vec<AskAnswer>) -> String {
+    answers_keystrokes(questions, answers)
+}
+
 fn question_keystrokes(question: &AskQuestion, answer: AskAnswer) -> String {
     const DOWN: &str = "\x1b[B";
     let other = answer

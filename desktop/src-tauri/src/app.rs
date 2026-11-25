@@ -223,6 +223,7 @@ pub fn run() {
             asks::ask_target,
             asks::ask_answer_session,
             asks::answer_keystrokes,
+            asks::answer_all_keystrokes,
             asks::ask_drill_start,
             asks::ask_drill_probe,
             key_drill::key_drill_post,

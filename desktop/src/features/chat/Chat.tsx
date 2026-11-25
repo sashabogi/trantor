@@ -13,6 +13,7 @@ import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
 import { dialModel, projectModelApi, type ConfiguredModel } from "./projectModel";
 import { MarkdownText } from "./MarkdownText";
+import { MultiAskCard } from "./MultiAskCard";
 import { askLeadIn, CC_LEAD_IN, declaredFromQuestion, selectChips, trimAsk, type DeclaredAsk } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import { isPinned } from "./scrollPin";
@@ -189,6 +190,9 @@ function AskCard({ tool_id, questions, result, target, visible = true, onAnswer,
   // actually sent rather than assuming there is exactly one.
   const q = questions[0];
   if (!q) return null;
+  if (questions.length > 1 && !result) {
+    return <MultiAskCard toolId={tool_id} questions={questions} enabled={!!target && visible} waiting={!!target && !visible} invokeFn={invokeFn} onAnswer={onAnswer} />;
+  }
 
   if (result) {
     return (
@@ -944,7 +948,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     }
     return out;
   }, [chat.turns]);
-  const askQuestion = openAsk?.questions[0] ?? null;
+  // A chip answers one question; with several open the card's own Submit sends them all.
+  const askQuestion = openAsk?.questions.length === 1 ? openAsk.questions[0] : null;
   // #7776: the declaration wins, and prose is parsed only when the turn declared nothing. An
   // older sidecar without `ask` still declares through its first question.
   const declared: DeclaredAsk | null = useMemo(

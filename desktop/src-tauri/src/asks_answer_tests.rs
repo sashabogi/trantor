@@ -204,3 +204,19 @@ fn lone_question_measured_fixtures() {
         "\x1b[B\x1b[BKiwi\x1b[B\r\r"
     );
 }
+
+#[test]
+fn answer_all_command_reads_the_card_payload_and_types_in_order() {
+    let questions: Vec<AskQuestion> = serde_json::from_str(
+        r#"[{"header":"A","question":"a","multiSelect":true,"options":[{"label":"x"},{"label":"y"}]},
+            {"header":"B","question":"b","multiSelect":false,"options":[{"label":"x"},{"label":"y"}]}]"#,
+    )
+    .unwrap();
+    let answers: Vec<AskAnswer> =
+        serde_json::from_str(r#"[{"picks":[0,1],"other":"Kiwi"},{"picks":[],"other":"Oslo"}]"#)
+            .unwrap();
+    assert_eq!(
+        answer_all_keystrokes(questions, answers),
+        " \x1b[B \x1b[BKiwi\x1b[B\r\x1b[B\x1b[BOslo\r\r"
+    );
+}
