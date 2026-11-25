@@ -36,7 +36,7 @@ import {
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal, processedInput, codexStepInput, kimiStepInput, claudeStepInput } from "../lib/turn-usage.mjs";
 import { capConfig, capDecision, capHandoffPrompt, capPointerLine, capExhaustedNote } from "../lib/context-cap.mjs";
-import { ocCompactionContent, ocCompactionLogLine, readOpencodeUserConfig, seatMcpOverlay, seatConfigContent } from "../lib/seat-compaction.mjs";
+import { ocCompactionContent, ocCompactionLogLine, readOpencodeUserConfig, seatMcpOverlay, seatPermissionOverlay, seatConfigContent } from "../lib/seat-compaction.mjs";
 import { seatSignalPrefix } from "../lib/seat-signal-guard.mjs";
 import { providerMismatch } from "../lib/seat-provider.mjs";
 import { burnCeiling, afterTurn, burnVerdict } from "../lib/burn-guard.mjs";
@@ -882,7 +882,10 @@ function capStepProcessed(sinceMs) {
 const OC_COMPACTION_WINDOW = contextWindow(MODEL);
 const OC_COMPACTION = ocCompactionContent(process.env, OC_COMPACTION_WINDOW);
 // #11854: plus every non-relay MCP server of the user's opencode config switched off for the seat.
-const OC_SEAT_CONFIG = seatConfigContent(OC_COMPACTION, seatMcpOverlay(readOpencodeUserConfig()));
+// #14048: and the heavy-gate shim folder, which this runner puts on the seat's PATH, made readable.
+const OC_USER_CONFIG = readOpencodeUserConfig();
+const HEAVY_SHIM_DIR = join(import.meta.dirname, "heavy-gate-shim");
+const OC_SEAT_CONFIG = seatConfigContent(OC_COMPACTION, seatMcpOverlay(OC_USER_CONFIG), seatPermissionOverlay(HEAVY_SHIM_DIR, OC_USER_CONFIG));
 
 let sid = releaseState?.sid || runnerOption("resume");
 // #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
@@ -1100,7 +1103,7 @@ exit $turn_exit`;
     // so a handoff spawn would only leak an unmanaged interactive window.
     TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
     TRANTOR_HEAVY_GATE_WAIT_DIR: HEAVY_WAIT_DIR,
-    PATH: `${join(import.meta.dirname, "heavy-gate-shim")}:${process.env.PATH || ""}`,
+    PATH: `${HEAVY_SHIM_DIR}:${process.env.PATH || ""}`,
     // #6206: the seat's transcript dir — a real CLI ignores it, a drill's fake CLI writes
     // its transcript lines there so the watchdog sees the liveness a real claude shows.
     TRANTOR_TRANSCRIPT_DIR: TRANSCRIPT_DIR };
