@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // #14044 drill: the source control sidebar's header, flat Changes list, Files, Recent commits,
-// remembered sections and clicks. Fakes sit at the Tauri IPC and a per-test localStorage only.
+// remembered sections and clicks. #14047: the ahead/behind line beside the branch and the
+// Branches and seats rows. Fakes sit at the Tauri IPC and a per-test localStorage only.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ScmSidebar } from "./index";
 import { flatChanges } from "./ChangesSection";
 import { readScmSectionOpen, writeScmSectionOpen, SCM_KEY_PREFIX } from "./sectionState";
+import type { SeatInfo } from "../../screens/Code/model";
 import type { ScopeSnapshot, ScopeState } from "../../screens/Code/useScopeGit";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
@@ -27,12 +29,17 @@ const PANEL = { branch: "seat/glm-5", upstream: null, ahead: 2, behind: null, st
 const SEAT_SNAP: ScopeSnapshot = { scope: "glm-5", branch: "seat/glm-5", upstream: null, ahead: 2, behind: null, status: STATUS, counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }], log: LOG, seatBacked: true, readAt: Date.now() };
 const CHECKOUT_SNAP: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, status: STATUS, counts: [], log: LOG, seatBacked: false, readAt: Date.now() };
 const ROOTS = JSON.stringify([{ name: "README.md", path: "README.md", dir: false, status: "M" }]);
+const SEATS: SeatInfo[] = [
+  { seat: "glm-5", presence: "working", branch: "seat/glm-5", ahead: 2, machine: null, hasWorktree: true },
+  { seat: "kimi-9", presence: "offline", branch: null, ahead: null, machine: "netcup", hasWorktree: false },
+];
 
 type IpcArgs = { project?: string; agent?: string; scope?: string; paths?: string[]; unstage?: boolean; message?: string };
 type Call = { command: string; args: IpcArgs };
 let calls: Call[];
 type Opened = { file: string[]; change: string[]; commit: string[] };
 const opened: Opened = { file: [], change: [], commit: [] };
+let picked: (string | null)[];
 
 let host: HTMLDivElement;
 let root: Root;
@@ -40,6 +47,7 @@ let state: ScopeState = { kind: "ok", snap: SEAT_SNAP };
 beforeEach(() => {
   calls = [];
   opened.file = []; opened.change = []; opened.commit = [];
+  picked = [];
   state = { kind: "ok", snap: SEAT_SNAP };
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -69,7 +77,8 @@ afterEach(async () => {
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
 const render = async () => {
   await act(async () => {
-    root.render(<ScmSidebar project="trantor" scope="glm-5" scopeName="glm-5" state={state} onMutated={() => undefined}
+    root.render(<ScmSidebar project="trantor" scope="glm-5" scopeName="glm-5" state={state} seats={SEATS}
+      onPickScope={s => picked.push(s)} onMutated={() => undefined}
       onOpenFile={p => opened.file.push(p)} onOpenChange={p => opened.change.push(p)} onOpenCommit={s => opened.commit.push(s)} />);
   });
   await flush(); await flush();
@@ -210,5 +219,51 @@ describe("the sidebar", () => {
     state = { kind: "error", reason: "git is not reachable" };
     await render();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("git is not reachable");
+  });
+});
+
+describe("ahead/behind beside the branch (#14047)", () => {
+  it("counts unlanded work when there is no upstream and names the upstream when there is one", async () => {
+    await render();
+    const ahead = host.querySelector("[data-ahead]");
+    expect(ahead?.textContent).toBe("2 unlanded");
+    expect(ahead?.getAttribute("title")).toBe("no upstream: ahead counts unlanded work against main");
+    state = { kind: "ok", snap: CHECKOUT_SNAP };
+    await render();
+    expect(host.querySelector("[data-ahead]")?.textContent).toBe("in sync");
+    expect(host.querySelector("[data-ahead]")?.getAttribute("title")).toContain("origin/main");
+  });
+
+  it("says nothing while git is still loading", async () => {
+    state = { kind: "loading" };
+    await render();
+    expect(host.querySelector("[data-ahead]")).toBeNull();
+  });
+});
+
+describe("Branches and seats (#14047)", () => {
+  it("comes after Recent commits with the row count in the badge", async () => {
+    await render();
+    expect([...host.querySelectorAll("section")].map(s => s.getAttribute("data-section")))
+      .toEqual(["changes", "files", "commits", "branches"]);
+    const badge = host.querySelector('section[data-section="branches"] [data-count]');
+    expect(badge?.textContent).toBe("3");
+  });
+
+  it("lists the main checkout and every seat, current row marked, worktree-less seat disabled", async () => {
+    await render();
+    expect(host.querySelector('button[data-scope-row="main"]')?.textContent).toContain("main checkout");
+    expect(host.querySelector('button[data-scope-row="glm-5"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('button[data-scope-row="main"]')?.getAttribute("aria-pressed")).toBe("false");
+    const kimi = host.querySelector<HTMLButtonElement>('button[data-scope-row="kimi-9"]');
+    expect(kimi?.disabled).toBe(true);
+    expect(kimi?.title).toContain("no worktree");
+  });
+
+  it("a row click re-scopes the sidebar: the seat, then back to the checkout", async () => {
+    await render();
+    await click(host.querySelector('button[data-scope-row="glm-5"]'));
+    await click(host.querySelector('button[data-scope-row="main"]'));
+    expect(picked).toEqual(["glm-5", null]);
   });
 });

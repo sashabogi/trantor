@@ -219,7 +219,8 @@ describe("both screens use it", () => {
     const ref = { current: null };
     function Column() {
       const col = useFilesColumn();
-      return <FilesColumn col={col} workspace={ref} project="trantor" scope={null} scopeName="project checkout"
+      return <FilesColumn col={col} workspace={ref} project="trantor" scope={null} scopeName="project checkout" seats={[]}
+        onPickScope={() => undefined}
         onOpenFile={() => undefined} onOpenChange={() => undefined} onOpenCommit={() => undefined} />;
     }
     await act(async () => { root.render(<Column />); });

@@ -1,11 +1,14 @@
 // The source control sidebar (#14044): the one column the Workspace's left side and Code's sidebar
-// share: Changes (flat list with the commit box), Files, Recent commits, every section
-// collapsible and remembered in localStorage. Stage and commit reuse the Code screen's git
-// bridge, so the main-checkout rules travel with them: no push, no discard.
+// share: Changes (flat list with the commit box), Files, Recent commits, every section collapsible
+// and remembered in localStorage. Stage and commit reuse the Code screen's git bridge, so the
+// main-checkout rules travel with them: no push, no discard. #14047: ahead/behind + seats rows.
 import type { ReactNode } from "react";
 import { ExplorerTree } from "../ExplorerTree";
+import { aheadLabel } from "../../../features/code/gitApi";
 import { MainCheckoutMark } from "../../screens/Code/parts";
+import type { SeatInfo } from "../../screens/Code/model";
 import type { ScopeState } from "../../screens/Code/useScopeGit";
+import { BranchesSection } from "./BranchesSection";
 import { ChangesSection } from "./ChangesSection";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { CommitsSection } from "./CommitsSection";
@@ -16,6 +19,10 @@ export type ScmSidebarProps = {
   scope: string | null;
   scopeName: string;
   state: ScopeState;
+  /** the project's seats, as screens/Code/useSeats reads them */
+  seats: SeatInfo[];
+  /** a Branches and seats row click: null is the main checkout */
+  onPickScope: (seat: string | null) => void;
   onMutated: () => void;
   onOpenFile: (path: string) => void;
   onOpenChange: (path: string) => void;
@@ -49,6 +56,12 @@ export function ScmSidebar(p: ScmSidebarProps) {
         <div className="flex min-w-0 items-center gap-1.5 text-[11px]">
           <span className="v2-mono min-w-0 shrink-0 truncate text-[var(--v2-text)]" title={snap?.branch ?? "reading…"}>{snap?.branch ?? "reading…"}</span>
           {snap && !snap.seatBacked && <MainCheckoutMark />}
+          {snap && (
+            <span data-ahead className="v2-mono shrink-0 text-[10.5px] text-[var(--v2-muted)]"
+              title={snap.upstream ? `upstream ${snap.upstream}` : "no upstream: ahead counts unlanded work against main"}>
+              {aheadLabel(snap)}
+            </span>
+          )}
           <span className="min-w-0 flex-1 truncate text-right text-[var(--v2-muted)]" title={p.scopeName}>{p.scopeName}</span>
         </div>
       </header>
@@ -67,6 +80,9 @@ export function ScmSidebar(p: ScmSidebarProps) {
         </CollapsibleSection>
         <CollapsibleSection section="commits" title="Recent commits" badge={snap ? <CountBadge n={snap.log.length} /> : undefined}>
           {snap ? <CommitsSection log={snap.log} onOpen={p.onOpenCommit} /> : <Pending state={p.state} />}
+        </CollapsibleSection>
+        <CollapsibleSection section="branches" title="Branches and seats" badge={<CountBadge n={1 + p.seats.length} />}>
+          <BranchesSection project={p.project} scope={p.scope} seats={p.seats} onPickScope={p.onPickScope} />
         </CollapsibleSection>
       </div>
     </div>

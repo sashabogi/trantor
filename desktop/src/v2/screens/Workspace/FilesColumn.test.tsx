@@ -29,18 +29,25 @@ const PANEL = {
 let host: HTMLDivElement;
 let root: Root;
 let navigated: string[];
+let herdrSeatsReply = "[]";
 beforeEach(() => {
   navigated = [];
+  herdrSeatsReply = "[]";
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
   });
-  mockIPC(command => {
-    if (command === "herdr_seats") return "[]";
+  mockIPC((command, payload) => {
+    if (command === "herdr_seats") return herdrSeatsReply;
     if (command === "identity_name") return "sasha";
     if (command === "project_files") return ROOTS;
-    if (command === "git_panel") return JSON.stringify(PANEL);
+    if (command === "git_panel") {
+      // SAFETY: mockIPC types payload as unknown; git_panel is invoked with an object of named args.
+      const args = (payload ?? {}) as { agent?: string; scope?: string };
+      if (args.agent) return JSON.stringify({ ...PANEL, branch: `seat/${args.agent}`, upstream: null, ahead: 3, behind: null });
+      return JSON.stringify(PANEL);
+    }
     if (command === "plugin:event|listen") return 1;
     return null;
   });
@@ -54,14 +61,15 @@ afterEach(async () => {
   takeOpenIntent("trantor");
 });
 
-const mountScreen = async () => {
+const settle = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
+const mountScreen = async (c?: ReturnType<typeof client>) => {
   await act(async () => {
     root.render(<WorkspacePanesContext.Provider value={PANES}>
-      <WorkspaceScreen client={client()} project="trantor" onNavigate={s => { navigated.push(s); }} />
+      <WorkspaceScreen client={c ?? client()} project="trantor" onNavigate={s => { navigated.push(s); }} />
     </WorkspacePanesContext.Provider>);
   });
-  await act(async () => { await new Promise(r => setTimeout(r, 20)); });
-  await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+  await settle();
+  await settle();
 };
 const handle = () => host.querySelector<HTMLElement>('[role="separator"][aria-label="Resize files"]');
 const column = () => host.querySelector<HTMLElement>('aside[aria-label="Source control"]');
@@ -181,5 +189,42 @@ describe("the source control sidebar (#14044)", () => {
     await click(row ?? null);
     expect(navigated).toEqual(["code"]);
     expect(takeOpenIntent("trantor")).toEqual({ kind: "file", path: "README.md", seat: undefined });
+  });
+});
+
+describe("Branches and seats (#14047)", () => {
+  beforeEach(() => {
+    localStorage.setItem(MODE_KEY, "developer");
+    localStorage.setItem(FILES_OPEN_KEY, "true");
+    herdrSeatsReply = JSON.stringify([{ project: "trantor", agent: "orchestrator", surface: "s1", kind: "orch" }]);
+  });
+
+  const seatPeersClient = () => new HubClient("http://hub.test", async ({ path }) => {
+    const peers = [{ session: "codex-8:trantor", project: "trantor", online: true, kind: "agent", llm: "codex" }];
+    if (path.startsWith("/peers")) return { status: 200, body: JSON.stringify({ peers }) };
+    return { status: 200, body: JSON.stringify({ tasks: [], holds: [] }) };
+  });
+
+  it("lists the main checkout and each seat with its branch and unlanded count", async () => {
+    await mountScreen(seatPeersClient());
+    const col = column();
+    expect(col?.querySelector('button[data-scope-row="main"]')?.textContent).toContain("main checkout");
+    const row = col?.querySelector<HTMLButtonElement>('button[data-scope-row="codex-8"]');
+    expect(row?.textContent).toContain("codex-8");
+    expect(row?.textContent).toContain("seat/codex-8");
+    expect(row?.textContent).toContain("↑3");
+    expect(row?.disabled).toBe(false);
+  });
+
+  it("clicking a seat row reads that seat's changes in the sidebar; the main row returns to the checkout", async () => {
+    await mountScreen(seatPeersClient());
+    await click(column()?.querySelector('button[data-scope-row="codex-8"]') ?? null);
+    await settle(); await settle();
+    expect(column()?.querySelector("header")?.textContent).toContain("seat/codex-8");
+    expect(column()?.querySelector('button[data-scope-row="codex-8"]')?.getAttribute("aria-pressed")).toBe("true");
+    await click(column()?.querySelector('button[data-scope-row="main"]') ?? null);
+    await settle(); await settle();
+    expect(column()?.querySelector("header")?.textContent).toContain("main");
+    expect(column()?.querySelector('button[data-scope-row="main"]')?.getAttribute("aria-pressed")).toBe("true");
   });
 });

@@ -76,7 +76,7 @@ function CardsPane({ cards }: { cards: Card[] }) {
 export type SidebarProps = {
   view: SideView; client: HubClient; project: string; scope: string | null; seats: SeatInfo[]; state: ScopeState;
   selected: string | null; onOpenFile: (path: string) => void; onOpenChange: (path: string) => void; onOpenCommit: (sha: string) => void;
-  onMutated: () => void; onOpenSource: () => void; onPickSeat: (seat: string) => void; onOpenConflict: (path: string) => void;
+  onMutated: () => void; onOpenSource: () => void; onPickSeat: (seat: string | null) => void; onOpenConflict: (path: string) => void;
 };
 
 function Body(p: SidebarProps) {
@@ -94,7 +94,8 @@ export function Sidebar(p: SidebarProps) {
   if (p.view === "source") {
     return (
       <aside aria-label="Source control" className="flex w-[280px] shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-panel)]">
-        <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scope ?? "project checkout"} state={p.state} selectedPath={p.selected}
+        <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scope ?? "project checkout"} state={p.state} seats={p.seats}
+          onPickScope={p.onPickSeat} selectedPath={p.selected}
           onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onOpenConflict={p.onOpenConflict}
           actions={<IconButton label="Open the full source control tab" title="Open the full tab" size={24} onClick={p.onOpenSource}><Maximize2 size={13} aria-hidden /></IconButton>} />
       </aside>

@@ -10,6 +10,7 @@ import { FilesColumn } from "./FilesColumn";
 import { setOpenIntent } from "../../shell/openIntent";
 import { Inspector } from "./Inspector";
 import { usePanes } from "./panes";
+import { useSeats } from "../Code/useSeats";
 import { SeatGrid } from "./SeatGrid";
 import { SeatStrip } from "./SeatStrip";
 import { liveSeats, visibleSeats, type Layout, type SeatView } from "./seatModel";
@@ -93,6 +94,13 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
 
   // The same scoping the Files sheet used: a crew seat on this machine shows its worktree, anything else the project checkout.
   const scope = selected && !selected.isOrchestrator && !selected.machine ? selected.agent : null;
+  // #14047 drill: the seat rows under Branches and seats, branch and ahead count included.
+  const { seats: seatInfos } = useSeats(client, project);
+  // A row click in the sidebar's Branches and seats section: that seat in the strip, the main checkout row the orchestrator.
+  const pickScope = useCallback((seat: string | null) => {
+    const view = seat === null ? seats.find(s => s.isOrchestrator) : seats.find(s => s.agent === seat);
+    if (view) setSelKey(view.key);
+  }, [seats, setSelKey]);
   // #13987 drill: a chosen file used to be dropped on navigate; the intent carries it to the Code screen.
   const openFile = (path: string) => { setOpenIntent(project, { kind: "file", path, seat: scope ?? undefined }); onNavigate("code"); };
   // #14044 drill: a changed file or a commit clicked in the source control sidebar opens Code on it.
@@ -113,7 +121,8 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   return (
     <div ref={workspaceRef} className="flex min-h-0 flex-1">
       <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
-        scopeName={scope ?? "project checkout"} onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} />
+        scopeName={scope ?? "project checkout"} seats={seatInfos} onPickScope={pickScope}
+        onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />
