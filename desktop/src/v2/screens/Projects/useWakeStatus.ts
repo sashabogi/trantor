@@ -1,5 +1,5 @@
 // The wake status of a freshly started project: the classic wake events and outcomes, held per
-// project with a fade for good news and a deadline for silence (#13984).
+// project with a deadline for silence and a persistent delivery line (#14046).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { GenesisSheetDeps } from "../../../features/genesis/GenesisSheet";
@@ -25,6 +25,8 @@ function drop(map: Timers, p: string) {
 export function useWakeStatus(invokeFn: Invoke, listenWake: ListenWake) {
   const [wakes, setWakes] = useState<Map<string, WakeRowState>>(new Map());
   const inflight = useRef(new Set<string>());
+  const started = useRef(new Set<string>());
+  const wakeStarts = useRef(new Map<string, number>());
   const fades = useRef<Timers>(new Map());
   const deadlines = useRef<Timers>(new Map());
 
@@ -38,9 +40,11 @@ export function useWakeStatus(invokeFn: Invoke, listenWake: ListenWake) {
   const settle = useCallback((p: string, state: WakeRowState) => {
     drop(deadlines.current, p);
     setWakes(prev => new Map(prev).set(p, state));
-    if (state.phase === "outcome" && wakeOutcomeIsTransient(state)) fade(p);
+    if (state.phase === "outcome" && state.kind !== "sent" && wakeOutcomeIsTransient(state)) fade(p);
   }, [fade]);
   const begin = useCallback((p: string) => {
+    started.current.add(p);
+    wakeStarts.current.set(p, Date.now());
     drop(fades.current, p);
     drop(deadlines.current, p);
     setWakes(prev => new Map(prev).set(p, { phase: "running" }));
@@ -54,7 +58,10 @@ export function useWakeStatus(invokeFn: Invoke, listenWake: ListenWake) {
     inflight.current.add(p);
     try {
       const out = await run;
-      settle(p, classifyWakeOutcome(out, null));
+      const outcome = classifyWakeOutcome(out, null);
+      if (outcome.kind === "woken") {
+        setWakes(prev => prev.get(p)?.phase === "running" ? new Map(prev).set(p, { phase: "kickoff", step: "pending" }) : prev);
+      } else settle(p, outcome);
       return out;
     } catch (reason) {
       settle(p, classifyWakeOutcome(null, reason instanceof Error ? reason.message : String(reason)));
@@ -67,16 +74,25 @@ export function useWakeStatus(invokeFn: Invoke, listenWake: ListenWake) {
     let stop: (() => void) | undefined;
     listenWake(p => {
       if (!alive) return;
+      if (!started.current.has(p.project)) return;
       const next = wakeProgressRowState(p.phase, p.detail);
-      setWakes(prev => (prev.has(p.project) ? applyWakeProgress(prev, p) : prev));
+      setWakes(prev => applyWakeProgress(prev, p));
       if (next?.phase === "outcome") {
         drop(deadlines.current, p.project);
-        if (wakeOutcomeIsTransient(next)) fade(p.project);
+        if (next.kind !== "sent" && wakeOutcomeIsTransient(next)) fade(p.project);
       }
     }).then(off => { if (alive) stop = off; else off(); }, () => {});
     return () => { alive = false; stop?.(); };
   }, [listenWake, fade]);
   useEffect(() => () => { for (const t of [...fades.current.values(), ...deadlines.current.values()]) clearTimeout(t); }, []);
+
+  const dismiss = useCallback((p: string) => {
+    started.current.delete(p);
+    wakeStarts.current.delete(p);
+    drop(fades.current, p);
+    drop(deadlines.current, p);
+    setWakes(prev => { const m = new Map(prev); m.delete(p); return m; });
+  }, []);
 
   /** The classic row's Wake: the same command with the same plain kickoff the CLI then overrides. */
   const retry = useCallback((p: string) => guardedWake(inflight.current, p, async () => {
@@ -84,5 +100,5 @@ export function useWakeStatus(invokeFn: Invoke, listenWake: ListenWake) {
     await track(p, invokeFn<string>("project_wake", { project: p, kickoff: PLAIN_WAKE_KICKOFF })).catch(() => {});
   }), [invokeFn, begin, track]);
 
-  return { wakes, begin, track, retry };
+  return { wakes, wakeStarts: wakeStarts.current, begin, track, retry, dismiss };
 }

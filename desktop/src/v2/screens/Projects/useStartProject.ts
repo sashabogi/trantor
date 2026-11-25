@@ -68,8 +68,8 @@ export function useStartProject(opts: { addProject: (p: string) => void; onNavig
     },
   };
   return {
-    open: devRoot !== null, devRoot: devRoot ?? "", deps, wakes: status.wakes, retry: status.retry,
-    planHint, dismissHint: () => setPlanHint(null),
+    open: devRoot !== null, devRoot: devRoot ?? "", deps, wakes: status.wakes, wakeStarts: status.wakeStarts,
+    retry: status.retry, dismissWake: status.dismiss, planHint, dismissHint: () => setPlanHint(null),
     startProject, close, rootProps, onMade: addProject, onCreated: created,
   };
 }

@@ -176,6 +176,82 @@ describe("Start a project in the 2.0 shell", () => {
     expect(status()).toContain("First prompt delivered");
   });
 
+  it("keeps following the detached kickoff after the early awake answer", async () => {
+    let finish: (line: string) => void = () => {};
+    wakeAnswer = () => new Promise<string>(resolve => { finish = resolve; });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await mount();
+    await createProject("fresh-one");
+    await act(async () => { emitWake({ project: "fresh-one", phase: "opened", detail: null }); });
+    await act(async () => { finish("project awake in pane w20:p1 · kickoff running in the background"); });
+    await act(async () => { emitWake({ project: "fresh-one", phase: "waiting_idle", detail: null }); });
+    await act(async () => { emitWake({ project: "fresh-one", phase: "kickoff_sent", detail: null }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(87_000); });
+    await act(async () => {
+      emitWake({ project: "fresh-one", phase: "kickoff_landed", detail: "kickoff prompt delivered — successor is recapping · 1 attempt(s), 87s" });
+      emitWake({ project: "fresh-one", phase: "ended", detail: null });
+    });
+    expect(status()).toContain("First prompt delivered to the orchestrator.");
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(status()).toContain("First prompt delivered to the orchestrator.");
+    await click(q('button[aria-label="Dismiss wake status"]'));
+    expect(status()).not.toContain("First prompt delivered");
+  });
+
+  it("does not let a late awake answer rewind kickoff progress", async () => {
+    let finish: (line: string) => void = () => {};
+    wakeAnswer = () => new Promise<string>(resolve => { finish = resolve; });
+    await mount();
+    await createProject("fresh-one");
+    await act(async () => { emitWake({ project: "fresh-one", phase: "kickoff_sent", detail: null }); });
+    expect(status()).toContain("First prompt sent. Waiting on the session…");
+    await act(async () => { finish("project awake in pane w1:p1 · kickoff running in the background"); });
+    expect(status()).toContain("First prompt sent. Waiting on the session…");
+    expect(status()).not.toContain("Waiting for it to take its first prompt");
+  });
+
+  it("does not let a late awake answer replace a delivered outcome", async () => {
+    let finish: (line: string) => void = () => {};
+    wakeAnswer = () => new Promise<string>(resolve => { finish = resolve; });
+    await mount();
+    await createProject("fresh-one");
+    await act(async () => { emitWake({ project: "fresh-one", phase: "kickoff_landed", detail: "kickoff prompt delivered" }); });
+    expect(status()).toContain("First prompt delivered to the orchestrator.");
+    await act(async () => { finish("project awake in pane w1:p1 · kickoff running in the background"); });
+    expect(status()).toContain("First prompt delivered to the orchestrator.");
+  });
+
+  it("counts elapsed seconds across the opening and kickoff phases", async () => {
+    let finish: (line: string) => void = () => {};
+    wakeAnswer = () => new Promise<string>(resolve => { finish = resolve; });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    await mount();
+    await createProject("fresh-one");
+    expect(status()).toContain("Opening the orchestrator… · 0s");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(status()).toContain("Opening the orchestrator… · 2s");
+    await act(async () => { finish("project awake in pane w1:p1 · kickoff running in the background"); });
+    expect(status()).toContain("Waiting for it to take its first prompt… · 2s");
+    await act(async () => { emitWake({ project: "fresh-one", phase: "kickoff_sent", detail: null }); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(status()).toContain("First prompt sent. Waiting on the session… · 3s");
+  });
+
+  it("keeps elapsed time when switching away from a waking project and back", async () => {
+    wakeAnswer = () => new Promise<string>(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    await mount();
+    await createProject("fresh-one");
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(status()).toContain("Opening the orchestrator… · 2s");
+    await click(q('button[title="Switch project"]'));
+    await click(byText('[role="menu"] [role="menuitem"]', "trantor"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+    await click(q('button[title="Switch project"]'));
+    await click(byText('[role="menu"] [role="menuitem"]', "fresh-one"));
+    expect(status()).toContain("Opening the orchestrator… · 5s");
+  });
+
   it("shows a failed wake with its reason and Try again calls the same wake", async () => {
     wakeAnswer = () => Promise.reject(new Error("herdr is not installed"));
     await mount();
@@ -186,7 +262,7 @@ describe("Start a project in the 2.0 shell", () => {
     const wakes = calls.filter(c => c.cmd === "project_wake");
     expect(wakes).toHaveLength(2);
     expect(wakes[1]?.args).toEqual({ project: "fresh-one", kickoff: PLAIN_WAKE_KICKOFF });
-    expect(status()).toContain("Orchestrator opened.");
+    expect(status()).toContain("Waiting for it to take its first prompt");
     expect(byText('[role="status"] button', "Try again")).toBeNull();
   });
 
@@ -197,7 +273,7 @@ describe("Start a project in the 2.0 shell", () => {
     await createProject("fresh-one");
     expect(status()).toContain("Opening the orchestrator…");
     await act(async () => { await vi.advanceTimersByTimeAsync(WAKE_DEADLINE_MS + 1); });
-    expect(status()).toContain("No answer from the orchestrator after 2 minutes");
+    expect(status()).toContain("No answer from the orchestrator after 3 minutes 20 seconds");
     expect(byText('[role="status"] button', "Try again")).not.toBeNull();
   });
 

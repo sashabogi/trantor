@@ -76,8 +76,9 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
   const start = useStartProject({ addProject: data.addProject, onNavigate, deps: startDeps });
   const props: ScreenProps = { client: data.client, project: data.active, onNavigate, onStartProject: start.startProject };
   const notice = data.active ? (
-    <WakeLine project={data.active} state={start.wakes.get(data.active)} hint={start.planHint === data.active}
-      onRetry={p => void start.retry(p)} onDismissHint={start.dismissHint} />
+    <WakeLine project={data.active} state={start.wakes.get(data.active)} startedAt={start.wakeStarts.get(data.active)}
+      hint={start.planHint === data.active} onRetry={p => void start.retry(p)} onDismiss={start.dismissWake}
+      onDismissHint={start.dismissHint} />
   ) : null;
   return (
     <div className="v2-root flex flex-col" {...start.rootProps}>
