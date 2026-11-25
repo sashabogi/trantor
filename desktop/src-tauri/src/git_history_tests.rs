@@ -78,6 +78,8 @@ async fn history_filters_by_path_and_the_whole_commit_message() {
 
     let file = git_history_at(&f.repo, true, Some("src/a.ts"), None, None).await.unwrap();
     assert_eq!(file.iter().map(|row| row.subject.as_str()).collect::<Vec<_>>(), vec!["visible subject"]);
+    let bare = git_history_at(&f.repo, true, Some("a.ts"), None, None).await.unwrap();
+    assert_eq!(bare.iter().map(|row| row.subject.as_str()).collect::<Vec<_>>(), vec!["visible subject"]);
     let message = git_history_at(&f.repo, true, None, Some("needle in the body"), None).await.unwrap();
     assert_eq!(message.len(), 1);
     assert_eq!(message[0].subject, "other subject");

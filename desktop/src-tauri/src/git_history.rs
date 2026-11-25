@@ -55,7 +55,8 @@ pub(crate) async fn git_history_at(
     }
     if let Some(path) = file {
         args.push("--".to_string());
-        args.push(path.to_string());
+        // A bare file name means that file wherever it sits; a path with a folder is taken as written.
+        args.push(if path.contains('/') { path.to_string() } else { format!(":(glob)**/{path}") });
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     Ok(parse_history(&run_git_text_io(dir, &refs).await?))
