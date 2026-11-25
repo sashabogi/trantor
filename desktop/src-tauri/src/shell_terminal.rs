@@ -188,9 +188,8 @@ mod tests {
 
     #[test]
     fn the_shell_env_names_trantor_and_drops_apple_terminal_session_markers() {
-        std::env::set_var("TERM_SESSION_ID", "w0t0p0:ABC");
-        std::env::set_var("TERM_PROGRAM", "Apple_Terminal");
-        let cmd = shell_command(Path::new("/tmp"), Some("/bin/zsh".into()), &[]);
+        // Carried values stand in for an inherited Apple Terminal env, so the test never mutates the process env other tests share.
+        let cmd = shell_command(Path::new("/tmp"), Some("/bin/zsh".into()), &[("TERM_SESSION_ID", "w0t0p0:ABC"), ("TERM_PROGRAM", "Apple_Terminal")]);
         assert_eq!(cmd.get_env("SHELL_SESSIONS_DISABLE").and_then(|v| v.to_str()), Some("1"));
         assert_eq!(cmd.get_env("TERM_PROGRAM").and_then(|v| v.to_str()), Some("Trantor"));
         assert_eq!(cmd.get_env("TERM").and_then(|v| v.to_str()), Some("xterm-256color"));
