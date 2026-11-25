@@ -110,10 +110,17 @@ async function deliver(n: { title: string; body: string }, inFrontToo = false): 
   try { await invoke("notify_send", { title: n.title, body: n.body }); return true; } catch { return false; }
 }
 
+/** One trace line per notification that was due and not shown, naming the gate (#14108 drill: a silent drop took three builds to find). */
+function skipped(n: { title: string }, gate: string) {
+  invoke("app_log", { line: `notify skipped: ${gate} (${n.title})` }).catch(() => {});
+  return false;
+}
+
 export async function notifyIfWorthIt(ev: HubEvent, me: string, isOffline?: (session: string) => boolean) {
-  if (!notificationsEnabled()) return false;
   const n = notificationFor(ev, me, isOffline);
   if (!n) return false;
-  if (!(await ensurePermission())) return false;
-  return deliver(n);
+  if (!notificationsEnabled()) return skipped(n, "switched off in Settings");
+  if (!(await ensurePermission())) return skipped(n, "macOS has not granted permission");
+  if (backgroundOnly() && windowInForeground()) return skipped(n, "Trantor is in front");
+  return deliver(n, true);
 }

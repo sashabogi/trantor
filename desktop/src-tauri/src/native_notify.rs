@@ -71,19 +71,39 @@ fn plugin_send(app: &AppHandle, title: &str, body: &str) -> Result<(), String> {
     app.notification().builder().title(title).body(body).show().map_err(|e| e.to_string())
 }
 
+// Set when the system refused the native path for this run (a bundle without a full signature is
+// refused with UNErrorDomain 1): the plugin path, which such builds always used, takes over.
+static NATIVE_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn native_refused() -> bool {
+    NATIVE_REFUSED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A refusal that is not the person's own "no": the system could not or would not ask.
+pub(crate) fn is_unavailable(answer: &str) -> bool {
+    answer.starts_with("unavailable")
+}
+
 #[tauri::command]
 pub async fn notify_permission(app: AppHandle) -> String {
-    let (answer, fallback) = match native_permission().await {
-        Some(answer) => (answer, false),
-        None => (plugin_permission(&app), true),
-    };
-    app_trace(&permission_line(&answer, fallback));
+    let native = native_permission().await;
+    if let Some(answer) = native.as_deref().filter(|a| !is_unavailable(a)) {
+        app_trace(&permission_line(answer, false));
+        return answer.to_string();
+    }
+    if let Some(refusal) = native {
+        NATIVE_REFUSED.store(true, std::sync::atomic::Ordering::Relaxed);
+        app_trace(&permission_line(&refusal, false));
+    }
+    let answer = plugin_permission(&app);
+    app_trace(&permission_line(&answer, true));
     answer
 }
 
 #[tauri::command]
 pub async fn notify_send(app: AppHandle, title: String, body: String) -> Result<(), String> {
-    let (result, fallback) = match native_send(&title, &body).await {
+    let native = if native_refused() { None } else { native_send(&title, &body).await };
+    let (result, fallback) = match native {
         Some(result) => (result, false),
         None => (plugin_send(&app, &title, &body), cfg!(target_os = "macos")),
     };
@@ -304,6 +324,14 @@ mod tests {
         assert_eq!(auth_answer(true, Some("ignored")), "granted");
         assert_eq!(auth_answer(false, None), "denied");
         assert_eq!(auth_answer(false, Some("boom")), "unavailable: boom");
+    }
+
+    #[test]
+    fn only_a_system_refusal_sends_this_run_to_the_plugin() {
+        assert!(is_unavailable("unavailable: The operation couldn't be completed. (UNErrorDomain error 1.)"));
+        assert!(is_unavailable("unavailable: no answer"));
+        assert!(!is_unavailable("denied"));
+        assert!(!is_unavailable("granted"));
     }
 
     #[test]

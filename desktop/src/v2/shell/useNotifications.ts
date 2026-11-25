@@ -2,6 +2,7 @@
 // shell does this in AppShell, which 2.0 never mounts, so the Notifications switch did nothing
 // here until this hook (#14108 drill). Mounted once by the shell, so nothing notifies twice.
 import { useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { HubClient } from "../../shared/api/client";
 import { notifyIfWorthIt } from "../../shared/notify";
 
@@ -26,6 +27,7 @@ export function useNotifications(client: Pick<HubClient, "peers" | "streamEvents
       const seen = lastSeen.current.get(session);
       return seen === undefined || Date.now() - seen > OFFLINE_AFTER_MS;
     };
+    invoke("app_log", { line: `notify listening as ${me}` }).catch(() => {});
     const off = client.streamEvents(ev => { void notifyIfWorthIt(ev, me, isOffline); });
     return () => { alive = false; clearInterval(timer); off(); };
   }, [client, me]);
