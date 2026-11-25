@@ -394,6 +394,15 @@ fn crew_runner_pids_match_the_project_dir_argv() {
 }
 
 #[test]
+fn a_prompt_that_mentions_the_runner_is_not_a_seat() {
+    // #14239: pgrep prints a multi-line argv over many rows, and "crew." and "forbidden." were listed as projects.
+    let raw = "1416 /opt/node /x/bin/crew-runner.mjs claude /Users/s/.agent-bus/trantor-duty\n89702 node /opt/codex exec resume --last You are a seat.\n\nLESSONS from previous crews:\n- never restart crew-runner.mjs by hand, ask the crew.\n- a 403 means forbidden.\n7 tests are green.\n";
+    assert_eq!(parse_crew_runner_rows(raw), vec![(1416, "trantor-duty".to_string())]);
+    assert_eq!(parse_crew_runner_pids(raw, "trantor-duty"), vec![1416]);
+    assert_eq!(parse_crew_runner_pids(raw, "forbidden."), Vec::<u32>::new());
+}
+
+#[test]
 fn project_sessions_json_assembles_pane_terminal_and_seat_rows() {
     let crew_rows = [
         "trantor\torch\t__orch__\tpane-1",

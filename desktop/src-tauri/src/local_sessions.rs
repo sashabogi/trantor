@@ -313,16 +313,9 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
     }
 
     // crew seats: `node …/crew-runner.mjs <agent> <projectDir>`
-    for line in sh("/usr/bin/pgrep", &["-fl", "crew-runner.mjs"]).lines() {
-        if let Some(dir) = line.split_whitespace().last() {
-            if let Some(name) = std::path::Path::new(dir)
-                .file_name()
-                .and_then(|n| n.to_str())
-            {
-                if !name.is_empty() && !name.starts_with('.') {
-                    out.push(name.to_string());
-                }
-            }
+    for (_, name) in parse_crew_runner_rows(&sh("/usr/bin/pgrep", &["-fl", "crew-runner.mjs"])) {
+        if !name.starts_with('.') {
+            out.push(name);
         }
     }
 
@@ -447,24 +440,35 @@ pub(crate) fn parse_lsof_pid_cwds(raw: &str) -> Vec<(u32, String)> {
     out
 }
 
-pub(crate) fn parse_crew_runner_pids(raw: &str, project: &str) -> Vec<u32> {
+/// `pgrep -fl crew-runner.mjs` rows that are a runner: pid, then argv ending `…/crew-runner.mjs <agent> <dir>`.
+/// #14239: a CLI whose prompt mentions the runner prints its argv over many lines; those are not seats.
+pub(crate) fn parse_crew_runner_rows(raw: &str) -> Vec<(u32, String)> {
     let mut out = Vec::new();
     for line in raw.lines() {
-        let mut fields = line.split_whitespace();
-        let Some(pid) = fields.next().and_then(|p| p.parse::<u32>().ok()) else {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [pid, .., script, _agent, dir] = fields.as_slice() else {
             continue;
         };
-        let Some(dir) = line.split_whitespace().last() else {
+        let Ok(pid) = pid.parse::<u32>() else {
             continue;
         };
-        if std::path::Path::new(dir)
-            .file_name()
-            .and_then(|n| n.to_str())
-            == Some(project)
-        {
-            out.push(pid);
+        if !script.ends_with("crew-runner.mjs") || !dir.starts_with('/') {
+            continue;
+        }
+        if let Some(name) = std::path::Path::new(dir).file_name().and_then(|n| n.to_str()) {
+            if !name.is_empty() {
+                out.push((pid, name.to_string()));
+            }
         }
     }
+    out
+}
+
+pub(crate) fn parse_crew_runner_pids(raw: &str, project: &str) -> Vec<u32> {
+    let mut out: Vec<u32> = parse_crew_runner_rows(raw)
+        .into_iter()
+        .filter_map(|(pid, name)| (name == project).then_some(pid))
+        .collect();
     out.sort();
     out.dedup();
     out
