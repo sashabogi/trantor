@@ -100,6 +100,45 @@ pub(crate) async fn git_commit_at(dir: &Path, message: &str) -> Result<String, S
         .map(|s| s.trim().to_string())
 }
 
+pub(crate) fn fetch_args() -> [&'static str; 3] {
+    ["fetch", "--prune", "origin"]
+}
+
+pub(crate) fn fetch_error(stderr: &str) -> String {
+    stderr.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("git fetch failed").to_string()
+}
+
+pub(crate) async fn git_fetch_at(dir: &Path) -> Result<(), String> {
+    let mut command = tokio::process::Command::new("git");
+    command
+        .arg("-C")
+        .arg(dir)
+        .args(fetch_args())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let out = tokio::time::timeout(Duration::from_secs(30), command.output())
+        .await
+        .map_err(|_| "git fetch timed out after 30 seconds".to_string())?
+        .map_err(|e| format!("git could not start: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(fetch_error(&String::from_utf8_lossy(&out.stderr)))
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn git_fetch(
+    project: String,
+    agent: Option<String>,
+    scope: Option<String>,
+) -> Result<(), String> {
+    let scope = parse_scope(agent.as_deref(), scope.as_deref())?;
+    let dir = scope_dir(&project, &scope)?;
+    git_fetch_at(&dir).await
+}
+
 /// One file a commit touched: git's name-status letter plus its numstat counts (null = binary).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct GitShowFile {

@@ -27,6 +27,10 @@ export async function scopeCommit(project: string, agent: GitScopeArg, message: 
   return invoke<string>("git_commit", { project, ...scopeArgs(agent), message });
 }
 
+export async function scopeFetch(project: string, agent: GitScopeArg): Promise<void> {
+  await invoke("git_fetch", { project, ...scopeArgs(agent) });
+}
+
 /** One file a commit touched: git's name-status letter, numstat counts (null when binary). */
 export type GitShowFile = { path: string; status: string; plus: number | null; minus: number | null };
 export type GitCommitShow = { sha: string; files: GitShowFile[]; patch: string; truncated: boolean };

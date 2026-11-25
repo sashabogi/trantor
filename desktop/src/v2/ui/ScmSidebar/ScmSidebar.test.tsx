@@ -40,6 +40,8 @@ let calls: Call[];
 type Opened = { file: string[]; change: string[]; commit: string[] };
 const opened: Opened = { file: [], change: [], commit: [] };
 let picked: (string | null)[];
+let fetchReply: (() => void | Promise<void>) | null;
+let mutations: number;
 
 let host: HTMLDivElement;
 let root: Root;
@@ -48,6 +50,8 @@ beforeEach(() => {
   calls = [];
   opened.file = []; opened.change = []; opened.commit = [];
   picked = [];
+  fetchReply = null;
+  mutations = 0;
   state = { kind: "ok", snap: SEAT_SNAP };
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -62,6 +66,7 @@ beforeEach(() => {
     if (command === "git_panel") return JSON.stringify(PANEL);
     if (command === "git_stage") return null;
     if (command === "git_commit") return "newsha";
+    if (command === "git_fetch") return fetchReply?.();
     if (command === "plugin:event|listen") return 1;
     return null;
   });
@@ -75,10 +80,10 @@ afterEach(async () => {
 });
 
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
-const render = async () => {
+const render = async (project = "trantor") => {
   await act(async () => {
-    root.render(<ScmSidebar project="trantor" scope="glm-5" scopeName="glm-5" state={state} seats={SEATS}
-      onPickScope={s => picked.push(s)} onMutated={() => undefined}
+    root.render(<ScmSidebar project={project} scope="glm-5" scopeName="glm-5" state={state} seats={SEATS}
+      onPickScope={s => picked.push(s)} onMutated={() => { mutations += 1; }}
       onOpenFile={p => opened.file.push(p)} onOpenChange={p => opened.change.push(p)} onOpenCommit={s => opened.commit.push(s)} />);
   });
   await flush(); await flush();
@@ -238,6 +243,36 @@ describe("ahead/behind beside the branch (#14047)", () => {
     state = { kind: "loading" };
     await render();
     expect(host.querySelector("[data-ahead]")).toBeNull();
+  });
+});
+
+describe("Fetch (#14056)", () => {
+  it("spins, fetches the current scope, refreshes counts and remembers the fetch time", async () => {
+    let finish: () => void = () => undefined;
+    fetchReply = () => new Promise<void>(resolve => { finish = resolve; });
+    await render("fetch-success");
+    const button = byLabel("Fetch from origin");
+    await click(button);
+    expect(button?.disabled).toBe(true);
+    expect(button?.querySelector("svg")?.getAttribute("class")).toContain("animate-spin");
+    await act(async () => { finish(); });
+    await flush();
+    expect(calls.find(c => c.command === "git_fetch")?.args).toEqual({ project: "fetch-success", agent: "glm-5" });
+    expect(mutations).toBe(1);
+    expect(button?.disabled).toBe(false);
+    expect(host.querySelector("[data-ahead]")?.getAttribute("title")).toContain("fetched 1m ago");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("shows git's failure and leaves the counts and fetch time alone", async () => {
+    fetchReply = () => { throw new Error("fatal: could not resolve host"); };
+    await render("fetch-error");
+    await click(byLabel("Fetch from origin"));
+    await flush();
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("fatal: could not resolve host");
+    expect(host.querySelector("[data-ahead]")?.textContent).toBe("2 unlanded");
+    expect(host.querySelector("[data-ahead]")?.getAttribute("title")).not.toContain("fetched");
+    expect(mutations).toBe(0);
   });
 });
 

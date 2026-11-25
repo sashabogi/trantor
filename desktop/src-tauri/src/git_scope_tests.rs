@@ -86,6 +86,14 @@ async fn project_panel_reads_branch_status_counts_and_log() {
 }
 
 #[test]
+fn fetch_prunes_origin_and_returns_only_the_first_error_line() {
+    assert_eq!(fetch_args(), ["fetch", "--prune", "origin"]);
+    assert_eq!(fetch_error("fatal: could not read from remote\nmore detail\n"), "fatal: could not read from remote");
+    assert_eq!(fetch_error("\n  fatal: offline  \ndetail"), "fatal: offline");
+    assert_eq!(fetch_error(""), "git fetch failed");
+}
+
+#[test]
 fn log_limit_defaults_to_the_seat_count_and_is_clamped() {
     assert_eq!(log_limit(None), 15);
     assert_eq!(log_limit(Some(0)), 1);

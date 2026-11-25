@@ -1,14 +1,14 @@
 // The source-control toolbar (#13988): branch pill and picker, Fetch, Push with its ahead count,
 // how long ago git was read, and the Changes / History switch.
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, GitBranch } from "lucide-react";
+import { ArrowUp, ChevronDown, GitBranch, RefreshCw } from "lucide-react";
 import { aheadLabel, gitPush } from "../../../features/code/gitApi";
 import { Button } from "../../ui/Button";
 import { Seg } from "../../ui/Seg";
 import { BranchPicker, type PickerActions } from "./BranchPicker";
 import { readAgo, type SeatInfo } from "./model";
 import { MainCheckoutMark } from "./parts";
-import { CHECKOUT_REFUSAL } from "./scopeGitApi";
+import { CHECKOUT_REFUSAL, scopeFetch } from "./scopeGitApi";
 import type { ScopeSnapshot } from "./useScopeGit";
 
 export type ScmView = "changes" | "history";
@@ -38,6 +38,16 @@ function PushButton({ project, snap, onDone, onError }: { project: string; snap:
   return <Button variant="ghost" icon={<ArrowUp size={12} aria-hidden />} disabledReason={reason} onClick={push} title={`Push ${snap?.branch ?? ""} to origin`}>Push ↑{ahead}</Button>;
 }
 
+function FetchButton({ project, scope, onDone, onError }: { project: string; scope: string | null; onDone: () => void; onError: (m: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const fetch = () => {
+    setBusy(true);
+    scopeFetch(project, scope).then(onDone).catch(e => onError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
+  };
+  return <Button variant="ghost" icon={<RefreshCw size={12} aria-hidden className={busy ? "animate-spin" : undefined} />}
+    disabledReason={busy ? "Fetching from origin" : null} onClick={fetch} title="Fetch origin with prune">Fetch</Button>;
+}
+
 export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMutated, onError }: {
   project: string; snap: ScopeSnapshot | null; seats: SeatInfo[]; scope: string | null; acts: PickerActions;
   view: ScmView; onView: (v: ScmView) => void; onMutated: () => void; onError: (m: string) => void;
@@ -64,7 +74,7 @@ export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMut
           {aheadLabel(snap)}<MainCheckoutMark />
         </span>
       )}
-      <Button variant="ghost" disabledReason="Fetch needs a git fetch command. Not wired yet.">Fetch</Button>
+      <FetchButton project={project} scope={scope} onDone={onMutated} onError={onError} />
       <PushButton project={project} snap={snap} onDone={onMutated} onError={onError} />
       {snap && <span className="text-[11.5px] text-[var(--v2-muted)]" title="When git was last read for this view">read {readAgo(snap.readAt, now)}</span>}
       <span className="flex-1" />
