@@ -1,6 +1,6 @@
 // The chat column's content: the orchestrator Chat is the only permanent view; Sessions opens as a sheet over it (#13987 drill).
 import { saveTrayOpen } from "../../../features/chat/prefs";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Chat, DEFAULT_CHAT_DEPS, type ChatDeps } from "../../../features/chat/Chat";
 import { SessionsMode } from "../../../features/code/SessionsMode";
@@ -10,6 +10,7 @@ import { setOpenIntent } from "../../shell/openIntent";
 import { IconButton } from "../../ui/IconButton";
 import { ChatHeader, type SheetKind } from "./ChatHeader";
 import { ComposerAdapter } from "./ComposerAdapter";
+import { PromptTimeline } from "./PromptTimeline";
 import type { SeatView } from "./seatModel";
 
 /** Chat with the 2.0 composer swapped in; every other seam stays the production one. */
@@ -64,5 +65,12 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
 // #13987 drill: Chat's read-only terminal tray is a second view of the pane already on the left, and opening it blanked that one.
 export function ChatNoTray({ children }: { children: ReactNode }) {
   useState(() => { saveTrayOpen(false); return null; });
-  return <div data-v2-chat className="flex min-h-0 flex-1 flex-col">{children}</div>;
+  const chat = useRef<HTMLDivElement | null>(null);
+  // The timeline sits beside the chat, so it never covers the scrollbar or the composer (#14075).
+  return (
+    <div className="flex min-h-0 flex-1">
+      <div ref={chat} data-v2-chat className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+      <PromptTimeline root={chat} />
+    </div>
+  );
 }

@@ -1308,6 +1308,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
                 ) : (
                   <div
                     key={j}
+                    data-prompt-id={t.role === "user" ? `${i}.${j}` : undefined}
                     className={`rounded-lg px-3 py-2 text-[length:calc(12.5px*var(--chat-scale,1))] leading-relaxed ${
                       t.role === "user"
                         ? "whitespace-pre-wrap break-words bg-tr-panel"
