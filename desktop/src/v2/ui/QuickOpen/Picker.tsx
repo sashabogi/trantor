@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Search } from "lucide-react";
 import { Kbd } from "../Kbd";
+import { useTypeAhead } from "../useTypeAhead";
 
 /** Selection and keys for a list of `count` rows; Enter calls `onPick` with the selected index. */
 export function useListKeys(count: number, resetKey: string, onPick: (index: number) => void, onClose: () => void) {
@@ -21,7 +22,7 @@ export function Picker({ label, placeholder, query, onQuery, onKeyDown, onClose,
   onKeyDown: (e: KeyboardEvent) => void; onClose: () => void; children: ReactNode;
 }) {
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { input.current?.focus(); }, []);
+  useTypeAhead(input);
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--v2-scrim-soft)] pt-[12vh]"
       onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>

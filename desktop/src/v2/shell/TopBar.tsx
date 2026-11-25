@@ -1,5 +1,5 @@
 // Top bar from the Workspace/Dashboard artboards: project switcher, mode, search, bell, account (#v2-F).
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Bell, ChevronDown, Code2, Network, Plus, Search, SplitSquareHorizontal } from "lucide-react";
 import { Seg, type SegOption } from "../ui/Seg";
 import { IconButton } from "../ui/IconButton";
@@ -7,6 +7,7 @@ import { Kbd } from "../ui/Kbd";
 import { ProjectTile } from "../ui/ProjectTile";
 import { Avatar } from "../ui/Avatar";
 import { Popover, MenuItem } from "./Popover";
+import { useTypeAhead } from "../ui/useTypeAhead";
 import type { Navigate } from "../routes";
 import { MODE_CONFIG, type Mode } from "./shellMode";
 
@@ -43,7 +44,8 @@ function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<
   const [cursor, setCursor] = useState(0);
   const field = useRef<HTMLInputElement>(null);
   const shown = filterProjects(projects, query);
-  useEffect(() => { if (open) { setQuery(""); setCursor(Math.max(0, projects.indexOf(project))); field.current?.focus(); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  useTypeAhead(field, open);
+  const toggle = () => { if (!open) { setQuery(""); setCursor(Math.max(0, projects.indexOf(project))); } setOpen(o => !o); };
   const choose = (p: string) => { onProject(p); setOpen(false); };
   const onKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -57,7 +59,7 @@ function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<
   };
   return (
     <div className="relative">
-      <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(o => !o)}
+      <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={toggle}
         title="Switch project"
         className="v2-hover inline-flex items-center gap-2 rounded-md border-0 bg-transparent px-1.5 py-1 text-v2-base font-semibold text-[var(--v2-text)]">
         {project ? <ProjectTile name={project} size={22} /> : null}

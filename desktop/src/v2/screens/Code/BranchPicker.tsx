@@ -1,11 +1,12 @@
 // Branch scope and branch mutations. Seat rows retain their live presence; local and remote rows
 // act on the selected checkout through the scoped native commands.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ArrowDownAZ, Clock, GitBranch as GitBranchIcon, MoreHorizontal, Search } from "lucide-react";
 import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
 import { Seg } from "../../ui/Seg";
+import { useTypeAhead } from "../../ui/useTypeAhead";
 import { PRESENCE_COLOR, PRESENCE_LABEL, seatLabel } from "../../ui/identity";
 import { type SeatInfo } from "./model";
 import { SectionLabel } from "./parts";
@@ -127,12 +128,14 @@ export function BranchPicker({ project, seats, snap, scope, acts, onClose, onMut
   const branchState = useBranchOps({ project, seats, snap, scope, onClose, onMutated, onError, onOpenConflict });
   const { filter, setFilter, show, setShow, sort, setSort, groups, locals, remotes } = useBranchRows(seats, branchState.branches);
   const { ops, dialog, setDialog, busy } = branchState;
+  const filterField = useRef<HTMLInputElement>(null);
+  useTypeAhead(filterField);
   return (
     <div role="dialog" aria-label="Switch branch" className="absolute left-0 top-[calc(100%+6px)] z-50 w-[560px] max-w-[92vw] rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] shadow-[var(--v2-shadow-dialog)]">
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2">
         <Search size={13} aria-hidden className="text-[var(--v2-muted)]" />
         <label htmlFor="v2-branch-filter" className="sr-only">Switch to a branch or seat</label>
-        <input id="v2-branch-filter" autoFocus value={filter} onChange={event => setFilter(event.target.value)} placeholder="Switch to a branch, seat or worktree…"
+        <input id="v2-branch-filter" ref={filterField} value={filter} onChange={event => setFilter(event.target.value)} placeholder="Switch to a branch, seat or worktree…"
           className="min-w-0 flex-1 border-0 bg-transparent text-v2-base text-[var(--v2-text)] outline-none" />
         <IconButton label={sort === "recent" ? "Sort: most recent first" : "Sort: A to Z"} title="Sort: most recent first, or A to Z" size={24} onClick={() => setSort(value => (value === "recent" ? "name" : "recent"))}>
           {sort === "recent" ? <Clock size={13} aria-hidden /> : <ArrowDownAZ size={13} aria-hidden />}
