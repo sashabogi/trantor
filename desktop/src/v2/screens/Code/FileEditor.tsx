@@ -11,6 +11,7 @@ import { useAskActions } from "./useAskActions";
 import { useFileDoc } from "./useFileDoc";
 import { EditorFooter } from "./EditorFooter";
 import { useChangeMarkers } from "./useChangeMarkers";
+import { FilePreview, previewKind } from "./FilePreview";
 
 const NO_SEATS: AskSeat[] = [];
 
@@ -22,7 +23,7 @@ function revealAt(ed: MonacoEditor.IStandaloneCodeEditor, r: Reveal) {
   ed.focus();
 }
 
-export default function FileEditor({ project, scope, path, reveal, headRev = null, onOpenGraph, onDirty, onSaved, seats = NO_SEATS, onAsk, onSendToSeat }: {
+function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenGraph, onDirty, onSaved, seats = NO_SEATS, onAsk, onSendToSeat }: {
   project: string; scope: string | null; path: string; reveal?: Reveal; headRev?: string | null; onOpenGraph: () => void;
   onDirty?: (dirty: boolean) => void; onSaved?: () => void;
   seats?: AskSeat[]; onAsk?: (text: string) => void; onSendToSeat?: (seat: string, text: string) => void;
@@ -40,7 +41,7 @@ export default function FileEditor({ project, scope, path, reveal, headRev = nul
     if (reveal && editorRef.current) revealAt(editorRef.current, reveal);
   }, [reveal, loaded]);
   if (doc.load.kind === "loading") return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Reading {path}</div>;
-  if (doc.load.kind === "error") return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{doc.load.reason}</div>;
+  if (doc.load.kind === "error") return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{doc.load.reason === "binary file" ? "This file is not text" : doc.load.reason}</div>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">
@@ -58,4 +59,11 @@ export default function FileEditor({ project, scope, path, reveal, headRev = nul
       <EditorFooter editorRef={editorRef} version={editorVersion} />
     </div>
   );
+}
+
+/** Markdown and images open in a preview; every other file is the text editor above. */
+export default function FileEditor(props: Parameters<typeof TextFileEditor>[0]) {
+  const kind = previewKind(props.path);
+  if (!kind) return <TextFileEditor {...props} />;
+  return <FilePreview kind={kind} project={props.project} scope={props.scope} path={props.path} source={<TextFileEditor {...props} />} />;
 }

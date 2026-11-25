@@ -199,7 +199,7 @@ describe("behaviour", () => {
     await mount();
     await act(async () => { item("clean.ts")?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
     const menu = host.querySelector('[role="menu"][aria-label="Actions for clean.ts"]');
-    expect([...(menu?.querySelectorAll("button") ?? [])].map(b => b.textContent)).toEqual(["New file", "Rename", "Delete"]);
+    expect([...(menu?.querySelectorAll("button") ?? [])].map(b => b.textContent)).toEqual(["New file", "Rename", "Delete", "Move to", "Copy path", "Copy relative path", "Reveal in Finder"]);
     await click([...(menu?.querySelectorAll("button") ?? [])].find(b => b.textContent === "Delete") ?? null);
     await flush();
     expect(calls.find(c => c.command === "delete_file")?.args).toMatchObject({ path: "clean.ts" });

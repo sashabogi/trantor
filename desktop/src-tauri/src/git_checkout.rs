@@ -82,7 +82,7 @@ pub(crate) async fn git_push(
     git_push_at(&dir).await
 }
 
-fn trash_root() -> Result<std::path::PathBuf, String> {
+pub(crate) fn trash_root() -> Result<std::path::PathBuf, String> {
     if let Some(path) = std::env::var_os("TRANTOR_TRASH_DIR") {
         return Ok(std::path::PathBuf::from(path));
     }
@@ -98,7 +98,7 @@ fn trash_root() -> Result<std::path::PathBuf, String> {
     Ok(home.join(".local/share/Trash/files"))
 }
 
-fn discard_folder(root: &Path) -> Result<std::path::PathBuf, String> {
+pub(crate) fn discard_folder(root: &Path) -> Result<std::path::PathBuf, String> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("cannot date the Trash backup: {e}"))?;
@@ -107,7 +107,7 @@ fn discard_folder(root: &Path) -> Result<std::path::PathBuf, String> {
     Ok(folder)
 }
 
-fn copy_path(source: &Path, destination: &Path) -> Result<(), String> {
+pub(crate) fn copy_path(source: &Path, destination: &Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(source).map_err(|e| format!("cannot read {}: {e}", source.display()))?;
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("cannot create Trash folder {}: {e}", parent.display()))?;

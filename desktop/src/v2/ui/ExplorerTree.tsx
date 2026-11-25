@@ -6,13 +6,13 @@ import { createFile, deleteFile, renameFile, safePath, type FileEntry } from "..
 import { Popover } from "../shell/Popover";
 import { IconButton } from "./IconButton";
 import { ExplorerRow, NameInput, type RowAction, type RowMark } from "./ExplorerRow";
+import { joinPath, parentOf, renameFolder } from "./explorerOps";
+import { MoveToPicker } from "./MoveToPicker";
+import { useExplorerOps } from "./useExplorerOps";
 import { LEGEND, TONE_VAR, decorate, decorateCode } from "./explorerStatus";
 import { useExplorerData, type ExplorerData } from "./useExplorerData";
 
 type Edit = { kind: "create"; dir: string; folder: boolean } | { kind: "rename"; entry: FileEntry } | null;
-
-const parentOf = (path: string) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "");
-const joinPath = (dir: string, name: string) => (dir ? `${dir}/${name}` : name);
 
 function Legend() {
   const [open, setOpen] = useState(false);
@@ -79,6 +79,9 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
   const [menu, setMenu] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [moving, setMoving] = useState<FileEntry | null>(null);
+  const [dragPath, setDragPath] = useState<string | null>(null);
+  const [overPath, setOverPath] = useState<string | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   const scopeSeat = seat ?? undefined;
 
@@ -96,9 +99,11 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
     setEdit(null);
     const path = joinPath(parentOf(entry.path), name);
     if (!name || name === entry.name || !guard(path)) return;
-    run(renameFile(project, entry.path, path, scopeSeat));
+    run(entry.dir ? renameFolder(project, entry.path, path, scopeSeat) : renameFile(project, entry.path, path, scopeSeat));
   };
+  const ops = useExplorerOps({ project, seat: scopeSeat, run, note: setNote });
   const remove = (entry: FileEntry) => {
+    if (entry.dir) return ops.removeFolder(entry);
     if (!confirm(`Delete ${entry.path}?`)) return;
     run(deleteFile(project, entry.path, scopeSeat));
   };
@@ -106,6 +111,8 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
     setMenu(null);
     if (a === "delete") remove(entry);
     else if (a === "rename") setEdit({ kind: "rename", entry });
+    else if (a === "move") setMoving(entry);
+    else if (a === "copy-path" || a === "copy-relative" || a === "reveal") ops.extra(entry, a);
     else {
       const dir = entry.dir ? entry.path : parentOf(entry.path);
       if (dir) d.expand(dir);
@@ -119,16 +126,22 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
   const createAt = (dir: string) => edit?.kind === "create" && edit.dir === dir
     ? <NameInput depth={dir ? (d.rows.find(r => r.entry.path === dir)?.depth ?? -1) + 1 : 0} placeholder={edit.folder ? "folder name" : "file name"} onCommit={n => commitCreate(dir, edit.folder, n)} onCancel={() => setEdit(null)} />
     : null;
+  const dropOn = (dir: string) => {
+    const dragged = d.rows.find(r => r.entry.path === dragPath)?.entry;
+    setDragPath(null); setOverPath(null);
+    if (dragged) { if (dir) d.expand(dir); ops.move(dragged, dir); }
+  };
   const firstPath = d.rows[0]?.entry.path;
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-1 px-2 py-1">
+      <div className="flex items-center gap-1 px-2 py-1" data-root-drop onDragOver={e => { if (dragPath) e.preventDefault(); }} onDrop={e => { e.preventDefault(); dropOn(""); }}>
         <span className="flex-1" />
         <IconButton label="New file" title="Create a new file (relative path, e.g. src/foo.ts)" size={24} onClick={() => setEdit({ kind: "create", dir: "", folder: false })}>
           <Plus size={13} aria-hidden />
         </IconButton>
         <Legend />
       </div>
+      {moving && <MoveToPicker project={project} seat={seat} entry={moving} onClose={() => setMoving(null)} onPick={dir => { if (dir) d.expand(dir); ops.move(moving, dir); setMoving(null); }} />}
       {note && <div role="status" className="px-3 pb-1 text-[11px] text-[var(--v2-bad)]">{note}</div>}
       <div ref={treeRef} role="tree" aria-label="Files" onKeyDown={onKeyDown} className="flex flex-col">
         {createAt("")}
@@ -136,7 +149,9 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
           <div key={entry.path} role="none">
             <ExplorerRow entry={entry} depth={depth} open={d.expanded.includes(entry.path)} mark={markOf(entry, d)}
               selected={!entry.dir && openPath === entry.path} focusable={focused === null ? entry.path === firstPath : focused === entry.path}
-              menuOpen={menu === entry.path} renaming={edit?.kind === "rename" && edit.entry.path === entry.path}
+              menuOpen={menu === entry.path}
+              drag={{ over: overPath === entry.path && entry.dir, onStart: () => setDragPath(entry.path), onEnd: () => { setDragPath(null); setOverPath(null); }, onOver: () => setOverPath(entry.path), onDrop: () => dropOn(entry.path) }}
+              renaming={edit?.kind === "rename" && edit.entry.path === entry.path}
               onActivate={() => { setFocused(entry.path); if (entry.dir) d.toggle(entry.path); else onOpen(entry.path); }}
               onFocusRow={() => setFocused(entry.path)} onMenu={() => setMenu(entry.path)} onCloseMenu={() => setMenu(null)}
               onAction={a => act(entry, a)} onRenamed={n => commitRename(entry, n)} onRenameCancel={() => setEdit(null)} />
