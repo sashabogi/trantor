@@ -219,7 +219,8 @@ describe("both screens use it", () => {
     const ref = { current: null };
     function Column() {
       const col = useFilesColumn();
-      return <FilesColumn col={col} workspace={ref} project="trantor" scope={null} scopeName="project checkout" onOpenFile={() => undefined} />;
+      return <FilesColumn col={col} workspace={ref} project="trantor" scope={null} scopeName="project checkout"
+        onOpenFile={() => undefined} onOpenChange={() => undefined} onOpenCommit={() => undefined} />;
     }
     await act(async () => { root.render(<Column />); });
     await flush();
@@ -231,9 +232,9 @@ describe("both screens use it", () => {
   it("the Code Explorer sidebar renders the new tree", async () => {
     const client = new HubClient("http://hub.test", async () => ({ status: 200, body: JSON.stringify({ tasks: [] }) }));
     await act(async () => {
-      root.render(<Sidebar view="explorer" client={client} project="trantor" scope={null} seats={[]} snap={null} selected={null}
-        onOpenFile={() => undefined} onSelectChange={() => undefined} onMutated={() => undefined} onOpenSource={() => undefined}
-        onPickSeat={() => undefined} onOpenConflict={() => undefined} />);
+      root.render(<Sidebar view="explorer" client={client} project="trantor" scope={null} seats={[]} state={{ kind: "loading" }} selected={null}
+        onOpenFile={() => undefined} onOpenChange={() => undefined} onOpenCommit={() => undefined} onMutated={() => undefined}
+        onOpenSource={() => undefined} onPickSeat={() => undefined} onOpenConflict={() => undefined} />);
     });
     await flush();
     expect(host.querySelector('[role="tree"]')).not.toBeNull();

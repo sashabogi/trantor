@@ -39,7 +39,7 @@ function FileRow({ entry, letter, snap, selected, onSelect, action, conflict, on
   );
 }
 
-function CommitBox({ project, snap, staged, onDone, onError }: {
+export function CommitBox({ project, snap, staged, onDone, onError }: {
   project: string; snap: ScopeSnapshot; staged: number; onDone: () => void; onError: (m: string) => void;
 }) {
   const [message, setMessage] = useState("");

@@ -99,6 +99,14 @@ export function fileChipLabel(code: string): Letter {
   return "M";
 }
 
+/** The change the diff shows (#14044): the operator's pick, else the intent's focus, else the
+ *  first chip. A pick that vanished from the list falls through rather than showing nothing. */
+export function pickChange(paths: readonly string[], picked: string | null, focus: string | null): string | null {
+  if (picked && paths.includes(picked)) return picked;
+  if (focus && paths.includes(focus)) return focus;
+  return paths[0] ?? null;
+}
+
 /** "5m" style age from epoch ms, for the toolbar's read-ago text. */
 export function readAgo(at: number, now: number): string {
   const s = Math.max(0, Math.round((now - at) / 1000));

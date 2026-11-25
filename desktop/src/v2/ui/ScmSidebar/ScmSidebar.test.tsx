@@ -1,0 +1,214 @@
+// @vitest-environment happy-dom
+// #14044 drill: the source control sidebar's header, flat Changes list, Files, Recent commits,
+// remembered sections and clicks. Fakes sit at the Tauri IPC and a per-test localStorage only.
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { ScmSidebar } from "./index";
+import { flatChanges } from "./ChangesSection";
+import { readScmSectionOpen, writeScmSectionOpen, SCM_KEY_PREFIX } from "./sectionState";
+import type { ScopeSnapshot, ScopeState } from "../../screens/Code/useScopeGit";
+
+// SAFETY: React's test-only flag enables act warnings for this DOM fixture.
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const STATUS = [
+  { path: "bin/a.mjs", x: " ", y: "M" },
+  { path: "src/staged.ts", x: "M", y: " " },
+  { path: "fresh.ts", x: "?", y: "?" },
+  { path: "src/c.ts", x: "U", y: "U" },
+];
+const LOG = [
+  { sha: "abc1234def", author: "glm-5", when: "2 hours ago", subject: "#14044 Flat changes list" },
+  { sha: "fedcba9876", author: "orchestrator", when: "5 hours ago", subject: "Land the sidebar" },
+];
+const PANEL = { branch: "seat/glm-5", upstream: null, ahead: 2, behind: null, status: STATUS, counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }], log: LOG };
+const SEAT_SNAP: ScopeSnapshot = { scope: "glm-5", branch: "seat/glm-5", upstream: null, ahead: 2, behind: null, status: STATUS, counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }], log: LOG, seatBacked: true, readAt: Date.now() };
+const CHECKOUT_SNAP: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, status: STATUS, counts: [], log: LOG, seatBacked: false, readAt: Date.now() };
+const ROOTS = JSON.stringify([{ name: "README.md", path: "README.md", dir: false, status: "M" }]);
+
+type IpcArgs = { project?: string; agent?: string; scope?: string; paths?: string[]; unstage?: boolean; message?: string };
+type Call = { command: string; args: IpcArgs };
+let calls: Call[];
+type Opened = { file: string[]; change: string[]; commit: string[] };
+const opened: Opened = { file: [], change: [], commit: [] };
+
+let host: HTMLDivElement;
+let root: Root;
+let state: ScopeState = { kind: "ok", snap: SEAT_SNAP };
+beforeEach(() => {
+  calls = [];
+  opened.file = []; opened.change = []; opened.commit = [];
+  state = { kind: "ok", snap: SEAT_SNAP };
+  const mem = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
+    removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
+  });
+  mockIPC((command, payload) => {
+    // SAFETY: mockIPC types payload as unknown; these commands are invoked with an object of named args.
+    const args = (payload ?? {}) as IpcArgs;
+    calls.push({ command, args });
+    if (command === "project_files") return ROOTS;
+    if (command === "git_panel") return JSON.stringify(PANEL);
+    if (command === "git_stage") return null;
+    if (command === "git_commit") return "newsha";
+    if (command === "plugin:event|listen") return 1;
+    return null;
+  });
+  host = document.createElement("div");
+  document.body.append(host);
+  root = createRoot(host);
+});
+afterEach(async () => {
+  await act(async () => { root.unmount(); });
+  host.remove(); clearMocks(); vi.unstubAllGlobals();
+});
+
+const flush = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
+const render = async () => {
+  await act(async () => {
+    root.render(<ScmSidebar project="trantor" scope="glm-5" scopeName="glm-5" state={state} onMutated={() => undefined}
+      onOpenFile={p => opened.file.push(p)} onOpenChange={p => opened.change.push(p)} onOpenCommit={s => opened.commit.push(s)} />);
+  });
+  await flush(); await flush();
+};
+const click = (el: Element | null) => act(async () => { if (el instanceof HTMLElement) el.click(); });
+const byLabel = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+const sectionBody = (s: string) => host.querySelector(`[data-section-body="${s}"]`);
+const typeMessage = async (text: string) => {
+  const input = host.querySelector<HTMLInputElement>("#v2-commit-msg");
+  await act(async () => {
+    if (!input) return;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+
+describe("flatChanges", () => {
+  it("gives every changed path one row with the chip letter and the stage direction", () => {
+    const rows = flatChanges(STATUS);
+    expect(rows.map(r => [r.path, r.letter])).toEqual([
+      ["bin/a.mjs", "M"], ["src/staged.ts", "M"], ["fresh.ts", "U"], ["src/c.ts", "M"],
+    ]);
+    expect(rows.find(r => r.path === "src/staged.ts")).toMatchObject({ staged: true, unstaged: false, conflict: false });
+    expect(rows.find(r => r.path === "bin/a.mjs")).toMatchObject({ staged: false, unstaged: true });
+    expect(rows.find(r => r.path === "fresh.ts")).toMatchObject({ staged: false, unstaged: true });
+    expect(rows.find(r => r.path === "src/c.ts")).toMatchObject({ conflict: true, staged: false });
+  });
+});
+
+describe("section persistence", () => {
+  it("defaults open and stores the choice under trantor.v2.scm.<section>", () => {
+    expect(readScmSectionOpen("changes")).toBe(true);
+    writeScmSectionOpen("changes", false);
+    expect(readScmSectionOpen("changes")).toBe(false);
+    expect(readScmSectionOpen("files")).toBe(true);
+  });
+});
+
+describe("the sidebar", () => {
+  it("reads Source control with the branch and scope name, and lists all three sections", async () => {
+    await render();
+    expect(host.textContent).toContain("Source control");
+    expect(host.textContent).toContain("seat/glm-5");
+    expect(host.textContent).toContain("glm-5");
+    expect(sectionBody("changes")).not.toBeNull();
+    expect(sectionBody("files")).not.toBeNull();
+    expect(sectionBody("commits")).not.toBeNull();
+  });
+
+  it("shows every changed file in one flat list, staged and unstaged together", async () => {
+    await render();
+    const list = sectionBody("changes");
+    for (const path of ["bin/a.mjs", "src/staged.ts", "fresh.ts", "src/c.ts"]) {
+      expect(list?.querySelector(`[data-change="${path}"]`)).not.toBeNull();
+    }
+    expect(host.querySelector('[data-change="bin/a.mjs"]')?.textContent).toContain("+4");
+    expect(byLabel("Stage bin/a.mjs")).not.toBeNull();
+    expect(byLabel("Unstage src/staged.ts")).not.toBeNull();
+    expect(host.querySelector("[data-count]")?.textContent).toBe("4");
+  });
+
+  it("keeps the conflict row protected and discard refused everywhere", async () => {
+    await render();
+    expect(byLabel("Stage src/c.ts")?.disabled).toBe(true);
+    expect(byLabel("Stage src/c.ts")?.title).toContain("conflict record");
+    expect(host.querySelector('[data-change="src/c.ts"] button[title="Resolve this conflict"]')).not.toBeNull();
+    expect(byLabel("Discard bin/a.mjs")?.disabled).toBe(true);
+    expect(byLabel("Discard bin/a.mjs")?.title).toContain("git restore");
+  });
+
+  it("stages and unstages per row through the scope git bridge", async () => {
+    await render();
+    await click(byLabel("Stage bin/a.mjs"));
+    expect(calls.find(c => c.command === "git_stage")?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["bin/a.mjs"], unstage: false });
+    await click(byLabel("Unstage src/staged.ts"));
+    expect(calls.filter(c => c.command === "git_stage")[1]?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["src/staged.ts"], unstage: true });
+  });
+
+  it("Stage all batches every non-conflicted change in one call", async () => {
+    await render();
+    const button = [...host.querySelectorAll("button")].find(b => b.textContent === "Stage all");
+    await click(button ?? null);
+    expect(calls.find(c => c.command === "git_stage")?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["bin/a.mjs", "fresh.ts"], unstage: false });
+  });
+
+  it("commits through the bridge with the staged count", async () => {
+    await render();
+    await typeMessage("#14044 land it");
+    await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes("Commit 1 file to seat/glm-5")) ?? null);
+    await flush();
+    expect(calls.find(c => c.command === "git_commit")?.args).toEqual({ project: "trantor", agent: "glm-5", message: "#14044 land it" });
+  });
+
+  it("on the main checkout the refusal travels with the commit box and discard", async () => {
+    state = { kind: "ok", snap: CHECKOUT_SNAP };
+    await render();
+    const commit = [...host.querySelectorAll("button")].find(b => b.textContent?.includes("Commit 1 file to main"));
+    expect(commit?.querySelector("[data-main-checkout]")).not.toBeNull();
+    expect(byLabel("Discard bin/a.mjs")?.title).toContain("orchestrator");
+  });
+
+  it("collapses one section, remembers it across a remount, and reopens", async () => {
+    await render();
+    await click(host.querySelector('button[data-section-toggle="changes"]'));
+    expect(sectionBody("changes")).toBeNull();
+    expect(sectionBody("files")).not.toBeNull();
+    expect(localStorage.getItem(`${SCM_KEY_PREFIX}.changes`)).toBe("false");
+    await render();
+    expect(sectionBody("changes")).toBeNull();
+    await click(host.querySelector('button[data-section-toggle="changes"]'));
+    expect(sectionBody("changes")).not.toBeNull();
+    expect(localStorage.getItem(`${SCM_KEY_PREFIX}.changes`)).toBe("true");
+  });
+
+  it("a changed file, a commit and a file each reach the host", async () => {
+    await render();
+    await click(host.querySelector('button[title="Show the diff for bin/a.mjs"]'));
+    expect(opened.change).toEqual(["bin/a.mjs"]);
+    await click(host.querySelector('[data-sha="abc1234def"]'));
+    expect(opened.commit).toEqual(["abc1234def"]);
+    await click(host.querySelector('[role="treeitem"][data-path="README.md"]'));
+    expect(opened.file).toEqual(["README.md"]);
+  });
+
+  it("empty git data says so instead of stub sections", async () => {
+    state = { kind: "ok", snap: { ...SEAT_SNAP, status: [], counts: [], log: [] } };
+    await render();
+    expect(sectionBody("changes")?.textContent).toContain("No uncommitted changes.");
+    expect(sectionBody("commits")?.textContent).toContain("No commits yet.");
+    expect([...host.querySelectorAll("button")].find(b => b.textContent === "Stage all")).toBeUndefined();
+    for (const stub of ["Graph", "Pull requests", "Stashes"]) expect(host.textContent).not.toContain(stub);
+  });
+
+  it("waits while git loads and surfaces an error without sections crashing", async () => {
+    state = { kind: "loading" };
+    await render();
+    expect(host.textContent).toContain("Reading git");
+    state = { kind: "error", reason: "git is not reachable" };
+    await render();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("git is not reachable");
+  });
+});

@@ -9,7 +9,7 @@ import { ChangesList } from "./ChangesList";
 import { CommitDetail, UnlandedDetail } from "./CommitDetail";
 import { DiffPane, type ChipFile } from "./DiffPane";
 import { HistoryView, UNLANDED_KEY } from "./HistoryView";
-import { fileChipLabel, toRow, type HistoryRow } from "./model";
+import { fileChipLabel, pickChange, toRow, type HistoryRow } from "./model";
 import { useFileDiff, useSeatDiff } from "./usePatch";
 import type { ScmView } from "./Toolbar";
 import type { ScopeSnapshot } from "./useScopeGit";
@@ -33,10 +33,10 @@ function changeChips(snap: ScopeSnapshot): ChipFile[] {
   return out;
 }
 
-function ChangesBody(p: { project: string; snap: ScopeSnapshot; acts: ChatActs; onMutated: () => void; onOpenFile: (path: string) => void; onOpenConflict: (path: string) => void }) {
+function ChangesBody(p: { project: string; snap: ScopeSnapshot; acts: ChatActs; onMutated: () => void; onOpenFile: (path: string) => void; onOpenConflict: (path: string) => void; focusPath: string | null }) {
   const chips = useMemo(() => changeChips(p.snap), [p.snap]);
   const [picked, setPicked] = useState<string | null>(null);
-  const selected = picked && chips.some(c => c.path === picked) ? picked : chips[0]?.path ?? null;
+  const selected = pickChange(chips.map(c => c.path), picked, p.focusPath);
   const patch = useFileDiff(p.project, p.snap.scope, selected, statusSignature(p.snap));
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
@@ -69,6 +69,8 @@ function HistoryBody(p: { project: string; snap: ScopeSnapshot; cards: Card[]; s
 export function SourceControlTab(p: {
   project: string; snap: ScopeSnapshot; view: ScmView; cards: Card[]; seats: readonly string[]; selectedKey: string | null; onSelectKey: (k: string) => void;
   acts: ChatActs; onNavigate: Navigate; onMutated: () => void; onOpenFile: (path: string) => void; onOpenConflict: (path: string | null) => void;
+  /** the change an open intent focused, shown until the operator picks another (#14044) */
+  focusChange: string | null;
 }) {
   const conflicts = conflictPaths(p.snap.status);
   return (
@@ -80,7 +82,7 @@ export function SourceControlTab(p: {
         </div>
       )}
       {p.view === "changes"
-        ? <ChangesBody project={p.project} snap={p.snap} acts={p.acts} onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} />
+        ? <ChangesBody project={p.project} snap={p.snap} acts={p.acts} onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} focusPath={p.focusChange} />
         : <HistoryBody project={p.project} snap={p.snap} cards={p.cards} selectedKey={p.selectedKey} onSelect={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} seats={p.seats} />}
     </div>
   );

@@ -41,6 +41,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const [chatWant, setChatWant] = useState<string | null>(null);
   const [conflictPath, setConflictPath] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [changeFocus, setChangeFocus] = useState<string | null>(null);
   const snap = state.kind === "ok" ? state.snap : null;
   const view: ScmView = viewPick ?? (snap?.seatBacked ? "history" : "changes");
   const visible = sidebarVisible(tabs.active.kind, override);
@@ -50,7 +51,9 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const openFile = (path: string) => tabs.open({ id: `file:${scope ?? ""}:${path}`, kind: "file", label: base(path), scope, path });
   const openConflict = (path: string | null) => { setConflictPath(path); tabs.open({ id: "conflict", kind: "conflict", label: "Merge conflicts", scope }); };
   const pick = (seat: string | null) => { setScope(seat); setKey(null); tabs.activate("source"); };
-  // #13987 drill: the Workspace files column and Git icon leave a note here; take it once per project.
+  const openChange = (path: string) => { setChangeFocus(path); setViewPick("changes"); tabs.activate("source"); };
+  const openCommit = (sha: string) => { setKey(sha); setViewPick("history"); tabs.activate("source"); };
+  // #13987/#14044 drill: the Workspace source control sidebar leaves a note here; take it once per project.
   const { open: openTab, activate: activateTab } = tabs;
   useEffect(() => {
     const intent = takeOpenIntent(project);
@@ -59,6 +62,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     setScope(seat);
     setKey(null);
     if (intent.kind === "file") openTab({ id: `file:${seat ?? ""}:${intent.path}`, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
+    else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); }
+    else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
     else activateTab("source");
   }, [project, openTab, activateTab]);
   const picker: PickerActions = {
@@ -80,9 +85,9 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     <div className="flex min-h-[600px] min-w-0 flex-1" data-testid="code-screen">
       <IconBar active={side} folded={!visible} onPick={onIcon} changeCount={changeCount} />
       {visible && (
-        <Sidebar view={side} client={client} project={project} scope={scope} seats={seats} snap={snap} selected={null} onOpenFile={openFile}
-          onSelectChange={() => tabs.activate("source")} onMutated={refresh} onOpenSource={() => { tabs.activate("source"); setOverride(false); }}
-          onPickSeat={pick} onOpenConflict={openConflict} />
+        <Sidebar view={side} client={client} project={project} scope={scope} seats={seats} state={state} selected={changeFocus}
+          onOpenFile={openFile} onOpenChange={openChange} onMutated={refresh} onOpenSource={() => { tabs.activate("source"); setOverride(false); }}
+          onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} onActivate={tabs.activate} onClose={tabs.close}
@@ -90,7 +95,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
         <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} />
         {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
         <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
-          selectedKey={key} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
+          selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
           onOpenConflict={openConflict} conflictPath={conflictPath} />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
@@ -100,7 +105,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
 
 type MainProps = {
   tab: CodeTab; client: ScreenProps["client"]; project: string; snap: ScopeSnapshot | null; state: ScopeState; view: ScmView; cards: Card[];
-  seats: string[]; selectedKey: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: ScreenProps["onNavigate"];
+  seats: string[]; selectedKey: string | null; focusChange: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: ScreenProps["onNavigate"];
   onMutated: () => void; onOpenFile: (p: string) => void; onOpenConflict: (p: string | null) => void; conflictPath: string | null;
 };
 
@@ -118,6 +123,6 @@ function Main(p: MainProps) {
   if (p.tab.kind === "conflict") {
     return <ConflictView project={p.project} snap={p.snap} path={p.conflictPath ?? conflictPaths(p.snap.status)[0] ?? null} onPick={path => p.onOpenConflict(path)} onResolved={p.onMutated} />;
   }
-  return <SourceControlTab project={p.project} snap={p.snap} view={p.view} cards={p.cards} seats={p.seats} selectedKey={p.selectedKey} onSelectKey={p.onSelectKey}
-    acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} />;
+  return <SourceControlTab project={p.project} snap={p.snap} view={p.view} cards={p.cards} seats={p.seats} selectedKey={p.selectedKey} focusChange={p.focusChange}
+    onSelectKey={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} />;
 }

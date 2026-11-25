@@ -1,8 +1,11 @@
-// A one-shot note from one lens to the next: "open this file" or "show source control" (#13987 drill).
-// Workspace sets it then navigates; Code takes it on mount, so a file chosen in the files column is not dropped.
+// A one-shot note from one lens to the next: "open this file", "show source control", "show this
+// change's diff" or "show this commit" (#13987, #14044). Workspace sets it then navigates; Code
+// takes it on mount, so a choice made in the left column is not dropped.
 export type OpenIntent =
   | { kind: "file"; path: string; seat?: string }
-  | { kind: "source-control"; seat?: string };
+  | { kind: "source-control"; seat?: string }
+  | { kind: "change"; path: string; seat?: string }
+  | { kind: "commit"; sha: string; seat?: string };
 
 const pending = new Map<string, OpenIntent>();
 

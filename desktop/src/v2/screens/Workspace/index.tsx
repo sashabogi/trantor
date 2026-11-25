@@ -95,6 +95,9 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   const scope = selected && !selected.isOrchestrator && !selected.machine ? selected.agent : null;
   // #13987 drill: a chosen file used to be dropped on navigate; the intent carries it to the Code screen.
   const openFile = (path: string) => { setOpenIntent(project, { kind: "file", path, seat: scope ?? undefined }); onNavigate("code"); };
+  // #14044 drill: a changed file or a commit clicked in the source control sidebar opens Code on it.
+  const openChange = (path: string) => { setOpenIntent(project, { kind: "change", path, seat: scope ?? undefined }); onNavigate("code"); };
+  const openCommit = (sha: string) => { setOpenIntent(project, { kind: "commit", sha, seat: scope ?? undefined }); onNavigate("code"); };
 
   let body;
   if (data.seats === null) body = <div className="m-5 text-[12.5px] text-[var(--v2-muted)]">Reading seats</div>;
@@ -110,7 +113,7 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   return (
     <div ref={workspaceRef} className="flex min-h-0 flex-1">
       <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
-        scopeName={scope ?? "project checkout"} onOpenFile={openFile} />
+        scopeName={scope ?? "project checkout"} onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />

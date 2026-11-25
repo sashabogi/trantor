@@ -1,20 +1,20 @@
-// The sidebar beside file tabs (#13988): Explorer, Search, a Source control summary, Agents, Cards
-// and Problems. The Source control summary is the same list the full tab uses, in a narrow column.
+// The sidebar beside file tabs (#13988): Explorer, Search, the source control sidebar, Agents,
+// Cards and Problems. The "source" view is the same ScmSidebar the Workspace left column shows
+// (#14044): Changes, Files and Recent commits, one flat list with the commit box.
 import { useEffect, useState } from "react";
 import { Maximize2 } from "lucide-react";
 import type { Card, HubClient } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
 import { searchFiles } from "../../../features/code/fileApi";
-import { aheadLabel } from "../../../features/code/gitApi";
 import { Avatar } from "../../ui/Avatar";
 import { ExplorerTree } from "../../ui/ExplorerTree";
 import { IconButton } from "../../ui/IconButton";
 import { PRESENCE_LABEL, seatLabel } from "../../ui/identity";
-import { ChangesList } from "./ChangesList";
+import { ScmSidebar } from "../../ui/ScmSidebar";
 import type { SideView } from "./IconBar";
 import type { SeatInfo } from "./model";
-import { MainCheckoutMark, NotWiredBlock } from "./parts";
-import type { ScopeSnapshot } from "./useScopeGit";
+import { NotWiredBlock } from "./parts";
+import type { ScopeState } from "./useScopeGit";
 
 const CLOSED = new Set(["done", "archived", "cancelled", "rejected"]);
 
@@ -74,9 +74,9 @@ function CardsPane({ cards }: { cards: Card[] }) {
 }
 
 export type SidebarProps = {
-  view: SideView; client: HubClient; project: string; scope: string | null; seats: SeatInfo[]; snap: ScopeSnapshot | null;
-  selected: string | null; onOpenFile: (path: string) => void; onSelectChange: (path: string) => void; onMutated: () => void;
-  onOpenSource: () => void; onPickSeat: (seat: string) => void; onOpenConflict: (path: string) => void;
+  view: SideView; client: HubClient; project: string; scope: string | null; seats: SeatInfo[]; state: ScopeState;
+  selected: string | null; onOpenFile: (path: string) => void; onOpenChange: (path: string) => void; onOpenCommit: (sha: string) => void;
+  onMutated: () => void; onOpenSource: () => void; onPickSeat: (seat: string) => void; onOpenConflict: (path: string) => void;
 };
 
 function Body(p: SidebarProps) {
@@ -85,28 +85,25 @@ function Body(p: SidebarProps) {
   if (p.view === "search") return <SearchPane project={p.project} scope={p.scope} onOpen={p.onOpenFile} />;
   if (p.view === "agents") return <AgentsPane seats={p.seats} scope={p.scope} onPick={p.onPickSeat} />;
   if (p.view === "cards") return <CardsPane cards={cards} />;
-  if (p.view === "problems") return <div className="p-3"><NotWiredBlock title="Problems and review findings" line="Review findings are not wired into this screen yet, so nothing is counted here." /></div>;
-  if (!p.snap) return <div className="p-3 text-[12px] text-[var(--v2-muted)]">Reading git</div>;
-  return (
-    <>
-      <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-muted)]">
-        <span className="v2-mono text-[var(--v2-text)]">{p.snap.branch ?? "project checkout"}</span>
-        {!p.snap.seatBacked && <MainCheckoutMark />}
-        <span title={p.snap.upstream ?? "no upstream: ahead counts unlanded work against main"}>{aheadLabel(p.snap)}</span>
-      </div>
-      <ChangesList project={p.project} snap={p.snap} selected={p.selected} onSelect={p.onSelectChange} onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
-    </>
-  );
+  return <div className="p-3"><NotWiredBlock title="Problems and review findings" line="Review findings are not wired into this screen yet, so nothing is counted here." /></div>;
 }
 
 const TITLES = { explorer: "Explorer", search: "Search", source: "Source control", agents: "Agents", cards: "Cards", problems: "Problems" } as const satisfies Record<SideView, string>;
 
 export function Sidebar(p: SidebarProps) {
+  if (p.view === "source") {
+    return (
+      <aside aria-label="Source control" className="flex w-[280px] shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-panel)]">
+        <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scope ?? "project checkout"} state={p.state} selectedPath={p.selected}
+          onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onOpenConflict={p.onOpenConflict}
+          actions={<IconButton label="Open the full source control tab" title="Open the full tab" size={24} onClick={p.onOpenSource}><Maximize2 size={13} aria-hidden /></IconButton>} />
+      </aside>
+    );
+  }
   return (
     <aside aria-label={TITLES[p.view]} className="flex w-[280px] shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-panel)]">
       <div className="flex items-center gap-1 border-b border-[var(--v2-edge)] px-3 py-2">
         <span className="flex-1 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--v2-muted)]">{TITLES[p.view]}</span>
-        {p.view === "source" && <IconButton label="Open the full source control tab" title="Open the full tab" size={24} onClick={p.onOpenSource}><Maximize2 size={13} aria-hidden /></IconButton>}
       </div>
       <Body {...p} />
     </aside>

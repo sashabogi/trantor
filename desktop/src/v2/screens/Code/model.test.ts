@@ -1,6 +1,6 @@
 // #13988: the pure rules of the Code screen.
 import { describe, expect, it } from "vitest";
-import { deriveSeat, filterHistory, groupBranches, parseCardRef, parseSearch, sidebarVisible, toRow, type SeatInfo } from "./model";
+import { deriveSeat, filterHistory, groupBranches, parseCardRef, parseSearch, pickChange, sidebarVisible, toRow, type SeatInfo } from "./model";
 import { pairHunk, parseUnifiedDiff } from "./diff";
 import { countConflicts, parseConflicts, resolveChunks } from "./conflicts";
 import { closeTab, openTab } from "./useTabs";
@@ -71,6 +71,20 @@ describe("sidebar fold rule", () => {
     expect(sidebarVisible("source", true)).toBe(true);
     expect(sidebarVisible("pr", false)).toBe(false);
     expect(sidebarVisible("file", false)).toBe(true);
+  });
+});
+
+describe("pickChange (#14044)", () => {
+  const paths = ["bin/a.mjs", "src/a.ts"];
+  it("the operator's pick wins, then the intent's focus, then the first chip", () => {
+    expect(pickChange(paths, "src/a.ts", "bin/a.mjs")).toBe("src/a.ts");
+    expect(pickChange(paths, null, "bin/a.mjs")).toBe("bin/a.mjs");
+    expect(pickChange(paths, null, null)).toBe("bin/a.mjs");
+    expect(pickChange([], null, null)).toBeNull();
+  });
+  it("a pick or focus that left the list falls through instead of showing nothing", () => {
+    expect(pickChange(paths, "gone.ts", "bin/a.mjs")).toBe("bin/a.mjs");
+    expect(pickChange(paths, "gone.ts", "also-gone.ts")).toBe("bin/a.mjs");
   });
 });
 

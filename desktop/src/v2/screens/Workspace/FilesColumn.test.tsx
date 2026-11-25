@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-// #13987 drill: the Explorer lives in a left column that folds to a rail, resizes, remembers itself, and really opens files.
-// Fakes sit at the Tauri IPC and the hub transport only; the terminal is injected through panes.tsx like Workspace.test does.
+// #13987/#14044 drill: the left column is a source control sidebar that folds to a rail, resizes,
+// remembers itself, opens files, and opens Code on a clicked change or commit. Fakes sit at the
+// Tauri IPC and the hub transport only; the terminal is injected through panes.tsx like Workspace.test does.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,12 @@ import { FILES_OPEN_KEY, FILES_WIDTH_KEY } from "./chatColumnState";
 const PANES = { ...DEFAULT_PANES, TerminalPane: () => <div data-testid="terminal" />, RightPanel: () => <section aria-label="Project panel" /> };
 const client = () => new HubClient("http://hub.test", async () => ({ status: 200, body: JSON.stringify({ peers: [], tasks: [], holds: [] }) }));
 const ROOTS = JSON.stringify([{ name: "README.md", path: "README.md", dir: false }]);
+const PANEL = {
+  branch: "main", upstream: "origin/main", ahead: 0, behind: 0,
+  status: [{ path: "bin/a.mjs", x: " ", y: "M" }, { path: "src/staged.ts", x: "M", y: " " }],
+  counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }],
+  log: [{ sha: "abc1234", author: "orchestrator", when: "2 hours ago", subject: "#13988 Land the checkout panel" }],
+};
 
 let host: HTMLDivElement;
 let root: Root;
@@ -33,6 +40,7 @@ beforeEach(() => {
     if (command === "herdr_seats") return "[]";
     if (command === "identity_name") return "sasha";
     if (command === "project_files") return ROOTS;
+    if (command === "git_panel") return JSON.stringify(PANEL);
     if (command === "plugin:event|listen") return 1;
     return null;
   });
@@ -53,9 +61,10 @@ const mountScreen = async () => {
     </WorkspacePanesContext.Provider>);
   });
   await act(async () => { await new Promise(r => setTimeout(r, 20)); });
+  await act(async () => { await new Promise(r => setTimeout(r, 20)); });
 };
 const handle = () => host.querySelector<HTMLElement>('[role="separator"][aria-label="Resize files"]');
-const column = () => host.querySelector<HTMLElement>('aside[aria-label="Files column"]');
+const column = () => host.querySelector<HTMLElement>('aside[aria-label="Source control"]');
 const rail = () => host.querySelector<HTMLElement>('aside[aria-label="Files rail"]');
 const byLabel = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const click = (el: Element | null) => act(async () => { if (el instanceof HTMLElement) el.click(); });
@@ -137,11 +146,37 @@ describe("resizing", () => {
   });
 });
 
-describe("opening a file", () => {
-  it("sets a file intent for the project checkout and goes to Code", async () => {
-    localStorage.setItem(FILES_OPEN_KEY, "true");
+describe("the source control sidebar (#14044)", () => {
+  beforeEach(() => { localStorage.setItem(FILES_OPEN_KEY, "true"); });
+
+  it("reads Source control with the branch, the scope name and all three sections", async () => {
     await mountScreen();
-    const row = [...host.querySelectorAll<HTMLElement>('[role="treeitem"]')].find(b => b.textContent?.includes("README.md"));
+    const col = column();
+    expect(col?.textContent).toContain("Source control");
+    expect(col?.textContent).toContain("main");
+    expect(col?.textContent).toContain("project checkout");
+    expect(col?.querySelector('[data-section-body="changes"]')).not.toBeNull();
+    expect(col?.querySelector('[data-section-body="files"]')).not.toBeNull();
+    expect(col?.querySelector('[data-section-body="commits"]')).not.toBeNull();
+  });
+
+  it("clicking a changed file opens Code on that file's diff", async () => {
+    await mountScreen();
+    await click(column()?.querySelector('button[title="Show the diff for bin/a.mjs"]') ?? null);
+    expect(navigated).toEqual(["code"]);
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "change", path: "bin/a.mjs", seat: undefined });
+  });
+
+  it("clicking a commit opens Code on History with that commit", async () => {
+    await mountScreen();
+    await click(column()?.querySelector('[data-sha="abc1234"]') ?? null);
+    expect(navigated).toEqual(["code"]);
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "commit", sha: "abc1234", seat: undefined });
+  });
+
+  it("still opens a file from the tree through a file intent", async () => {
+    await mountScreen();
+    const row = [...(column()?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])].find(b => b.textContent?.includes("README.md"));
     expect(row).toBeDefined();
     await click(row ?? null);
     expect(navigated).toEqual(["code"]);
