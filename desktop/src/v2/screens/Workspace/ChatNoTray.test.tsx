@@ -16,7 +16,7 @@ describe("ChatNoTray", () => {
     expect(host.querySelector("[data-v2-chat]")?.textContent).toBe("chat");
   });
 
-  it("rides the chat's left edge once two prompts exist (#14241)", () => {
+  it("rides the chat's right edge once two prompts exist (#14254)", () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
     const host = document.createElement("div");
     act(() => {
@@ -25,7 +25,7 @@ describe("ChatNoTray", () => {
       </ChatNoTray>);
     });
     const row = host.firstElementChild;
-    expect(row?.firstElementChild?.tagName).toBe("NAV");
-    expect(row?.children[1]?.getAttribute("data-v2-chat")).not.toBeNull();
+    expect(row?.lastElementChild?.tagName).toBe("NAV");
+    expect(row?.firstElementChild?.getAttribute("data-v2-chat")).not.toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 // Pure model for the prompt timeline: one tick per operator message, never any invented detail (#14075).
+// #14250: a prompt also carries its reply's first line and how long the work ran.
 
-export type PromptItem = { id: string; text: string; ts?: number; files?: string[] };
+export type PromptItem = { id: string; text: string; ts?: number; files?: string[]; reply?: string; workedMs?: number };
 
 const WORDS = 8;
 
@@ -19,8 +20,8 @@ function filesOf(el: Element): string[] | undefined {
   } catch { return undefined; }
 }
 
-/** Reads the prompt id, text, optional send time and changed files off the DOM elements the
- *  chat marks (#14075, #14084). */
+/** Reads the prompt id, text, optional send time, reply line, worked time and changed files off
+ *  the DOM elements the chat marks (#14075, #14084, #14250). */
 export function readPrompts(els: ReadonlyArray<Element>): PromptItem[] {
   const out: PromptItem[] = [];
   for (const el of els) {
@@ -30,6 +31,10 @@ export function readPrompts(els: ReadonlyArray<Element>): PromptItem[] {
     const item: PromptItem = { id, text };
     const raw = Number(el.getAttribute("data-prompt-ts"));
     if (Number.isFinite(raw) && raw > 0) item.ts = raw;
+    const reply = el.getAttribute("data-prompt-reply");
+    if (reply && reply.trim()) item.reply = reply;
+    const worked = Number(el.getAttribute("data-prompt-worked-ms"));
+    if (Number.isFinite(worked) && worked > 0) item.workedMs = worked;
     const files = filesOf(el);
     if (files) item.files = files;
     out.push(item);
@@ -55,9 +60,25 @@ export function activeIndex(tops: ReadonlyArray<number>, slack = 8): number {
 export const showsTimeline = (count: number): boolean => count >= 2;
 
 /** Whether two prompt lists would draw the same column and cards, so a streaming mutation does
- *  not re-render it: files grow while a reply streams, so they are part of the comparison. */
+ *  not re-render it: files grow while a reply streams, and the reply line and worked time arrive
+ *  with it, so all are part of the comparison. */
 export function samePrompts(a: ReadonlyArray<PromptItem>, b: ReadonlyArray<PromptItem>): boolean {
   const sameFiles = (x: string[] | undefined, y: string[] | undefined): boolean =>
     x === y || (x !== undefined && y !== undefined && x.length === y.length && x.every((p, i) => p === y[i]));
-  return a.length === b.length && a.every((p, i) => p.id === b[i].id && p.text === b[i].text && p.ts === b[i].ts && sameFiles(p.files, b[i].files));
+  return a.length === b.length && a.every((p, i) => p.id === b[i].id && p.text === b[i].text && p.ts === b[i].ts
+    && p.reply === b[i].reply && p.workedMs === b[i].workedMs && sameFiles(p.files, b[i].files));
 }
+
+/** "45s" · "4m" · "7h 36m": how long a prompt's reply ran, rounded to the readiest unit (#14250). */
+export function workedText(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+}
+
+/** A tick's width by its distance from the pointer: 24px under it, 20 and 17 beside, 14 beyond (#14250). */
+export const TICK_WIDTHS = [24, 20, 17, 14] as const;
+export const tickWidth = (distance: number): number => TICK_WIDTHS[Math.min(Math.abs(distance), TICK_WIDTHS.length - 1)];

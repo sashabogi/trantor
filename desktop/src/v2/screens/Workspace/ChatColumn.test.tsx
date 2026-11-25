@@ -112,6 +112,29 @@ describe("resizing", () => {
   });
 });
 
+describe("panes as panels (#14250)", () => {
+  it("the chat column is its own panel and its splitter fills the gap on its left", async () => {
+    await mountScreen();
+    const col = column();
+    expect(col?.className).not.toContain("border-l");
+    const pane = col?.firstElementChild;
+    expect(pane?.className).toContain("rounded-lg");
+    expect(pane?.className).toContain("border-[var(--v2-edge)]");
+    expect(pane?.className).toContain("bg-[var(--v2-side)]");
+    expect(pane?.className).toContain("overflow-hidden");
+    expect(handle()?.className).toContain("-left-[6px]");
+  });
+
+  it("the closed rail is a rounded panel, not a border-l strip", async () => {
+    localStorage.setItem(OPEN_KEY, "false");
+    await mountScreen();
+    const rail = host.querySelector('aside[aria-label="Chat rail"]');
+    expect(rail?.className).toContain("rounded-lg");
+    expect(rail?.className).toContain("border-[var(--v2-edge)]");
+    expect(rail?.className).not.toContain("border-l");
+  });
+});
+
 describe("collapsing", () => {
   it("closes to a rail, reopens at the same width, and remembers across mounts", async () => {
     await mountScreen();

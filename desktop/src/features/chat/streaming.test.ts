@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBackfill, applyRows, applySessionChanged, bannerVisible, changedFiles, composerSlot, emptyChat,
-  gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn, openQuestion,
+  gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn, openQuestion, promptFacts,
   sessionLiveness, normalizeAttachments, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   elapsedShort, lastToolLabel, tickerText,
   type AskQuestion, type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
@@ -385,6 +385,40 @@ describe("changedFiles (#14084)", () => {
       { role: "assistant", blocks: [edit("Edit", "src/x.ts")] },
     ];
     expect(changedFiles(turns)).toEqual([[], [], ["src/x.ts"], []]);
+  });
+});
+
+describe("promptFacts (#14250)", () => {
+  const say = (text: string) => ({ kind: "text" as const, text });
+  const edit = (tool: string, path: string) => ({ kind: "tool" as const, text: path, tool, path });
+
+  it("answers each prompt with the first line of the first assistant text after it", () => {
+    const turns: Turn[] = [
+      { role: "user", blocks: [say("fix the login")], ts: 1_000 },
+      { role: "assistant", blocks: [{ kind: "thinking", text: "hmm" }, say("Done.\nThe details follow.")] },
+      { role: "user", blocks: [say("and the test?")] },
+    ];
+    expect(promptFacts(turns)).toEqual([{ reply: "Done." }, {}, {}]);
+  });
+
+  it("measures worked time from the prompt to the span's last assistant row, endTs included", () => {
+    const turns: Turn[] = [
+      { role: "user", blocks: [say("fix the login")], ts: 1_000 },
+      { role: "assistant", blocks: [edit("Edit", "src/a.ts")], ts: 61_000, endTs: 181_000 },
+      { role: "user", blocks: [say("thanks")], ts: 200_000 },
+    ];
+    expect(promptFacts(turns)).toEqual([{ workedMs: 180_000 }, {}, {}]);
+  });
+
+  it("answers before the first prompt with nothing, and never invents a worked time without both ends", () => {
+    const turns: Turn[] = [
+      { role: "assistant", blocks: [say("early"), edit("Edit", "src/early.ts")] },
+      { role: "user", blocks: [say("hello")] },
+      { role: "assistant", blocks: [say("hi")] },
+      { role: "user", blocks: [say("no clock on me")] },
+      { role: "assistant", blocks: [say("still no clock")], ts: 5_000 },
+    ];
+    expect(promptFacts(turns)).toEqual([{}, { reply: "hi" }, {}, { reply: "still no clock" }, {}]);
   });
 });
 

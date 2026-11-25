@@ -41,18 +41,21 @@ export function FilesColumn(p: FilesColumnProps) {
   if (!p.col.open) {
     return (
       <aside aria-label="Files rail" style={{ width: FILES_RAIL_WIDTH }}
-        className="flex min-h-0 shrink-0 flex-col items-center border-r border-[var(--v2-edge)] bg-[var(--v2-side)] py-2">
+        className="flex min-h-0 shrink-0 flex-col items-center overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)] py-2">
         <IconButton label="Open files" title="Open the source control sidebar" size={30} onClick={() => p.col.setOpen(true)}><Files size={16} aria-hidden /></IconButton>
       </aside>
     );
   }
   return (
     <aside aria-label="Source control" style={{ width: p.col.width, minWidth: FILES_MIN_WIDTH, maxWidth: "40%" }}
-      className="relative flex min-h-0 shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-side)]">
+      className="relative flex min-h-0 shrink-0 flex-col">
+      {/* #14250: the pane is a panel inside a plain wrapper, so the splitter strip can live in the gap outside the border. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)]">
+        <ScmColumn {...p} />
+      </div>
       <Splitter orientation="columns" edge="right" label="Resize files" title="Drag to resize, double-click to reset"
         value={p.col.width} min={FILES_COLUMN.min} max={maxFor(FILES_COLUMN, workspaceWidth(p.workspace))}
         onChange={p.col.setWidth} onCommit={p.col.commitWidth} onReset={() => p.col.commitWidth(FILES_COLUMN.fallbackWidth)} />
-      <ScmColumn {...p} />
     </aside>
   );
 }

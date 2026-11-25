@@ -81,19 +81,23 @@ describe("CodeScreen", () => {
     await mount();
     const body = host.querySelector('[data-testid="code-main"]');
     expect(body?.className).toContain("flex-1");
-    const panel = body?.nextElementSibling;
-    expect(panel?.matches('section[aria-label="Bottom panel"]') || panel?.querySelector('button[aria-label="Open bottom panel"]') != null).toBe(true);
+    // #14250: the editor column is one panel; the bottom panel is its own pane after it.
+    const editor = body?.parentElement?.parentElement ?? null;
+    const panel = editor?.nextElementSibling;
+    expect(panel?.querySelector('section[aria-label="Bottom panel"]') != null
+      || panel?.querySelector('button[aria-label="Open bottom panel"]') != null).toBe(true);
   });
 
-  // #14241: the source tab's changes list runs full height, outside the column that holds the bottom panel.
-  it("the changes list is not inside the column that holds the bottom panel", async () => {
+  // #14241: the source tab's changes list runs full height, outside the code-main column.
+  it("the changes list runs beside the code-main column, not inside it", async () => {
     await mount();
     const list = host.querySelector('[data-testid="source-list"]');
     const main = host.querySelector('[data-testid="code-main"]');
-    const panelColumn = main?.parentElement ?? null;
+    const mainColumn = main?.parentElement ?? null;
     expect(list).not.toBeNull();
-    expect(panelColumn?.contains(list)).toBe(false);
-    expect(panelColumn?.previousElementSibling).toBe(list);
+    expect(list?.parentElement).toBe(mainColumn);
+    expect(main?.previousElementSibling).toBe(list);
+    expect(main?.contains(list)).toBe(false);
     expect(list?.textContent).toContain("Staged 1");
     expect(main?.querySelector("[data-diff-scroll]")).not.toBeNull();
   });
@@ -139,6 +143,53 @@ describe("CodeScreen", () => {
 });
 
 const button = (text: string) => [...host.querySelectorAll("button")].find(b => b.textContent?.includes(text));
+
+describe("panes as panels (#14250)", () => {
+  beforeEach(() => { localStorage.setItem(MODE_KEY, "developer"); });
+
+  it("the screen is a chrome ground with 6px padding and gap; the icon bar and folded chat are panels", async () => {
+    await mount();
+    const ground = host.querySelector('[data-testid="code-screen"]');
+    expect(ground?.className).toContain("bg-[var(--v2-chrome)]");
+    expect(ground?.className).toContain("p-[6px]");
+    expect(ground?.className).toContain("gap-[6px]");
+    const icons = host.querySelector('nav[aria-label="Sidebar views"]');
+    expect(icons?.className).not.toContain("border-r");
+    expect(icons?.className).toContain("rounded-lg");
+    expect(icons?.className).toContain("border-[var(--v2-edge)]");
+    const chat = host.querySelector('aside[aria-label="Chat, folded"]');
+    expect(chat?.className).not.toContain("border-l");
+    expect(chat?.className).toContain("rounded-lg");
+    expect(chat?.className).toContain("border-[var(--v2-edge)]");
+    expect(chat?.className).toContain("overflow-hidden");
+  });
+
+  it("the editor column is one panel and the bottom panel is its own pane under it", async () => {
+    await mount();
+    // SAFETY: code-main's parent is the source-list row; that row's parent is the editor panel.
+    const editor = host.querySelector('[data-testid="code-main"]')?.parentElement?.parentElement ?? null;
+    expect(editor?.className).toContain("rounded-lg");
+    expect(editor?.className).toContain("border-[var(--v2-edge)]");
+    expect(editor?.className).toContain("bg-[var(--v2-bg)]");
+    expect(editor?.className).toContain("overflow-hidden");
+    const bottom = editor?.nextElementSibling;
+    expect(bottom?.querySelector('section[aria-label="Bottom panel"], button[aria-label="Open bottom panel"]')).not.toBeNull();
+    const pane = bottom?.querySelector('section[aria-label="Bottom panel"]');
+    expect(pane?.className).toContain("rounded-lg");
+    expect(pane?.className).toContain("border-[var(--v2-edge)]");
+    expect(pane?.className).not.toContain("border-t");
+  });
+
+  it("an open sidebar is a panel with no border-r it shares with the editor column", async () => {
+    await mount();
+    await click('button[aria-label="Explorer"]');
+    const side = host.querySelector('aside[aria-label="Explorer"]');
+    expect(side?.className).not.toContain("border-r");
+    expect(side?.className).toContain("rounded-lg");
+    expect(side?.className).toContain("border-[var(--v2-edge)]");
+    expect(side?.className).toContain("overflow-hidden");
+  });
+});
 
 describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
   it("shows the real branch, ahead and behind, the main checkout mark, and refuses push with the reason", async () => {

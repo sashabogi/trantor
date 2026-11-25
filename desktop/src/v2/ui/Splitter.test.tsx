@@ -101,4 +101,17 @@ describe("Splitter", () => {
     await act(async () => { handle()?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true })); });
     expect(widthNow()).toBe(416);
   });
+
+  it("#14250: the strip fills the 6px gap outside the pane's border, left, right and top", async () => {
+    await render();
+    expect(handle()?.className).toContain("w-[6px]");
+    expect(handle()?.className).toContain("-left-[6px]");
+    await render({ edge: "right" });
+    expect(handle()?.className).toContain("-right-[6px]");
+    await render({ orientation: "rows", edge: "top", label: "Resize chat", min: 120, max: 700, value: 240, onChange: vi.fn(), onCommit: vi.fn() });
+    expect(handle()?.className).toContain("h-[6px]");
+    expect(handle()?.className).toContain("-top-[6px]");
+    // The grip stays centred in the gap it now owns alone.
+    expect(handle()?.querySelector("[data-grip]")?.className).toContain("m-auto");
+  });
 });

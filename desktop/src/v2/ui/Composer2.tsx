@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type KeyboardEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, Paperclip } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./IconButton";
@@ -174,8 +174,19 @@ function ModelChip(p: Composer2Props) {
   );
 }
 
+// #14254: the box starts at two lines and grows with the text up to this height, then scrolls.
+const MAX_BOX_PX = 240;
+
 export function Composer2(p: Composer2Props) {
   const id = useId();
+  const box = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    // A zero reading means no layout (tests, a hidden pane): the two rows stand.
+    if (el.scrollHeight > 0) el.style.height = `${Math.min(el.scrollHeight, MAX_BOX_PX)}px`;
+  }, [p.value]);
   const text = p.value.trim();
   const blocked = !!p.disabledReason;
   const att = p.attachments;
@@ -188,9 +199,9 @@ export function Composer2(p: Composer2Props) {
   return (
     <div ref={att?.rootRef} className="flex min-w-0 flex-col gap-2 rounded-[14px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-[10px]">
       <label htmlFor={id} className="sr-only">{p.label}</label>
-      <textarea id={id} rows={2} value={p.value} placeholder={p.placeholder}
+      <textarea id={id} ref={box} rows={2} value={p.value} placeholder={p.placeholder}
         onChange={e => p.onChange(e.target.value)} onKeyDown={onKey} onPaste={att?.onPaste}
-        className="resize-none border-0 bg-transparent p-[2px] text-[12.5px] text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
+        className="resize-none overflow-y-auto border-0 bg-transparent p-[2px] text-[12.5px] leading-relaxed text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
       {att && <AttachmentRow chips={att.chips} onRemove={att.remove} />}
       {att?.error && <div role="status" className="text-[11px] text-[var(--v2-warn)]">{att.error}</div>}
       <div className="relative flex min-w-0 items-center gap-1.5">

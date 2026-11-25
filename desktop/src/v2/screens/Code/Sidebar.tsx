@@ -66,9 +66,11 @@ function Body(p: SidebarProps) {
 const TITLES = { explorer: "Explorer", search: "Search", source: "Source control", agents: "Agents", cards: "Cards" } as const satisfies Record<SideView, string>;
 
 export function Sidebar(p: SidebarProps) {
+  // #14250: each sidebar view is its own panel; the border-r it shared with the editor column is gone.
+  const panel = "flex w-[280px] shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)]";
   if (p.view === "source") {
     return (
-      <aside aria-label="Source control" className="flex w-[280px] shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-panel)]">
+      <aside aria-label="Source control" className={panel}>
         <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scope ?? "project checkout"} state={p.state} seats={p.seats}
           onPickScope={p.onPickSeat} selectedPath={p.selected}
           onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onOpenConflict={p.onOpenConflict}
@@ -77,7 +79,7 @@ export function Sidebar(p: SidebarProps) {
     );
   }
   return (
-    <aside aria-label={TITLES[p.view]} className="flex w-[280px] shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-panel)]">
+    <aside aria-label={TITLES[p.view]} className={panel}>
       <div className="flex items-center gap-1 border-b border-[var(--v2-edge)] px-3 py-2">
         <span className="flex-1 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--v2-muted)]">{TITLES[p.view]}</span>
       </div>

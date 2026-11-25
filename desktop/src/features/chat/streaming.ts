@@ -8,10 +8,10 @@ export type AskOption = { label: string; description: string };
 export type AskQuestion = { header: string; question: string; multiSelect: boolean; options: AskOption[] };
 export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string; ask?: AskQuestion[]; path?: string };
 /** `queued`: sent while the agent was mid-turn and NOT yet seen by the session — the middle of
- *  the three delivery states (sent, queued, seen); cleared when the dequeue marker (the queue's
- *  `remove` row) arrives. `ts`: epoch ms from the row that opened the turn (#14084); absent
- *  stays absent, so no time is ever guessed. */
-export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[]; queued?: boolean; ts?: number };
+ *  the three delivery states (sent, queued, seen); cleared when the dequeue marker arrives.
+ *  `ts`: epoch ms from the row that opened the turn, absent stays absent (#14084). `endTs`: epoch
+ *  ms of the LAST row folded into a grouped turn, so worked time spans the reply's tail (#14250). */
+export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[]; queued?: boolean; ts?: number; endTs?: number };
 export type ToolResult = { tool_id: string; ok: boolean; preview: string };
 /** The context window as the transcript's usage rows report it (#5508). `tokens`/`frac` are null
  *  until an assistant row with usage has been seen; `window` is 0 when unset — an unknown window
@@ -413,6 +413,35 @@ export function changedFiles(turns: ReadonlyArray<Turn>): string[][] {
       if (b.kind === "tool" && b.tool !== undefined && EDIT_TOOLS.has(b.tool) && b.path) {
         const files = out[prompt];
         if (!files.includes(b.path)) files.push(b.path);
+      }
+    }
+  });
+  return out;
+}
+
+/** What one operator prompt's answer says and how long it ran (#14250). Absent facts draw no
+ *  line, never a placeholder. */
+export type PromptFact = { reply?: string; workedMs?: number };
+
+/** For each turn, the first line of the first assistant text in its answer span (up to the next
+ *  operator message) and the ms from the prompt to the span's last assistant row: entry i
+ *  answers turns[i] (#14250). The paths and words come from the rows themselves. */
+export function promptFacts(turns: ReadonlyArray<Turn>): PromptFact[] {
+  const out: PromptFact[] = turns.map(() => ({}));
+  let prompt = -1;
+  turns.forEach((t, i) => {
+    if (t.role === "user") {
+      prompt = i;
+      return;
+    }
+    if (prompt < 0 || t.role !== "assistant") return;
+    const fact = out[prompt];
+    const sent = turns[prompt].ts;
+    const end = t.endTs ?? t.ts;
+    if (sent !== undefined && end !== undefined && end > sent) fact.workedMs = end - sent;
+    for (const b of t.blocks) {
+      if (fact.reply === undefined && b.kind === "text" && b.text.trim()) {
+        fact.reply = b.text.trim().split("\n")[0];
       }
     }
   });

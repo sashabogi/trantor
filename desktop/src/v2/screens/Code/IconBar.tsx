@@ -15,7 +15,7 @@ const ITEMS: { view: SideView; label: string; title: string; icon: ReactNode }[]
 
 export function IconBar({ active, folded, onPick, changeCount }: { active: SideView; folded: boolean; onPick: (v: SideView) => void; changeCount: number }) {
   return (
-    <nav aria-label="Sidebar views" className="flex w-[50px] shrink-0 flex-col items-center gap-1 border-r border-[var(--v2-edge)] bg-[var(--v2-chrome)] py-2">
+    <nav aria-label="Sidebar views" className="flex w-[50px] shrink-0 flex-col items-center gap-1 overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-chrome)] py-2">
       {ITEMS.map(i => {
         const badge = i.view === "source" ? changeCount : null;
         const label = badge ? `${i.label}, ${badge} ${badge === 1 ? "change" : "changes"}` : i.label;

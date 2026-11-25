@@ -23,7 +23,7 @@ export function ChatRail({ client, project, peers, open, onToggle, draft, onDraf
   const name = target ? target.session.split(":")[0] : want ?? "orchestrator";
   if (!open) {
     return (
-      <aside aria-label="Chat, folded" className="flex w-[46px] shrink-0 flex-col items-center gap-3 border-l border-[var(--v2-edge)] bg-[var(--v2-chrome)] py-2.5">
+      <aside aria-label="Chat, folded" className="flex w-[46px] shrink-0 flex-col items-center gap-3 overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-chrome)] py-2.5">
         <IconButton label="Open the chat" title="Chat (folded). Click to open it" size={32} badge={draft.trim() ? 1 : null} badgeTone="info" onClick={onToggle}><MessageSquare size={16} aria-hidden /></IconButton>
         <Avatar name={name} size={24} />
       </aside>
@@ -36,7 +36,7 @@ export function ChatRail({ client, project, peers, open, onToggle, draft, onDraf
       .catch(e => setNote(e instanceof Error ? e.message : String(e)));
   };
   return (
-    <aside aria-label="Chat" className="flex w-[340px] shrink-0 flex-col border-l border-[var(--v2-edge)] bg-[var(--v2-panel)]">
+    <aside aria-label="Chat" className="flex w-[340px] shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)]">
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2">
         <span className="flex-1 text-[13px] font-semibold">Chat</span>
         <span className="inline-flex items-center gap-1.5 text-[11.5px] text-[var(--v2-muted)]"><Avatar name={name} size={16} />{seatLabel(name)}</span>

@@ -129,17 +129,34 @@ describe("controls", () => {
 
   it("maximises inside its parent and restores the previous height", async () => {
     await mountPanel();
-    const originalHeight = panel()?.style.height;
+    // SAFETY: #14250 wraps the panel in a frame div that owns the height; the maximised section still fills the column.
+    const frame = () => host.querySelector<HTMLElement>('section[aria-label="Bottom panel"]')?.parentElement ?? undefined;
+    const originalHeight = frame()?.style.height;
     await click(byLabel("Maximise bottom panel"));
     expect(panel()?.className).toContain("absolute inset-0");
+    expect(frame()?.style.height).toBe("");
     expect(localStorage.getItem(MAXIMISED_KEY)).toBe("true");
     expect(handle()).toBeNull();
     await remountPanel();
     expect(byLabel("Restore bottom panel")).not.toBeNull();
     expect(panel()?.className).toContain("absolute inset-0");
     await click(byLabel("Restore bottom panel"));
-    expect(panel()?.style.height).toBe(originalHeight);
+    expect(frame()?.style.height).toBe(originalHeight);
     expect(localStorage.getItem(MAXIMISED_KEY)).toBe("false");
+  });
+
+  it("#14250: the panel is a rounded bordered pane and its splitter fills the 6px gap above it", async () => {
+    await mountPanel();
+    const pane = panel();
+    expect(pane?.className).toContain("rounded-lg");
+    expect(pane?.className).toContain("border border-[var(--v2-edge)]");
+    expect(pane?.className).not.toContain("border-t");
+    expect(handle()?.className).toContain("-top-[6px]");
+    expect(handle()?.className).toContain("h-[6px]");
+    await click(byLabel("Close bottom panel"));
+    const closed = host.querySelector('button[aria-label="Open bottom panel"]')?.parentElement;
+    expect(closed?.className).toContain("rounded-lg");
+    expect(closed?.className).toContain("border border-[var(--v2-edge)]");
   });
 });
 

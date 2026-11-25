@@ -8,6 +8,7 @@ import { NotWired } from "../../shell/ClassicLenses";
 import { Tabs } from "../../ui/Tabs";
 import { Approval } from "./Approval";
 import { usePanes } from "./panes";
+import { takesSeatMessage } from "./seatModel";
 import { SeatMessage } from "./SeatMessage";
 import type { SeatView } from "./seatModel";
 import type { DiffState } from "./useSeatDiff";
@@ -46,8 +47,9 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
 }) {
   const changed = diff.diff?.files.length ?? 0;
   return (
-    <div className="mx-5 mb-3.5 mt-3 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-[var(--v2-edge)] bg-[var(--v2-chrome)]">
-      <Tabs label="Seat views" pane="var(--v2-chrome)" barClassName="h-9 bg-[var(--v2-sunken)] px-2"
+    // #14250: the centre column is the panel, so the work area carries no frame of its own.
+    <div className="flex min-h-0 flex-1 flex-col">
+      <Tabs label="Seat views" pane="var(--v2-bg)" barClassName="h-9 bg-[var(--v2-sunken)] px-2"
         tabs={TABS.map(t => ({
           id: t.id,
           label: t.label,
@@ -61,7 +63,8 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
         </span>} />
       <TabBody tab={tab} project={project} seat={seat} diff={diff} />
       <Approval client={client} holds={holds} seatName={seat.label} onDecided={onDecided} />
-      <SeatMessage key={seat.key} client={client} project={project} seat={seat} inputRef={messageRef} />
+      {/* #14254: the orchestrator is spoken to in the chat panel, so its pane carries no message box. */}
+      {takesSeatMessage(seat) && <SeatMessage key={seat.key} client={client} project={project} seat={seat} inputRef={messageRef} />}
     </div>
   );
 }

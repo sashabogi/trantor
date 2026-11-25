@@ -1,5 +1,6 @@
 // One resize handle for columns and rows: a 3-dot grip always visible, an accent line on
 // hover, focus and drag (#14241). Replaces the two bare 6px strips.
+// #14250: the strip fills the 6px gap between two panels, wholly outside their borders.
 import { useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 
 const KEY_STEP = 16;
@@ -60,8 +61,8 @@ export function Splitter(p: SplitterProps) {
       tabIndex={0} aria-valuenow={p.value} aria-valuemin={p.min} aria-valuemax={p.max}
       onPointerDown={start} onKeyDown={key} onDoubleClick={p.onReset} style={{ touchAction: "none" }}
       className={`group absolute z-30 flex select-none ${columns
-        ? `inset-y-0 w-[6px] cursor-col-resize ${p.edge === "left" ? "-left-[3px]" : "-right-[3px]"}`
-        : "inset-x-0 -top-[3px] h-[6px] cursor-row-resize"} ${dragging ? "bg-[var(--v2-accent-soft)]" : ""}`}>
+        ? `inset-y-0 w-[6px] cursor-col-resize ${p.edge === "left" ? "-left-[6px]" : "-right-[6px]"}`
+        : "inset-x-0 -top-[6px] h-[6px] cursor-row-resize"} ${dragging ? "bg-[var(--v2-accent-soft)]" : ""}`}>
       <span aria-hidden data-grip className={`m-auto flex gap-[2px] ${columns ? "flex-col" : "flex-row"}`}>
         <span className="h-[3px] w-[3px] rounded-full bg-[var(--v2-muted)] group-hover:bg-[var(--v2-accent)]" />
         <span className="h-[3px] w-[3px] rounded-full bg-[var(--v2-muted)] group-hover:bg-[var(--v2-accent)]" />

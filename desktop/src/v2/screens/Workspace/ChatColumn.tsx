@@ -12,18 +12,21 @@ export function ChatColumn({ col, workspace, children }: { col: Column; workspac
   if (!col.open) {
     return (
       <aside aria-label="Chat rail" style={{ width: RAIL_WIDTH }}
-        className="flex min-h-0 shrink-0 flex-col items-center border-l border-[var(--v2-edge)] bg-[var(--v2-side)] py-2">
+        className="flex min-h-0 shrink-0 flex-col items-center overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)] py-2">
         <IconButton label="Open chat" title="Open chat" size={30} onClick={() => col.setOpen(true)}><MessageCircle size={16} aria-hidden /></IconButton>
       </aside>
     );
   }
   return (
     <aside aria-label="Chat column" style={{ width: col.width, minWidth: MIN_WIDTH, maxWidth: "60%" }}
-      className="relative flex min-h-0 shrink-0 border-l border-[var(--v2-edge)] bg-[var(--v2-side)]">
+      className="relative flex min-h-0 shrink-0">
+      {/* #14250: the pane is a panel inside a plain wrapper, so the splitter strip can live in the gap outside the border. */}
+      <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)]">
+        {children}
+      </div>
       <Splitter orientation="columns" edge="left" label="Resize chat" title="Drag to resize, double-click to reset"
         value={col.width} min={CHAT_COLUMN.min} max={maxFor(CHAT_COLUMN, workspaceWidth(workspace))}
         onChange={col.setWidth} onCommit={col.commitWidth} onReset={() => col.commitWidth(CHAT_COLUMN.fallbackWidth)} />
-      {children}
     </aside>
   );
 }

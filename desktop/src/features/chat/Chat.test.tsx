@@ -1745,7 +1745,8 @@ describe("Chat idle compaction notice (#11851)", () => {
 
 // #14084: the prompt timeline reads the send time and the changed files off the chat's own
 // bubbles, so both doors are pinned here: the mount backfill and the live chat-rows push.
-describe("prompt timeline facts on the bubbles (#14084)", () => {
+// #14250: the reply's first line and the worked ms ride the same bubbles.
+describe("prompt timeline facts on the bubbles (#14084, #14250)", () => {
   let host: HTMLDivElement;
   let root: Root;
 
@@ -1803,5 +1804,24 @@ describe("prompt timeline facts on the bubbles (#14084)", () => {
     const bubble = host.querySelector<HTMLElement>('[data-prompt-id="0.0"]');
     expect(bubble?.hasAttribute("data-prompt-ts")).toBe(false);
     expect(bubble?.hasAttribute("data-prompt-files")).toBe(false);
+  });
+
+  it("#14250: a prompt bubble carries its reply's first line and the ms the work ran", async () => {
+    const turns = [
+      { role: "user", blocks: [{ kind: "text", text: "fix the login" }], ts: 1_700_000_000_000 },
+      { role: "assistant", blocks: [{ kind: "tool", text: "src/a.ts", tool: "Edit", path: "src/a.ts" }], ts: 1_700_000_061_000 },
+      { role: "assistant", blocks: [{ kind: "text", text: "Done.\nEverything landed." }], ts: 1_700_000_181_000 },
+    ];
+    await mountWithBackfill(turns, 3);
+    const bubble = host.querySelector<HTMLElement>('[data-prompt-id="0.0"]');
+    expect(bubble?.getAttribute("data-prompt-reply")).toBe("Done.");
+    expect(bubble?.getAttribute("data-prompt-worked-ms")).toBe("181000");
+  });
+
+  it("#14250: a prompt with no answer yet carries neither reply nor worked time", async () => {
+    await mountWithBackfill([{ role: "user", blocks: [{ kind: "text", text: "hello" }], ts: 1_700_000_000_000 }], 1);
+    const bubble = host.querySelector<HTMLElement>('[data-prompt-id="0.0"]');
+    expect(bubble?.hasAttribute("data-prompt-reply")).toBe(false);
+    expect(bubble?.hasAttribute("data-prompt-worked-ms")).toBe(false);
   });
 });

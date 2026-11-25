@@ -119,11 +119,12 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   }
 
   return (
-    <div ref={workspaceRef} className="flex min-h-0 flex-1">
+    // #14250: the area under the project header is a chrome ground; every pane is its own panel with a 6px gap.
+    <div ref={workspaceRef} className="flex min-h-0 flex-1 gap-[6px] bg-[var(--v2-chrome)] p-[6px]">
       <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
         scopeName={scope ?? "project checkout"} seats={seatInfos} onPickScope={pickScope}
         onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />
         {selected && <Inspector key={selected.key} project={project} seat={selected} card={cardOf(data.cards, selected)}

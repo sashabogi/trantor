@@ -24,7 +24,7 @@ import {
 } from "./prefs";
 import {
   applyBackfill, applyRows, applySessionChanged, bannerVisible, changedFiles, emptyChat, isDividerTurn,
-  lastToolLabel, sessionLiveness, tickerText,
+  lastToolLabel, promptFacts, sessionLiveness, tickerText,
   type AskQuestion, type Backfill, type Block, type ChatState, type OpenQuestion, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
@@ -107,8 +107,11 @@ function group(turns: Turn[]): Turn[] {
     const last = out[out.length - 1];
     // A queued turn never merges into a seen one (or vice versa) — merging would erase the one
     // flag that tells the operator "the session has not read this yet".
-    if (last && last.role === t.role && !!last.queued === !!t.queued) last.blocks = [...last.blocks, ...t.blocks];
-    else out.push({ role: t.role, blocks: [...t.blocks], queued: t.queued, ts: t.ts });
+    if (last && last.role === t.role && !!last.queued === !!t.queued) {
+      last.blocks = [...last.blocks, ...t.blocks];
+      // #14250: the folded rows' last timestamp survives, so worked time spans the whole reply.
+      if (t.ts !== undefined) last.endTs = t.ts;
+    } else out.push({ role: t.role, blocks: [...t.blocks], queued: t.queued, ts: t.ts, endTs: t.ts });
   }
   return out;
 }
@@ -1175,6 +1178,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // answer is computed on the same grouped list the transcript below draws.
   const grouped = group(chat.turns);
   const changed = changedFiles(grouped);
+  // #14250: each prompt's reply line and worked time, on the same grouped list.
+  const facts = promptFacts(grouped);
 
   return (
     <div
@@ -1321,6 +1326,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
                     key={j}
                     data-prompt-id={t.role === "user" ? `${i}.${j}` : undefined}
                     data-prompt-ts={t.role === "user" && t.ts !== undefined ? t.ts : undefined}
+                    data-prompt-reply={t.role === "user" ? facts[i]?.reply : undefined}
+                    data-prompt-worked-ms={t.role === "user" ? facts[i]?.workedMs : undefined}
                     data-prompt-files={t.role === "user" && changed[i].length ? JSON.stringify(changed[i]) : undefined}
                     className={`rounded-lg px-3 py-2 text-[length:calc(12.5px*var(--chat-scale,1))] leading-relaxed ${
                       t.role === "user"

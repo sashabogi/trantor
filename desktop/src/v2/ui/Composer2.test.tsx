@@ -49,6 +49,24 @@ function type(text: string) {
 }
 
 describe("Composer2", () => {
+  it("starts at two rows and grows to fit the text, up to a ceiling (#14254)", () => {
+    const heightOf = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
+    let content = 0;
+    Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", { configurable: true, get: () => content });
+    try {
+      act(() => root.render(<Harness onSend={() => {}} />));
+      const box = host.querySelector("textarea");
+      expect(box?.getAttribute("rows")).toBe("2");
+      expect(box?.style.height).toBe("auto");
+      content = 96;
+      expect(type("one\ntwo\nthree\nfour").style.height).toBe("96px");
+      content = 900;
+      expect(type("a very long draft").style.height).toBe("240px");
+    } finally {
+      if (heightOf) Object.defineProperty(HTMLTextAreaElement.prototype, "scrollHeight", heightOf);
+    }
+  });
+
   it("labels the text box and keeps send disabled until there is text", () => {
     act(() => root.render(<Harness onSend={vi.fn()} />));
     const ta = host.querySelector("textarea");

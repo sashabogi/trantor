@@ -88,3 +88,6 @@ export function visibleSeats(layout: Layout, live: SeatView[], selected: SeatVie
   const others = live.filter(s => s.key !== selected.key);
   return others.length ? [selected, others[0]] : [selected];
 }
+
+/** #14254: the orchestrator is spoken to in the chat panel, so only crew seats get the one-line message box. */
+export const takesSeatMessage = (seat: Pick<SeatView, "isOrchestrator">): boolean => !seat.isOrchestrator;

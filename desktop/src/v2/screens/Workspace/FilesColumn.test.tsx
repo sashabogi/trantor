@@ -154,6 +154,55 @@ describe("resizing", () => {
   });
 });
 
+describe("panes as panels (#14250)", () => {
+  beforeEach(() => { localStorage.setItem(FILES_OPEN_KEY, "true"); });
+
+  it("the workspace is a chrome ground with 6px padding and gap, and the files column is its own panel", async () => {
+    await mountScreen();
+    const ground = column()?.parentElement;
+    expect(ground?.className).toContain("bg-[var(--v2-chrome)]");
+    expect(ground?.className).toContain("p-[6px]");
+    expect(ground?.className).toContain("gap-[6px]");
+    const pane = column()?.firstElementChild;
+    expect(pane?.className).toContain("rounded-lg");
+    expect(pane?.className).toContain("border-[var(--v2-edge)]");
+    expect(pane?.className).toContain("bg-[var(--v2-side)]");
+    expect(pane?.className).toContain("overflow-hidden");
+    expect(column()?.className).not.toContain("border-r");
+    expect(handle()?.className).toContain("-right-[6px]");
+  });
+
+  it("the centre column is one panel holding the seat strip and the work area", async () => {
+    // SAFETY: a seat needs a hub peer, so this mount answers /peers with one live orchestrator.
+    const seated = () => new HubClient("http://hub.test", async ({ path }) => {
+      const peers = [{ session: "orchestrator:trantor", project: "trantor", online: true, kind: "agent", llm: "claude" }];
+      if (path.startsWith("/peers")) return { status: 200, body: JSON.stringify({ peers }) };
+      return { status: 200, body: JSON.stringify({ tasks: [], holds: [] }) };
+    });
+    await mountScreen(seated());
+    await settle(); await settle();
+    const centre = column()?.nextElementSibling;
+    expect(centre?.className).toContain("rounded-lg");
+    expect(centre?.className).toContain("border-[var(--v2-edge)]");
+    expect(centre?.className).toContain("bg-[var(--v2-bg)]");
+    expect(centre?.className).toContain("overflow-hidden");
+    expect(centre?.querySelector('[data-testid="terminal"]')).not.toBeNull();
+    // SAFETY: closest walks up from the terminal; the work area root is the nearest min-h-0 column.
+    const work = centre?.querySelector('[data-testid="terminal"]')?.closest("div.flex.min-h-0.flex-1.flex-col");
+    // The work area carries no frame of its own inside the panel.
+    expect(work?.className).not.toContain("rounded-xl");
+    expect(work?.className).not.toContain("border");
+  });
+
+  it("the closed rail is a rounded panel, not a border-r strip", async () => {
+    localStorage.setItem(FILES_OPEN_KEY, "false");
+    await mountScreen();
+    expect(rail()?.className).toContain("rounded-lg");
+    expect(rail()?.className).toContain("border-[var(--v2-edge)]");
+    expect(rail()?.className).not.toContain("border-r");
+  });
+});
+
 describe("the source control sidebar (#14044)", () => {
   beforeEach(() => { localStorage.setItem(FILES_OPEN_KEY, "true"); });
 

@@ -11,7 +11,7 @@ import type { PaneTarget } from "../../../features/workspace/paneTargets";
 import { WorkspaceScreen } from "./index";
 import { ComposerAdapter, judge } from "./ComposerAdapter";
 import { DEFAULT_PANES, WorkspacePanesContext, type WorkspacePanes } from "./panes";
-import { gridColumns, visibleSeats, type SeatView } from "./seatModel";
+import { gridColumns, takesSeatMessage, visibleSeats, type SeatView } from "./seatModel";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -207,6 +207,11 @@ describe("pure model", () => {
     expect(judge({ outcome: "sent", error: null }, null).clear).toBe(true);
     expect(judge({ outcome: "stalled", error: "no pane" }, null)).toEqual({ clear: false, note: "Not delivered: no pane" });
     expect(judge({ outcome: "blocked", error: null }, "Which file?").note).toContain("Which file?");
+  });
+
+  it("gives the message box to crew seats and not to the orchestrator (#14254)", () => {
+    expect(takesSeatMessage(seat("codex-8"))).toBe(true);
+    expect(takesSeatMessage({ ...seat("orchestrator"), isOrchestrator: true })).toBe(false);
   });
 
   it("tiles like the crew launcher and picks the seats each layout shows", () => {

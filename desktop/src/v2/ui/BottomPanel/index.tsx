@@ -12,7 +12,7 @@ type PanelTab = { id: BottomPanelTab; label: string; body: ReactNode };
 export function BottomPanel({ terminal, output, problems }: { terminal?: ReactNode; output?: ReactNode; problems?: ReactNode }) {
   const mode = useShellMode();
   const state = useBottomPanelState(mode);
-  const panel = useRef<HTMLElement | null>(null);
+  const panel = useRef<HTMLDivElement | null>(null);
   const tabs = ([
     { id: "terminal", label: "Terminal", body: terminal },
     { id: "output", label: "Output", body: output },
@@ -47,27 +47,31 @@ export function BottomPanel({ terminal, output, problems }: { terminal?: ReactNo
   if (!tabs.length) return null;
   if (!state.open) return <OpenToggle onOpen={() => state.setOpen(true)} />;
   return (
-    <section ref={panel} aria-label="Bottom panel" style={state.maximised ? undefined : { height }}
-      className={state.maximised
-        ? "absolute inset-0 z-40 flex min-h-0 flex-col border-t border-[var(--v2-edge)] bg-[var(--v2-panel)]"
-        : "relative flex shrink-0 flex-col border-t border-[var(--v2-edge)] bg-[var(--v2-panel)]"}>
+    // #14250: the panel is a pane in the column's 6px gap; the wrapper stays unclipped so the splitter strip lives in the gap.
+    <div ref={panel} className={state.maximised ? "shrink-0" : "relative flex shrink-0 flex-col"}
+      style={state.maximised ? undefined : { height }}>
       {!state.maximised && <Splitter orientation="rows" edge="top" label="Resize bottom panel"
         title="Drag to resize, or use the up and down arrow keys"
         value={height} min={MIN_HEIGHT} max={maxHeight(columnHeight())}
         onChange={state.setHeight} onCommit={state.commitHeight} />}
-      <Header tabs={tabs} selected={selected} maximised={state.maximised} onTab={state.setActiveTab}
-        onMaximise={state.toggleMaximised} onClose={() => state.setOpen(false)} />
-      <div role="tabpanel" id={`bottom-panel-${selected.id}`} aria-labelledby={`bottom-panel-tab-${selected.id}`}
-        className="min-h-0 flex-1 overflow-auto">
-        {selected.body}
-      </div>
-    </section>
+      <section aria-label="Bottom panel" className={state.maximised
+        ? "absolute inset-0 z-40 flex min-h-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)]"
+        : "flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)]"}>
+        <Header tabs={tabs} selected={selected} maximised={state.maximised} onTab={state.setActiveTab}
+          onMaximise={state.toggleMaximised} onClose={() => state.setOpen(false)} />
+        <div role="tabpanel" id={`bottom-panel-${selected.id}`} aria-labelledby={`bottom-panel-tab-${selected.id}`}
+          className="min-h-0 flex-1 overflow-auto">
+          {selected.body}
+        </div>
+      </section>
+    </div>
   );
 }
 
 function OpenToggle({ onOpen }: { onOpen: () => void }) {
   return (
-    <div className="flex shrink-0 justify-end border-t border-[var(--v2-edge)] bg-[var(--v2-panel)] px-2 py-1">
+    // #14250: the closed panel is a slim panel of its own, not a border-t strip on the ground.
+    <div className="flex shrink-0 justify-end overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-2 py-1">
       <button type="button" aria-label="Open bottom panel" title="Open bottom panel (Ctrl+`)" onClick={onOpen}
         className="v2-hover inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--v2-muted)]">
         <PanelBottomOpen size={14} aria-hidden />

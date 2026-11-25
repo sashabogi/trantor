@@ -120,41 +120,41 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const changeCount = snap ? new Set(snap.status.map(s => s.path)).size : 0;
 
   return (
-    <div className="flex min-h-[600px] min-w-0 flex-1" data-testid="code-screen">
+    // #14250: the screen is a chrome ground; the icon bar, sidebar, editor column, bottom panel and chat are panels.
+    <div className="flex min-h-[600px] min-w-0 flex-1 gap-[6px] bg-[var(--v2-chrome)] p-[6px]" data-testid="code-screen">
       <IconBar active={side} folded={!visible} onPick={onIcon} changeCount={changeCount} />
       {visible && (
         <Sidebar view={side} client={client} project={project} scope={scope} seats={seats} state={state} selected={changeFocus}
           onOpenFile={openFile} onOpenChange={openChange} onMutated={refresh} onOpenSource={() => { tabs.activate("source"); setOverride(false); }}
           onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}
-      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-        <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
-          onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
-          onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
-        <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />
-        {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
-        {/* #14241: the source tab's list runs full height on the left; every tab's body and the
-            bottom panel share the right column, so the panel sits under the diff only. */}
-        <div className="flex min-h-0 min-w-0 flex-1">
-          {tabs.active.kind === "source" && snap && (
-            <SourceListColumn project={project} snap={snap} view={view} seats={seatNames} rows={rows} onRows={setHistoryRows}
-              selected={selectedChange} onSelect={setPicked} selectedKey={key} onSelectKey={setKey}
-              onMutated={refresh} onOpenConflict={openConflict} />
-          )}
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-            {/* #14071: the tab's body always fills the column, so the panel stays at the bottom under short content. */}
-            <div data-testid="code-main" className="flex min-h-0 flex-1 flex-col overflow-auto">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-[6px]">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
+          <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
+            onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
+            onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
+          <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />
+          {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
+          {/* #14241: the source tab's list runs full height on the left; every tab's body fills the right column. */}
+          <div className="flex min-h-0 min-w-0 flex-1">
+            {tabs.active.kind === "source" && snap && (
+              <SourceListColumn project={project} snap={snap} view={view} seats={seatNames} rows={rows} onRows={setHistoryRows}
+                selected={selectedChange} onSelect={setPicked} selectedKey={key} onSelectKey={setKey}
+                onMutated={refresh} onOpenConflict={openConflict} />
+            )}
+            {/* #14071: the tab's body always fills the column, so short content still stretches to the panel. */}
+            <div data-testid="code-main" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
               <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards}
                 chips={chips} selectedChange={selectedChange} onPickChange={setPicked} historyRows={historyRows}
                 selectedKey={key} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
                 onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty} onError={setNotice}
                 liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
             </div>
-            {/* #14080: keyed by project so one project never shows another project's shell. */}
-            <BottomPanel terminal={<Terminals key={project} project={project} />} output={<Output />}
-              problems={<Problems project={project} seat={scope} onOpen={openFile} />} />
           </div>
         </div>
+        {/* #14080: keyed by project so one project never shows another project's shell. */}
+        <BottomPanel terminal={<Terminals key={project} project={project} />} output={<Output />}
+          problems={<Problems project={project} seat={scope} onOpen={openFile} />} />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
     </div>

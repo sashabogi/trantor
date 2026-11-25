@@ -1,8 +1,9 @@
 // A thin column of ticks beside the chat: one per message the operator sent, read from the chat's DOM (#14075).
 // #14241: it rides the chat's left edge, centred mid-height, 20px hit rows.
+// #14250: ticks widen around the pointer and the card explains: place, reply's first line, worked time.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
-import { when } from "../../../shared/time";
-import { activeIndex, readPrompts, samePrompts, showsTimeline, tickLabel, type PromptItem } from "./promptTicks";
+import { ago } from "../../../shared/time";
+import { activeIndex, readPrompts, samePrompts, showsTimeline, tickLabel, tickWidth, workedText, type PromptItem } from "./promptTicks";
 
 const SELECTOR = "[data-prompt-id]";
 
@@ -60,14 +61,30 @@ function useTimeline(root: RefObject<HTMLElement | null>) {
 
 const baseName = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
-function Card({ prompt, onOpenChange }: { prompt: PromptItem; onOpenChange: (path: string) => void }) {
+/** Where the card hangs: the tick row's vertical middle and the distance from the window's right edge to the row's left. */
+type Anchor = { y: number; right: number };
+
+const anchorOf = (row: HTMLElement): Anchor => {
+  const r = row.getBoundingClientRect();
+  return { y: r.top + r.height / 2, right: Math.max(0, window.innerWidth - r.left) };
+};
+
+function Card({ prompt, index, total, at, onOpenChange }: { prompt: PromptItem; index: number; total: number; at: Anchor; onOpenChange: (path: string) => void }) {
   const files = prompt.files ?? [];
+  // Only the parts that exist: worked time, the prompt's age, or both joined.
+  const timing = [
+    prompt.workedMs !== undefined ? `Worked ${workedText(prompt.workedMs)}` : null,
+    prompt.ts !== undefined ? ago(prompt.ts) : null,
+  ].filter(Boolean).join(" · ");
   return (
     // No gap and real pointer events (#14084): the card must be reachable from its tick so a
     // file name can be clicked, and hover crossing from tick to card must not close it.
-    <div role="tooltip" className="absolute left-full top-1/2 z-30 w-60 -translate-y-1/2 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-left shadow-lg">
-      <div className="text-[12px] leading-snug text-[var(--v2-text)]" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{prompt.text}</div>
-      {prompt.ts !== undefined && <div className="mt-1 text-[10.5px] text-[var(--v2-muted)]">{when(prompt.ts)}</div>}
+    // #14254: fixed to the window, because the tick column scrolls and would clip a card positioned inside it.
+    <div role="tooltip" style={{ top: at.y, right: at.right }} className="v2-fade-in fixed z-30 w-60 -translate-y-1/2 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-left shadow-lg">
+      <div className="v2-mono text-[10.5px] text-[var(--v2-muted)]">{index + 1} / {total}</div>
+      <div className="mt-0.5 text-[12px] font-medium leading-snug text-[var(--v2-text)]" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{prompt.text}</div>
+      {prompt.reply !== undefined && <div className="mt-0.5 truncate text-[12px] text-[var(--v2-text-2)]">{prompt.reply}</div>}
+      {timing && <div className="mt-1 text-[10.5px] text-[var(--v2-muted)]">{timing}</div>}
       {files.length > 0 && (
         <div className="mt-1 text-[10.5px] text-[var(--v2-muted)]">
           Changed {files.length} {files.length === 1 ? "file" : "files"}
@@ -89,6 +106,7 @@ function Card({ prompt, onOpenChange }: { prompt: PromptItem; onOpenChange: (pat
 export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLElement | null>; onOpenChange: (path: string) => void }) {
   const { prompts, active, jump } = useTimeline(root);
   const [shown, setShown] = useState<number | null>(null);
+  const [at, setAt] = useState<Anchor>({ y: 0, right: 0 });
   const [rove, setRove] = useState<number | null>(null);
   const ticks = useRef<Array<HTMLButtonElement | null>>([]);
   const onKey = (e: KeyboardEvent, i: number) => {
@@ -101,11 +119,11 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
   if (!showsTimeline(prompts.length)) return null;
   const tabbable = Math.min(rove ?? active, prompts.length - 1);
   return (
-    <nav aria-label="Prompt timeline" className="flex w-5 shrink-0 flex-col items-center justify-center self-stretch overflow-y-auto py-2">
+    <nav aria-label="Prompt timeline" className="flex w-8 shrink-0 flex-col items-end justify-center self-stretch overflow-y-auto overflow-x-hidden py-2 pr-1">
       {prompts.map((p, i) => (
-        <div key={p.id} className="relative flex h-5 w-full shrink-0 items-center justify-center"
-          onMouseEnter={() => setShown(i)} onMouseLeave={() => setShown(null)}
-          onFocus={() => { setShown(i); setRove(i); }}
+        <div key={p.id} className="relative flex h-5 w-full shrink-0 items-center justify-end"
+          onMouseEnter={e => { setAt(anchorOf(e.currentTarget)); setShown(i); }} onMouseLeave={() => setShown(null)}
+          onFocus={e => { setAt(anchorOf(e.currentTarget)); setShown(i); setRove(i); }}
           onBlur={e => {
             // SAFETY: relatedTarget is the element taking focus next; Node is its DOM type here.
             if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setShown(null);
@@ -113,10 +131,12 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
           <button type="button" ref={el => { ticks.current[i] = el; }} aria-label={tickLabel(i, prompts.length, p.text)}
             aria-current={i === active ? "true" : undefined} tabIndex={i === tabbable ? 0 : -1}
             onClick={() => jump(p.id)} onKeyDown={e => onKey(e, i)}
-            className="flex h-full min-h-5 w-full items-center justify-center">
-            <span aria-hidden className={`block h-[2px] rounded-full ${i === active ? "w-[18px] bg-[var(--v2-accent)]" : "w-3.5 bg-[var(--v2-muted)]"}`} />
+            className="flex h-full min-h-5 w-full items-center justify-end">
+            {/* #14250: width follows the pointer (or rests on the active 18px), colour follows the active state. */}
+            <span aria-hidden className={`v2-tick block h-[2px] rounded-full ${i === active ? "bg-[var(--v2-accent)]" : "bg-[var(--v2-muted)]"} ${shown === null ? (i === active ? "w-[18px]" : "w-3.5") : ""}`}
+              style={shown === null ? undefined : { width: `${tickWidth(i - shown)}px` }} />
           </button>
-          {shown === i && <Card prompt={p} onOpenChange={onOpenChange} />}
+          {shown === i && <Card prompt={p} index={i} total={prompts.length} at={at} onOpenChange={onOpenChange} />}
         </div>
       ))}
     </nav>

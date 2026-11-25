@@ -1,37 +1,51 @@
 // @vitest-environment happy-dom
 // #14075: one tick per operator message, hover card, jump, active tick, arrow keys, hidden under two prompts.
 // #14084: the card also shows the send time and the files the prompt changed, clickable into Code.
+// #14250: the card reads "N / total", the reply's first line and "Worked 4m · 2h ago"; ticks widen with the pointer.
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PromptTimeline } from "./PromptTimeline";
-import { activeIndex, readPrompts, samePrompts, showsTimeline, tickLabel } from "./promptTicks";
+import { activeIndex, readPrompts, samePrompts, showsTimeline, tickLabel, tickWidth, workedText, type PromptItem } from "./promptTicks";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const mk = (id: string, text: string, ts?: number, files?: string[]) => {
+type Mk = { id: string; text: string; ts?: number; files?: string[]; reply?: string; workedMs?: number };
+const mk = (p: Mk) => {
   const el = document.createElement("div");
-  el.setAttribute("data-prompt-id", id);
-  if (ts) el.setAttribute("data-prompt-ts", String(ts));
-  if (files) el.setAttribute("data-prompt-files", JSON.stringify(files));
-  el.textContent = text;
+  el.setAttribute("data-prompt-id", p.id);
+  if (p.ts) el.setAttribute("data-prompt-ts", String(p.ts));
+  if (p.files) el.setAttribute("data-prompt-files", JSON.stringify(p.files));
+  if (p.reply !== undefined) el.setAttribute("data-prompt-reply", p.reply);
+  if (p.workedMs !== undefined) el.setAttribute("data-prompt-worked-ms", String(p.workedMs));
+  el.textContent = p.text;
   return el;
 };
 
 describe("promptTicks model", () => {
   it("reads operator prompts in order and skips empty ones", () => {
-    const got = readPrompts([mk("0.0", " first "), mk("1.0", "   "), mk("2.0", "third", 1000)]);
+    const got = readPrompts([mk({ id: "0.0", text: " first " }), mk({ id: "1.0", text: "   " }), mk({ id: "2.0", text: "third", ts: 1000 })]);
     expect(got).toEqual([{ id: "0.0", text: "first" }, { id: "2.0", text: "third", ts: 1000 }]);
   });
   it("reads the changed files a prompt's reply edited, and drops malformed or empty lists", () => {
-    const got = readPrompts([mk("0.0", "a", undefined, ["src/a.ts", "src/b.ts"]), mk("1.0", "b", undefined, [])]);
+    const got = readPrompts([mk({ id: "0.0", text: "a", files: ["src/a.ts", "src/b.ts"] }), mk({ id: "1.0", text: "b", files: [] })]);
     expect(got).toEqual([{ id: "0.0", text: "a", files: ["src/a.ts", "src/b.ts"] }, { id: "1.0", text: "b" }]);
     const bad = document.createElement("div");
     bad.setAttribute("data-prompt-id", "2.0");
     bad.setAttribute("data-prompt-files", "not json");
     bad.textContent = "c";
     expect(readPrompts([bad])).toEqual([{ id: "2.0", text: "c" }]);
+  });
+  it("#14250: reads the reply line and worked ms, and drops empty or malformed values", () => {
+    const got = readPrompts([mk({ id: "0.0", text: "a", reply: "Done.", workedMs: 240_000 })]);
+    expect(got).toEqual([{ id: "0.0", text: "a", reply: "Done.", workedMs: 240_000 }]);
+    const bare = document.createElement("div");
+    bare.setAttribute("data-prompt-id", "1.0");
+    bare.setAttribute("data-prompt-reply", "");
+    bare.setAttribute("data-prompt-worked-ms", "nope");
+    bare.textContent = "b";
+    expect(readPrompts([bare])).toEqual([{ id: "1.0", text: "b" }]);
   });
   it("labels a tick with its place and the first words", () => {
     expect(tickLabel(2, 12, "fix the bug")).toBe("Prompt 3 of 12: fix the bug");
@@ -52,6 +66,18 @@ describe("promptTicks model", () => {
     expect(samePrompts([{ id: "a", text: "x", files: ["a.ts"] }], [{ id: "a", text: "x", files: ["a.ts", "b.ts"] }])).toBe(false);
     expect(samePrompts([{ id: "a", text: "x", files: ["a.ts"] }], [{ id: "a", text: "x" }])).toBe(false);
   });
+  it("#14250: a reply line or worked time arriving mid-stream redraws the card", () => {
+    const base: PromptItem[] = [{ id: "a", text: "x" }];
+    expect(samePrompts(base, [{ id: "a", text: "x", reply: "Done." }])).toBe(false);
+    expect(samePrompts([{ id: "a", text: "x", reply: "Done." }], [{ id: "a", text: "x", reply: "Done.", workedMs: 1000 }])).toBe(false);
+  });
+  it("#14250: workedText rounds to the readiest unit, and tickWidth falls off with distance", () => {
+    expect(workedText(45_000)).toBe("45s");
+    expect(workedText(240_000)).toBe("4m");
+    expect(workedText(27_360_000)).toBe("7h 36m");
+    expect(workedText(10_800_000)).toBe("3h");
+    expect([0, 1, 2, 3, 4].map(tickWidth)).toEqual([24, 20, 17, 14, 14]);
+  });
 });
 
 let host: HTMLDivElement;
@@ -65,11 +91,11 @@ function Harness() {
   const ref = useRef<HTMLDivElement | null>(null);
   return (<div ref={ref}><div data-testid="sc" style={{ overflowY: "auto" }} /><PromptTimeline root={ref} onOpenChange={p => opened.push(p)} /></div>);
 }
-const mount = async (prompts: Array<[string, string, number?, string[]?]>) => {
+const mount = async (prompts: Mk[]) => {
   await act(async () => { root.render(<Harness />); });
   // SAFETY: the Harness above always renders this element.
   scroller = host.querySelector<HTMLDivElement>('[data-testid="sc"]')!;
-  await act(async () => { for (const [id, t, ts, files] of prompts) scroller.append(mk(id, t, ts, files)); await Promise.resolve(); });
+  await act(async () => { for (const p of prompts) scroller.append(mk(p)); await Promise.resolve(); });
   await act(async () => { await new Promise(r => setTimeout(r, 5)); });
 };
 // Ticks only: the hover card's file-name buttons also live in the nav, so the selector stops at
@@ -78,15 +104,15 @@ const buttons = () => Array.from(host.querySelectorAll<HTMLButtonElement>('nav[a
 
 describe("PromptTimeline", () => {
   it("renders one button per operator message", async () => {
-    await mount([["0.0", "alpha one"], ["2.0", "beta two"], ["4.0", "gamma three"]]);
+    await mount([{ id: "0.0", text: "alpha one" }, { id: "2.0", text: "beta two" }, { id: "4.0", text: "gamma three" }]);
     expect(buttons().map(b => b.getAttribute("aria-label"))).toEqual(["Prompt 1 of 3: alpha one", "Prompt 2 of 3: beta two", "Prompt 3 of 3: gamma three"]);
   });
   it("is not rendered for fewer than two prompts", async () => {
-    await mount([["0.0", "only one"]]);
+    await mount([{ id: "0.0", text: "only one" }]);
     expect(host.querySelector("nav")).toBeNull();
   });
   it("jumps to the clicked message", async () => {
-    await mount([["0.0", "alpha"], ["2.0", "beta"]]);
+    await mount([{ id: "0.0", text: "alpha" }, { id: "2.0", text: "beta" }]);
     // SAFETY: the harness appended two div children just above.
     const target = scroller.children[1] as HTMLElement;
     const spy = vi.fn();
@@ -94,30 +120,56 @@ describe("PromptTimeline", () => {
     await act(async () => { buttons()[1].click(); });
     expect(spy).toHaveBeenCalledTimes(1);
   });
-  it("shows the prompt and its time on hover and focus, and only the prompt without a time", async () => {
-    await mount([["0.0", "alpha prompt", Date.now()], ["2.0", "beta prompt"]]);
+  it("shows the place, the prompt and its age; only the parts that exist", async () => {
+    await mount([{ id: "0.0", text: "alpha prompt", ts: Date.now() - 2 * 60 * 60 * 1000 }, { id: "2.0", text: "beta prompt" }]);
     await act(async () => { buttons()[0].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); buttons()[0].focus(); });
     const card = host.querySelector('[role="tooltip"]');
+    expect(card?.textContent).toContain("1 / 2");
     expect(card?.textContent).toContain("alpha prompt");
-    expect(card?.children.length).toBe(2);
+    expect(card?.textContent).toContain("2h ago");
+    expect(card?.children.length).toBe(3);
     await act(async () => { buttons()[1].focus(); });
     const second = host.querySelector('[role="tooltip"]');
-    expect(second?.textContent).toBe("beta prompt");
-    expect(second?.children.length).toBe(1);
+    expect(second?.textContent).toBe("2 / 2beta prompt");
+    expect(second?.children.length).toBe(2);
+  });
+  it("#14250: the card reads the reply's first line and Worked 4m · 2h ago, and fades in", async () => {
+    await mount([
+      { id: "0.0", text: "alpha prompt", ts: Date.now() - 2 * 60 * 60 * 1000, reply: "Landed the fix in the login form.", workedMs: 4 * 60 * 1000 },
+      { id: "2.0", text: "beta prompt" },
+    ]);
+    await act(async () => { buttons()[0].focus(); });
+    const card = host.querySelector<HTMLElement>('[role="tooltip"]')!;
+    expect(card.className).toContain("v2-fade-in");
+    expect(card.textContent).toContain("1 / 2");
+    expect(card.textContent).toContain("alpha prompt");
+    expect(card.textContent).toContain("Landed the fix in the login form.");
+    expect(card.textContent).toContain("Worked 4m · 2h ago");
+    await act(async () => { buttons()[1].focus(); });
+    const second = host.querySelector<HTMLElement>('[role="tooltip"]')!;
+    expect(second.textContent).not.toContain("Worked");
+    expect(second.textContent).toBe("2 / 2beta prompt");
+  });
+  it("#14250: a worked time without a send time shows only the Worked part", async () => {
+    await mount([{ id: "0.0", text: "alpha", workedMs: 90_000 }, { id: "2.0", text: "beta" }]);
+    await act(async () => { buttons()[0].focus(); });
+    const card = host.querySelector<HTMLElement>('[role="tooltip"]')!;
+    expect(card.textContent).toContain("Worked 1m");
+    expect(card.textContent).not.toContain(" · ");
   });
   it("shows the changed files with names and a count, and no line without files", async () => {
-    await mount([["0.0", "alpha", undefined, ["desktop/src/a.ts", "desktop/src-tauri/b.rs"]], ["2.0", "beta"]]);
+    await mount([{ id: "0.0", text: "alpha", files: ["desktop/src/a.ts", "desktop/src-tauri/b.rs"] }, { id: "2.0", text: "beta" }]);
     await act(async () => { buttons()[0].focus(); });
     const card = host.querySelector('[role="tooltip"]')!;
     expect(card.textContent).toContain("Changed 2 files");
     const names = Array.from(card.querySelectorAll<HTMLButtonElement>("button")).map(b => b.textContent);
     expect(names).toEqual(["a.ts", "b.rs"]);
     await act(async () => { buttons()[1].focus(); });
-    expect(host.querySelector('[role="tooltip"]')?.textContent).toBe("beta");
+    expect(host.querySelector('[role="tooltip"]')?.textContent).toBe("2 / 2beta");
   });
   it("caps the names at five and counts the rest", async () => {
     const files = ["1.ts", "2.ts", "3.ts", "4.ts", "5.ts", "6.ts", "7.ts"];
-    await mount([["0.0", "alpha", undefined, files], ["2.0", "beta"]]);
+    await mount([{ id: "0.0", text: "alpha", files }, { id: "2.0", text: "beta" }]);
     await act(async () => { buttons()[0].focus(); });
     const card = host.querySelector('[role="tooltip"]')!;
     expect(card.textContent).toContain("Changed 7 files");
@@ -125,14 +177,14 @@ describe("PromptTimeline", () => {
     expect(card.querySelectorAll("button")).toHaveLength(5);
   });
   it("a file name opens that file's change", async () => {
-    await mount([["0.0", "alpha", undefined, ["desktop/src/a.ts"]], ["2.0", "beta"]]);
+    await mount([{ id: "0.0", text: "alpha", files: ["desktop/src/a.ts"] }, { id: "2.0", text: "beta" }]);
     await act(async () => { buttons()[0].focus(); });
     const name = host.querySelector<HTMLButtonElement>('[role="tooltip"] button')!;
     await act(async () => { name.click(); });
     expect(opened).toEqual(["desktop/src/a.ts"]);
   });
   it("the card stays open while the pointer is over it and closes when it leaves", async () => {
-    await mount([["0.0", "alpha", undefined, ["a.ts"]], ["2.0", "beta"]]);
+    await mount([{ id: "0.0", text: "alpha", files: ["a.ts"] }, { id: "2.0", text: "beta" }]);
     await act(async () => { buttons()[0].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); });
     const card = host.querySelector('[role="tooltip"]');
     // SAFETY: the card rendered for the hovered tick above.
@@ -148,7 +200,7 @@ describe("PromptTimeline", () => {
     expect(host.querySelector('[role="tooltip"]')).toBeNull();
   });
   it("moves focus with the arrow keys", async () => {
-    await mount([["0.0", "a"], ["2.0", "b"], ["4.0", "c"]]);
+    await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }]);
     await act(async () => { buttons()[0].focus(); });
     await act(async () => { buttons()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
     expect(document.activeElement).toBe(buttons()[1]);
@@ -156,7 +208,7 @@ describe("PromptTimeline", () => {
     expect(document.activeElement).toBe(buttons()[0]);
   });
   it("highlights the prompt on screen and follows the scroll", async () => {
-    await mount([["0.0", "a"], ["2.0", "b"], ["4.0", "c"]]);
+    await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }]);
     const tops = { v: [0, 300, 600] };
     const rectAt = (i: number): DOMRect => {
       // SAFETY: the timeline reads only `top` from a rect.
@@ -171,7 +223,7 @@ describe("PromptTimeline", () => {
   });
 
   it("sits centred mid-height with 14x2 ticks in muted, the active one wider in accent (#14241)", async () => {
-    await mount([["0.0", "a"], ["2.0", "b"], ["4.0", "c"]]);
+    await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }]);
     const nav = host.querySelector('nav[aria-label="Prompt timeline"]');
     expect(nav?.className).toContain("justify-center");
     const spans = buttons().map(b => b.querySelector("span"));
@@ -180,5 +232,16 @@ describe("PromptTimeline", () => {
     expect(spans[2]?.className).toContain("w-[18px]");
     expect(spans[2]?.className).toContain("bg-[var(--v2-accent)]");
     expect(buttons()[0]?.parentElement?.className).toContain("h-5");
+  });
+
+  it("#14250: ticks widen around the pointer (24, 20, 17, 14) and rest when it leaves", async () => {
+    await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }, { id: "6.0", text: "d" }, { id: "8.0", text: "e" }]);
+    const spans = () => buttons().map(b => b.querySelector<HTMLElement>("span"));
+    await act(async () => { buttons()[1].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); });
+    expect(spans().map(s => s?.style.width)).toEqual(["20px", "24px", "20px", "17px", "14px"]);
+    expect(spans()[1]?.className).toContain("v2-tick");
+    await act(async () => { buttons()[1].dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: null })); });
+    expect(spans().map(s => s?.style.width)).toEqual(["", "", "", "", ""]);
+    expect(spans()[0]?.className).toContain("w-3.5");
   });
 });

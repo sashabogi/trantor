@@ -78,6 +78,12 @@
 /* #13987 drill: no second terminal view inside the 2.0 chat. */
 [data-v2-chat] div:has(> button[title^="The orchestrator's live terminal"]) { display: none; }
 
+/* #14250: the timeline's ticks widen with the pointer and its hover card fades in; both stop under reduced motion. */
+.v2-tick { transition: width 120ms ease; }
+.v2-fade-in { animation: v2-fade-in 120ms ease; }
+@keyframes v2-fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .v2-tick, .v2-fade-in { transition: none; animation: none; } }
+
 /* #13984 drill: the shell root takes focus on click so a shortcut reaches it; it draws no ring. */
 .v2-root:focus { outline: none; }
 
