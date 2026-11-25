@@ -1,4 +1,7 @@
 // Facts read off one transcript row for the prompt timeline: when it was written and which file an edit touched (#14084).
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 /// Days since 1970-01-01 from a civil date (Howard Hinnant's `days_from_civil`): the one date
 /// fact this file needs without a date crate, valid across the whole Gregorian range.
@@ -62,10 +65,26 @@ pub(crate) fn row_ts(v: &serde_json::Value) -> Option<u64> {
     Some(secs as u64 * 1_000 + millis)
 }
 
-/// The file an edit-family tool call targets (#14084): the tool's own `file_path` input, with
-/// the row's `cwd` prefix stripped so the path is checkout-relative the way git status paths
-/// are and a change intent can match it. A path the row cannot place (no cwd, or outside it)
-/// stays exactly as recorded; every other tool keeps None.
+/// The checkout a row's folder sits in: the nearest folder at or above it that holds a `.git`
+/// entry. Cached per folder, since a transcript repeats a handful of folders thousands of times.
+fn checkout_root(cwd: &str) -> Option<String> {
+    static ROOTS: OnceLock<Mutex<HashMap<String, Option<String>>>> = OnceLock::new();
+    let mut roots = crate::lock_or_recover(ROOTS.get_or_init(Default::default));
+    if let Some(found) = roots.get(cwd) {
+        return found.clone();
+    }
+    let found = Path::new(cwd)
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .map(|dir| dir.to_string_lossy().into_owned());
+    roots.insert(cwd.to_string(), found.clone());
+    found
+}
+
+/// The file an edit-family tool call targets (#14084): the tool's own `file_path` input, made
+/// relative to the checkout the way git status paths are, so the Code screen can open it. The
+/// row's `cwd` only locates the checkout: a session that ran `cd` into a subfolder still names
+/// files from the root. A path outside the checkout stays as recorded; other tools keep None.
 pub(crate) fn edit_target_path(name: &str, input: &serde_json::Value, cwd: &str) -> Option<String> {
     if !matches!(name, "Edit" | "Write" | "MultiEdit" | "NotebookEdit") {
         return None;
@@ -74,7 +93,8 @@ pub(crate) fn edit_target_path(name: &str, input: &serde_json::Value, cwd: &str)
     let raw = input.get("file_path").or_else(|| input.get("notebook_path"))?.as_str()?;
     let cwd = cwd.trim_end_matches('/');
     if !cwd.is_empty() {
-        if let Some(rest) = raw.strip_prefix(cwd).and_then(|r| r.strip_prefix('/')) {
+        let base = checkout_root(cwd).unwrap_or_else(|| cwd.to_string());
+        if let Some(rest) = raw.strip_prefix(base.trim_end_matches('/')).and_then(|r| r.strip_prefix('/')) {
             return Some(rest.to_string());
         }
     }
@@ -90,5 +110,25 @@ mod tests {
         let input = serde_json::json!({ "notebook_path": "/repo/notes/n.ipynb" });
         assert_eq!(edit_target_path("NotebookEdit", &input, "/repo").as_deref(), Some("notes/n.ipynb"));
         assert_eq!(edit_target_path("Read", &input, "/repo"), None);
+    }
+
+    // Drill on the built app: a file written while the session sat in desktop/src/v2 was named
+    // shell/shellMode.ts, and the Code screen could not read it.
+    #[test]
+    fn a_path_is_named_from_the_checkout_even_when_the_row_sat_in_a_subfolder() {
+        let root = std::env::temp_dir().join(format!("trantor-facts-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sub = root.join("desktop/src/v2");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let file = root.join("desktop/src/v2/shell/shellMode.ts");
+        let input = serde_json::json!({ "file_path": file.to_string_lossy() });
+        let cwd = root.join("desktop/src/v2");
+        assert_eq!(
+            edit_target_path("Write", &input, &cwd.to_string_lossy()).as_deref(),
+            Some("desktop/src/v2/shell/shellMode.ts")
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
