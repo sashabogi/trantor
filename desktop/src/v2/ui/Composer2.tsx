@@ -200,9 +200,9 @@ export function Composer2(p: Composer2Props) {
         {p.contextPct != null && <Ring pct={p.contextPct} />}
         {att && <input ref={picker} type="file" accept="image/*" multiple hidden aria-label="Choose images to attach"
           onChange={e => { att.pick(Array.from(e.target.files ?? [])); e.target.value = ""; }} />}
-        <IconButton label="Attach a file or image"
-          title={att ? "Attach images (drop or paste any file or image onto the box)" : p.onAttach ? "Attach" : "Attaching is not wired here yet"}
-          round disabled={!att && !p.onAttach} onClick={att ? () => picker.current?.click() : p.onAttach}><Paperclip size={14} aria-hidden /></IconButton>
+        {(att || p.onAttach) && <IconButton label="Attach a file or image"
+          title={att ? "Attach images (drop or paste any file or image onto the box)" : "Attach"}
+          round onClick={att ? () => picker.current?.click() : p.onAttach}><Paperclip size={14} aria-hidden /></IconButton>}
         <button type="button" aria-label="Send" title={p.disabledReason || (text || hasChips ? "Send (Enter)" : "Type a message to send")}
           disabled={(!text && !hasChips) || blocked} onClick={send}
           className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border-0 bg-[var(--v2-text)] text-[var(--v2-ink)] disabled:opacity-40">

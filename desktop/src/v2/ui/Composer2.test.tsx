@@ -178,7 +178,7 @@ describe("Composer2", () => {
     act(() => root.render(<Harness onSend={vi.fn()} extra={{ onEffortChange: undefined, onModelChange: undefined, contextPct: null, onAttach: undefined, disabledReason: "Seat is offline" }} />));
     expect(q('[data-group="model"]')?.tagName).toBe("SPAN");
     expect(q('svg[aria-label^="Context"]')).toBeNull();
-    expect(q('button[aria-label="Attach a file or image"]')?.hasAttribute("disabled")).toBe(true);
+    expect(q('button[aria-label="Attach a file or image"]')).toBeNull();
     type("hello");
     const send = q('button[aria-label="Send"]');
     expect(send?.hasAttribute("disabled")).toBe(true);

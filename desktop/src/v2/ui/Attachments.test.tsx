@@ -133,11 +133,11 @@ describe("Composer2 attachments", () => {
 });
 
 describe("Composer2 without attachments", () => {
-  it("keeps the paperclip disabled and renders no file input", () => {
+  it("draws no paperclip and no file input where nothing can be attached", () => {
     act(() => root.render(
       <Composer2 value="" onChange={vi.fn()} onSend={vi.fn()} label="m" agent="orchestrator" model={{ id: "x", label: "x" }}
         contextPct={null} />));
     expect(host.querySelector('input[type="file"]')).toBeNull();
-    expect(host.querySelector<HTMLButtonElement>('button[aria-label="Attach a file or image"]')?.disabled).toBe(true);
+    expect(host.querySelector('button[aria-label="Attach a file or image"]')).toBeNull();
   });
 });

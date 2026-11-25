@@ -1,8 +1,7 @@
 // The one-line message to a seat, delivered through the hub bus at its next turn boundary (#13987).
 import { useState, type RefObject } from "react";
-import { ArrowUp, Paperclip, TerminalSquare } from "lucide-react";
+import { ArrowUp, TerminalSquare } from "lucide-react";
 import type { HubClient } from "../../../shared/api/client";
-import { IconButton } from "../../ui/IconButton";
 import type { SeatView } from "./seatModel";
 
 export function SeatMessage({ client, project, seat, inputRef }: {
@@ -29,9 +28,6 @@ export function SeatMessage({ client, project, seat, inputRef }: {
         className="min-w-0 flex-1 border-0 bg-transparent py-1.5 text-[12.5px] text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
       {state === "sent" && <span role="status" className="text-[11px] text-[var(--v2-ok)]">sent</span>}
       {state === "failed" && <span role="alert" className="text-[11px] text-[var(--v2-bad)]">not sent</span>}
-      <IconButton label={`Attach a file or image for ${seat.label}`} title="Attaching is not wired for seat messages yet" size={26} round disabled>
-        <Paperclip size={13} aria-hidden />
-      </IconButton>
       <button type="button" aria-label={`Send to ${seat.label}`} title={reason ?? "Send (delivered at its next turn boundary)"}
         disabled={!body || !!reason || state === "sending"} onClick={() => void send()}
         className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-0 bg-[var(--v2-text)] text-[var(--v2-ink)] disabled:opacity-40">
