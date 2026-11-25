@@ -228,41 +228,65 @@ pub(crate) fn read_file_at_head(
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-/// A single file's diff against its base. The viewer needs this so "read the code, then decide if
-/// you like it" happens in ONE place — sending the operator to another lens to see whether the
-/// file they are looking at changed is the kind of dead end this tree already had once.
+// #14268: an explicit side keeps index patches separate from working tree patches.
+#[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum FileDiffSide {
+    Staged,
+    Unstaged,
+}
+
 #[tauri::command]
-pub(crate) fn file_diff(project: String, path: String, seat: Option<String>) -> Result<String, String> {
+pub(crate) fn file_diff(
+    project: String,
+    path: String,
+    seat: Option<String>,
+    side: Option<FileDiffSide>,
+) -> Result<String, String> {
     let root = source_root(&project, seat.as_deref())?;
-    if path.contains("..") {
+    file_diff_at(&root, &path, side)
+}
+
+fn file_diff_at(root: &Path, path: &str, side: Option<FileDiffSide>) -> Result<String, String> {
+    if path.contains("..") || Path::new(path).is_absolute() {
         return Err("path escapes the project".into());
     }
-    // HEAD, not the seat's branch point: the question the viewer answers is "what is different
-    // about this file right now", which is what an uncommitted edit means.
-    let out = std::process::Command::new("git")
-        .args(["diff", "HEAD", "--", &path])
-        .current_dir(&root)
-        .output()
+    let mut command = std::process::Command::new("git");
+    command.args(["diff", "--no-ext-diff", "--no-color"]);
+    match side {
+        Some(FileDiffSide::Staged) => { command.arg("--cached"); }
+        Some(FileDiffSide::Unstaged) => {}
+        None => { command.arg("HEAD"); }
+    }
+    let out = command.args(["--", path]).current_dir(root).output()
         .map_err(|e| format!("git diff failed: {e}"))?;
+    if side.is_some() && !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    if !text.trim().is_empty() {
+    if !text.trim().is_empty() || side == Some(FileDiffSide::Staged) {
         return Ok(text);
     }
-    // Untracked: git diff says nothing about a file it has never seen, but the operator still
-    // wants to read it as "all new" rather than be told there is no diff.
+    // #14268: untracked content belongs only to the working tree diff.
     let untracked = std::process::Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard", "--", &path])
-        .current_dir(&root)
+        .args(["ls-files", "--others", "--exclude-standard", "--", path])
+        .current_dir(root)
         .output()
         .map_err(|e| format!("git ls-files failed: {e}"))?;
-    if String::from_utf8_lossy(&untracked.stdout).trim().is_empty() {
+    if !untracked.status.success() {
+        return Err(String::from_utf8_lossy(&untracked.stderr).to_string());
+    }
+    if untracked.stdout.is_empty() {
         return Ok(String::new());
     }
     let no_index = std::process::Command::new("git")
-        .args(["diff", "--no-index", "--", "/dev/null", &path])
-        .current_dir(&root)
+        .args(["diff", "--no-ext-diff", "--no-color", "--no-index", "--", "/dev/null", path])
+        .current_dir(root)
         .output()
         .map_err(|e| format!("git diff failed: {e}"))?;
+    if !no_index.status.success() && no_index.status.code() != Some(1) {
+        return Err(String::from_utf8_lossy(&no_index.stderr).to_string());
+    }
     Ok(String::from_utf8_lossy(&no_index.stdout).to_string())
 }
 
@@ -377,3 +401,7 @@ pub(crate) fn project_files(
     });
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+#[path = "file_diff_tests.rs"]
+mod file_diff_tests;

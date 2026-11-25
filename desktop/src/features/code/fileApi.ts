@@ -56,10 +56,9 @@ export function statusColor(code: string): string {
   return "var(--color-tr-doing)";
 }
 
-/** This file's diff against HEAD, or an all-new diff when git has never seen it. Empty string
- *  means unchanged. */
-export async function fileDiff(project: string, path: string, seat?: string): Promise<string> {
-  return invoke<string>("file_diff", { project, path, seat: seat ?? null });
+// #14268: callers can request one side; older viewers retain the combined HEAD diff.
+export async function fileDiff(project: string, path: string, seat?: string, side?: "staged" | "unstaged"): Promise<string> {
+  return invoke<string>("file_diff", { project, path, seat: seat ?? null, side: side ?? null });
 }
 
 /** Whether a seat is writing to its worktree right now. ONE owner for this answer: herdr, which

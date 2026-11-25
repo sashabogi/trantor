@@ -29,7 +29,7 @@ const SHOW = {
   files: [{ path: "src/landed.ts", status: "M", plus: 1, minus: 1 }],
   patch: "diff --git a/src/landed.ts b/src/landed.ts\n--- a/src/landed.ts\n+++ b/src/landed.ts\n@@ -1,1 +1,1 @@\n-before\n+after landing\n",
 };
-type IpcArgs = { project?: string; agent?: string; scope?: string; sha?: string; name?: string; paths?: string[]; unstage?: boolean; message?: string; strategy?: string; reference?: string; action?: string };
+type IpcArgs = { side?: string; project?: string; agent?: string; scope?: string; sha?: string; name?: string; paths?: string[]; unstage?: boolean; message?: string; strategy?: string; reference?: string; action?: string };
 type Call = { command: string; args: IpcArgs };
 let calls: Call[] = [];
 
@@ -60,6 +60,7 @@ beforeEach(() => {
     if (command === "git_pull") return JSON.stringify(named.strategy === "ff" ? { status: "diverged", reason: "Branches diverged. Choose Merge or Rebase." } : { status: "pulled", reason: "Integrated" });
     if (command === "git_stash_list") return "[]";
     if (command === "git_branch_list") return JSON.stringify({ current: named.scope === "project" ? "main" : "seat/codex-8", branches: [] });
+    if (command === "file_diff" && named.side === "staged") return "";
     if (command === "file_diff") return "diff --git a/bin/a.mjs b/bin/a.mjs\n--- a/bin/a.mjs\n+++ b/bin/a.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\n";
     if (command === "seat_diff") return JSON.stringify({ branch: "seat/codex-8", base: "deadbee", files: [], patch: "", truncated: false });
     if (command === "plugin:event|listen") return 1;
@@ -129,7 +130,7 @@ describe("CodeScreen", () => {
     expect(host.querySelector('[data-testid="source-list-panel"]')).not.toBeNull();
   });
 
-  it("shows Stage and Discard for an unstaged change, from the status of the file", async () => {
+  it("shows Stage and Discard for an unstaged change, from the side of the patch", async () => {
     await mount();
     const labels = [...host.querySelectorAll("button")].map(b => b.textContent).filter(t => /^(Stage|Unstage|Discard) hunk$/.test(t ?? ""));
     expect(labels).toEqual(["Stage hunk", "Discard hunk"]);

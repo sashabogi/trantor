@@ -1,4 +1,4 @@
-// Patch readers for the diff pane (#13988): one file's diff against HEAD, or a seat branch against main.
+// #14268: reading both index sides together keeps the source control sections in sync.
 import { useEffect, useState } from "react";
 import { fileDiff } from "../../../features/code/fileApi";
 import { seatDiff, type SeatDiffFile } from "../../../features/code/seatDiff";
@@ -7,18 +7,18 @@ import { scopeShow, type GitShowFile } from "./scopeGitApi";
 
 const message = (e: Error | string) => (e instanceof Error ? e.message : String(e));
 
-/** `sig` changes when the working tree does, so a stage or an edit refreshes the diff without a loading flash. */
-export function useFileDiff(project: string, scope: string | null, path: string | null, sig: string): PatchState {
+// #14268: a patch action refreshes both sides even when status and counts stay the same.
+export function useFileDiff(project: string, scope: string | null, path: string | null, sig: string, revision = 0): PatchState {
   const [state, setState] = useState<PatchState>({ kind: "loading" });
   useEffect(() => { setState({ kind: "loading" }); }, [project, scope, path]);
   useEffect(() => {
     if (!path) return;
     let alive = true;
-    fileDiff(project, path, scope ?? undefined)
-      .then(patch => { if (alive) setState({ kind: "ok", patch }); })
+    Promise.all([fileDiff(project, path, scope ?? undefined, "staged"), fileDiff(project, path, scope ?? undefined, "unstaged")])
+      .then(([stagedPatch, patch]) => { if (alive) setState({ kind: "ok", patch, stagedPatch }); })
       .catch(e => { if (alive) setState({ kind: "error", reason: message(e) }); });
     return () => { alive = false; };
-  }, [project, scope, path, sig]);
+  }, [project, scope, path, sig, revision]);
   return path ? state : { kind: "ok", patch: "" };
 }
 

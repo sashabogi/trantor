@@ -38,11 +38,12 @@ let root: Root;
 beforeEach(() => {
   mockIPC((command, args) => {
     // SAFETY: mockIPC types args as unknown; the git commands are invoked with an object of named args.
-    const named = (args ?? {}) as { agent?: string; scope?: string; sha?: string; path?: string };
+    const named = (args ?? {}) as { agent?: string; scope?: string; sha?: string; path?: string; side?: string };
     if (command === "read_file") return JSON.stringify({ text: "hello", truncated: false, bytes: 5 });
     if (command === "project_changes") return "[]";
     if (command === "git_panel") return JSON.stringify(named.agent === "codex-8" ? PANEL : CHECKOUT);
     if (command === "git_show") return JSON.stringify(SHOW);
+    if (command === "file_diff" && named.side === "staged") return "";
     if (command === "file_diff") return `diff --git a/${named.path} b/${named.path}\n--- a/${named.path}\n+++ b/${named.path}\n@@ -1,1 +1,1 @@\n-old\n+new\n`;
     if (command === "seat_diff") return JSON.stringify({ branch: "seat/codex-8", base: "deadbee", files: [], patch: "", truncated: false });
     if (command === "plugin:event|listen") return 1;

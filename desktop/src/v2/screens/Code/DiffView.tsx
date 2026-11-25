@@ -7,7 +7,6 @@ import { IconButton } from "../../ui/IconButton";
 import { Button } from "../../ui/Button";
 import { hunkText, pairHunk, patchForHunk, patchForLines, type DiffFile, type DiffHunk, type DiffLine } from "./diff";
 import { StatusLetter } from "./parts";
-import type { ChangeSide } from "./model";
 import { scopeBlame, type GitBlameLine, type GitPatchAction } from "./scopeGitApi";
 import { FileHistoryControl } from "./HistoryView";
 
@@ -86,11 +85,11 @@ function PatchButton({ action, unit, busy, onRun }: { action: GitPatchAction; un
   return <Button variant={action === "discard" ? "danger" : "quiet"} className="!px-2 !py-0.5 !text-v2-small" disabledReason={busy ? "Applying patch" : null} onClick={() => onRun(action)}>{label}</Button>;
 }
 
-// #14268: staged changes offer Unstage, unstaged ones Stage and Discard; a path on both sides offers all three.
-const ACTIONS = { staged: ["unstage"], unstaged: ["stage", "discard"], both: ["stage", "unstage", "discard"] } as const satisfies Record<ChangeSide, readonly GitPatchAction[]>;
+// #14268: actions follow the patch side, even when its file has changes on both sides.
+const ACTIONS = { staged: ["unstage"], unstaged: ["stage", "discard"] } as const satisfies Record<NonNullable<DiffFile["side"]>, readonly GitPatchAction[]>;
 
-function HunkBlock({ file, hunk, layout, busy, onAddToChat, onApply, blame, side = "both" }: {
-  file: DiffFile; hunk: DiffHunk; layout: DiffLayout; busy: boolean; onAddToChat: (text: string) => void; onApply?: ApplyPatch; blame?: Blame; side?: ChangeSide;
+function HunkBlock({ file, hunk, layout, busy, onAddToChat, onApply, blame, side = "unstaged" }: {
+  file: DiffFile; hunk: DiffHunk; layout: DiffLayout; busy: boolean; onAddToChat: (text: string) => void; onApply?: ApplyPatch; blame?: Blame; side?: DiffFile["side"];
 }) {
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   const [anchor, setAnchor] = useState<number | null>(null);
@@ -164,7 +163,7 @@ function FileHeader({ file, layout, onLayout, onOpenFile, project, scope, lineOn
 
 /** The hunks of one file, with the optional blame column threaded onto every row (#14237). */
 function DiffBody({ file, layout, busy, onAddToChat, apply, blame, side }: {
-  file: DiffFile; layout: DiffLayout; busy: boolean; onAddToChat: (text: string) => void; apply?: ApplyPatch; blame?: Blame; side?: ChangeSide;
+  file: DiffFile; layout: DiffLayout; busy: boolean; onAddToChat: (text: string) => void; apply?: ApplyPatch; blame?: Blame; side?: DiffFile["side"];
 }) {
   return (
     <div className="min-w-0">
@@ -176,7 +175,7 @@ function DiffBody({ file, layout, busy, onAddToChat, apply, blame, side }: {
 
 /** The diff with line history on: blame is fetched once per file and rides on the diff rows. */
 function BlamedDiffBody({ file, layout, busy, onAddToChat, apply, project, scope, side }: {
-  file: DiffFile; layout: DiffLayout; busy: boolean; onAddToChat: (text: string) => void; apply?: ApplyPatch; project: string; scope: string | null; side?: ChangeSide;
+  file: DiffFile; layout: DiffLayout; busy: boolean; onAddToChat: (text: string) => void; apply?: ApplyPatch; project: string; scope: string | null; side?: DiffFile["side"];
 }) {
   const [lines, setLines] = useState<GitBlameLine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -197,9 +196,9 @@ function BlamedDiffBody({ file, layout, busy, onAddToChat, apply, project, scope
   );
 }
 
-export function DiffView({ files, layout, onLayout, onAddToChat, onOpenFile, onApply, project, scope, sideOf }: {
+export function DiffView({ files, layout, onLayout, onAddToChat, onOpenFile, onApply, project, scope }: {
   files: DiffFile[]; layout: DiffLayout; onLayout: (l: DiffLayout) => void; onAddToChat: (text: string) => void; onOpenFile?: (path: string) => void; onApply?: ApplyPatch;
-  project?: string; scope?: string | null; sideOf?: (path: string) => ChangeSide;
+  project?: string; scope?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [blamePath, setBlamePath] = useState<string | null>(null);
@@ -209,16 +208,27 @@ export function DiffView({ files, layout, onLayout, onAddToChat, onOpenFile, onA
     try { await onApply(patch, action, path); }
     finally { setBusy(false); }
   };
+  const grouped = new Map<string, DiffFile[]>();
+  for (const file of files) {
+    const sections = grouped.get(file.path) ?? [];
+    sections.push(file);
+    grouped.set(file.path, sections);
+  }
   if (files.length === 0) return <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">No diff for this selection.</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto" data-diff-scroll>
-      {files.map(file => (
-        <section key={file.path} aria-label={`Diff of ${file.path}`} className="flex flex-col">
-          <FileHeader file={file} layout={layout} onLayout={onLayout} onOpenFile={onOpenFile} project={project} scope={scope}
-            lineOn={blamePath === file.path} onLineHistory={() => setBlamePath(path => path === file.path ? null : file.path)} />
-          {project && blamePath === file.path
-            ? <BlamedDiffBody file={file} layout={layout} busy={busy} onAddToChat={onAddToChat} apply={onApply ? apply : undefined} project={project} scope={scope ?? null} side={sideOf?.(file.path)} />
-            : <DiffBody file={file} layout={layout} busy={busy} onAddToChat={onAddToChat} apply={onApply ? apply : undefined} side={sideOf?.(file.path)} />}
+      {[...grouped].map(([path, sections]) => (
+        <section key={path} aria-label={`Diff of ${path}`} className="flex flex-col">
+          <FileHeader file={sections[sections.length - 1]} layout={layout} onLayout={onLayout} onOpenFile={onOpenFile} project={project} scope={scope}
+            lineOn={blamePath === path} onLineHistory={() => setBlamePath(current => current === path ? null : path)} />
+          {sections.map(file => (
+            <div key={file.side ?? "combined"} role="group" aria-label={file.side === "staged" ? "Staged" : "Changes"}>
+              {sections.length > 1 && <h3 className="border-b border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-3 py-2 text-v2-body text-[var(--v2-text)]">{file.side === "staged" ? "Staged" : "Changes"}</h3>}
+              {project && blamePath === path
+                ? <BlamedDiffBody file={file} layout={layout} busy={busy} onAddToChat={onAddToChat} apply={onApply ? apply : undefined} project={project} scope={scope ?? null} side={file.side} />
+                : <DiffBody file={file} layout={layout} busy={busy} onAddToChat={onAddToChat} apply={onApply ? apply : undefined} side={file.side} />}
+            </div>
+          ))}
         </section>
       ))}
     </div>

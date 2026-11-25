@@ -1,6 +1,7 @@
 // The full Source control tab (#13988), split around the bottom panel (#14241): the changes list
 // or the commit history runs full height on the left, and the diff or commit detail fills the
 // right column above the panel. The shared state lives in the Code screen, which owns both columns.
+import { useState } from "react";
 import { conflictPaths } from "../../../features/code/gitApi";
 import type { Card } from "../../../shared/api/client";
 import { Button } from "../../ui/Button";
@@ -9,7 +10,7 @@ import { ChangesList } from "./ChangesList";
 import { CommitDetail, UnlandedDetail } from "./CommitDetail";
 import { DiffPane, type ChipFile } from "./DiffPane";
 import { HistoryView, UNLANDED_KEY } from "./HistoryView";
-import { changeSide, fileChipLabel, type HistoryRow } from "./model";
+import { fileChipLabel, type HistoryRow } from "./model";
 import { useFileDiff, useSeatDiff } from "./usePatch";
 import type { ScmView } from "./Toolbar";
 import type { ScopeSnapshot } from "./useScopeGit";
@@ -78,13 +79,14 @@ export function SourceDetail(p: {
 }
 
 function ChangesDetail(p: { project: string; snap: ScopeSnapshot; chips: ChipFile[]; selected: string | null; onPick: (path: string) => void; acts: ChatActs; onOpenFile: (path: string) => void; onMutated: () => void }) {
-  const patch = useFileDiff(p.project, p.snap.scope, p.selected, statusSignature(p.snap));
+  const [revision, setRevision] = useState(0);
+  const patch = useFileDiff(p.project, p.snap.scope, p.selected, statusSignature(p.snap), revision);
   const apply = async (text: string, action: "stage" | "unstage" | "discard", path: string) => {
     try { await scopeApplyPatch(p.project, p.snap.scope, path, text, action); }
-    finally { p.onMutated(); }
+    finally { setRevision(value => value + 1); p.onMutated(); }
   };
   return (
-    <DiffPane chips={p.chips} selected={p.selected} onSelect={p.onPick} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile} onApply={apply} project={p.project} scope={p.snap.scope} sideOf={path => changeSide(p.snap.status, path)}
+    <DiffPane chips={p.chips} selected={p.selected} onSelect={p.onPick} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile} onApply={apply} project={p.project} scope={p.snap.scope}
       empty={p.chips.length === 0 ? "Nothing has changed on this checkout." : "Git shows no text diff for this file."} />
   );
 }

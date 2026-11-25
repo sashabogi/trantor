@@ -41,9 +41,9 @@ beforeEach(() => {
 });
 afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); });
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
-const mount = async () => {
+const mount = async (side: "staged" | "unstaged" = "unstaged") => {
   await act(async () => {
-    root.render(<DiffView files={[file]} layout="combined" onLayout={() => {}} onAddToChat={() => {}} onApply={apply} />);
+    root.render(<DiffView files={[{ ...file, side }]} layout="combined" onLayout={() => {}} onAddToChat={() => {}} onApply={apply} />);
   });
   await flush();
 };
@@ -59,8 +59,8 @@ const patchLabels = () =>
 
 describe("DiffView patch controls", () => {
   it("sends a complete hunk patch for stage, unstage and discard", async () => {
-    await mount();
     for (const [label, action] of [["Stage hunk", "stage"], ["Unstage hunk", "unstage"], ["Discard hunk", "discard"]] as const) {
+      await mount(action === "unstage" ? "staged" : "unstaged");
       await click(button(label));
       const call = lastCall();
       expect(call[1]).toBe(action);
@@ -71,14 +71,14 @@ describe("DiffView patch controls", () => {
     }
   });
 
-  it("shows three patch buttons whose labels follow the selection", async () => {
+  it("shows patch buttons whose labels follow the selection", async () => {
     await mount();
-    expect(patchLabels()).toEqual(["Stage hunk", "Unstage hunk", "Discard hunk"]);
+    expect(patchLabels()).toEqual(["Stage hunk", "Discard hunk"]);
     await click(line(1));
     await click(line(5), true);
-    expect(patchLabels()).toEqual(["Stage 4 lines", "Unstage 4 lines", "Discard 4 lines"]);
+    expect(patchLabels()).toEqual(["Stage 4 lines", "Discard 4 lines"]);
     await click(line(2));
-    expect(patchLabels()).toEqual(["Stage 3 lines", "Unstage 3 lines", "Discard 3 lines"]);
+    expect(patchLabels()).toEqual(["Stage 3 lines", "Discard 3 lines"]);
   });
 
   it("shift-selects a changed-line range and stages only those lines", async () => {
@@ -93,9 +93,9 @@ describe("DiffView patch controls", () => {
   });
 
   it("unstaging one added line keeps the other addition as context and leaves the deletions out", async () => {
-    await mount();
+    await mount("staged");
     await click(line(2));
-    expect(patchLabels()).toEqual(["Stage 1 line", "Unstage 1 line", "Discard 1 line"]);
+    expect(patchLabels()).toEqual(["Unstage 1 line"]);
     await click(button("Unstage 1 line"));
     const selectedPatch = lastCall()[0];
     expect(selectedPatch).toContain("@@ -1,4 +1,5 @@ fn");
@@ -178,24 +178,16 @@ describe("DiffView line history", () => {
 
 // #14268: Unstage on a change that is not staged is a no-op the screen should not offer.
 describe("DiffView patch actions by side", () => {
-  const mountSide = async (side: "staged" | "unstaged" | "both") => {
-    await act(async () => {
-      root.render(<DiffView files={[file]} layout="combined" onLayout={() => {}} onAddToChat={() => {}} onApply={apply} sideOf={() => side} />);
-    });
-    await flush();
-  };
-  it("offers Stage and Discard for unstaged changes", async () => {
-    await mountSide("unstaged");
+  it("offers Stage and Discard for unstaged changes without a section heading", async () => {
+    await mount("unstaged");
     expect(patchLabels()).toEqual(["Stage hunk", "Discard hunk"]);
+    expect(host.querySelector("h3")).toBeNull();
   });
-  it("offers only Unstage for staged changes, by hunk and by line", async () => {
-    await mountSide("staged");
+  it("offers only Unstage for staged changes, by hunk and by line, without a section heading", async () => {
+    await mount("staged");
     expect(patchLabels()).toEqual(["Unstage hunk"]);
+    expect(host.querySelector("h3")).toBeNull();
     await click(line(1));
     expect(patchLabels()).toEqual(["Unstage 1 line"]);
-  });
-  it("offers all three when one file is changed on both sides", async () => {
-    await mountSide("both");
-    expect(patchLabels()).toEqual(["Stage hunk", "Unstage hunk", "Discard hunk"]);
   });
 });

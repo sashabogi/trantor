@@ -2,6 +2,7 @@
 export type DiffLine = { kind: "ctx" | "add" | "del"; text: string; oldNo: number | null; newNo: number | null };
 export type DiffHunk = { header: string; lines: DiffLine[] };
 export type DiffFile = {
+  side?: "staged" | "unstaged";
   path: string;
   status: "M" | "A" | "D" | "R";
   plus: number;

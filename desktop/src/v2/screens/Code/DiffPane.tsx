@@ -5,19 +5,26 @@ import { IconButton } from "../../ui/IconButton";
 import { DiffView, type ApplyPatch, type DiffLayout } from "./DiffView";
 import { parseUnifiedDiff } from "./diff";
 import { Counts, StatusLetter } from "./parts";
-import type { ChangeSide, Letter } from "./model";
+import type { Letter } from "./model";
 
 export type ChipFile = { path: string; letter: Letter | "U"; plus: number | null; minus: number | null };
-export type PatchState = { kind: "loading" } | { kind: "error"; reason: string } | { kind: "ok"; patch: string; truncated?: boolean };
+export type PatchState = { kind: "loading" } | { kind: "error"; reason: string } | { kind: "ok"; patch: string; stagedPatch?: string; truncated?: boolean };
 
-export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpenFile, onApply, empty, project, scope, sideOf }: {
+export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpenFile, onApply, empty, project, scope }: {
   chips: ChipFile[]; selected: string | null; onSelect: (path: string) => void; patch: PatchState;
   onAddToChat: (text: string) => void; onOpenFile?: (path: string) => void; onApply?: ApplyPatch; empty: string;
-  project?: string; scope?: string | null; sideOf?: (path: string) => ChangeSide;
+  project?: string; scope?: string | null;
 }) {
   const [layout, setLayout] = useState<DiffLayout>("combined");
   const [all, setAll] = useState(false);
-  const parsed = useMemo(() => (patch.kind === "ok" ? parseUnifiedDiff(patch.patch) : []), [patch]);
+  const parsed = useMemo(() => {
+    if (patch.kind !== "ok") return [];
+    if (patch.stagedPatch === undefined) return parseUnifiedDiff(patch.patch);
+    return [
+      ...parseUnifiedDiff(patch.stagedPatch).map(file => ({ ...file, side: "staged" as const })),
+      ...parseUnifiedDiff(patch.patch).map(file => ({ ...file, side: "unstaged" as const })),
+    ];
+  }, [patch]);
   const shown = all || !selected ? parsed : parsed.filter(f => f.path === selected);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -39,7 +46,7 @@ export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpen
       {patch.kind === "ok" && patch.truncated && <div className="border-b border-[var(--v2-edge)] px-4 py-1.5 text-v2-body text-[var(--v2-warn)]">The patch is capped at 400 KB, so this diff is partial.</div>}
       {patch.kind === "ok" && (parsed.length === 0
         ? <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">{empty}</div>
-        : <DiffView files={shown} layout={layout} onLayout={setLayout} onAddToChat={onAddToChat} onOpenFile={onOpenFile} onApply={onApply} project={project} scope={scope} sideOf={sideOf} />)}
+        : <DiffView files={shown} layout={layout} onLayout={setLayout} onAddToChat={onAddToChat} onOpenFile={onOpenFile} onApply={onApply} project={project} scope={scope} />)}
     </div>
   );
 }
