@@ -1,6 +1,7 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: State normalization is the persisted-data boundary; these checks preserve the legacy decoder byte-for-byte during a structural-only split. */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { dirname, join } from "node:path";
 import { createPersistHealth } from "../lib/persist-health.mjs";
 import { DEFAULT_ORG } from "../lib/store-contract.mjs";
 
@@ -177,6 +178,136 @@ if (STORE_KIND === "pg" || STORE_KIND === "postgres") {
     if (existsSync(DATA)) state = normalizeState(JSON.parse(readFileSync(DATA, "utf8")));
   } catch {}
 }
+
+const TURNS_FILE = join(dirname(DATA), "turns.jsonl");
+const TURN_RETENTION_MS = 180 * 86400000;
+const turnRows = new Map();
+const dailyTurns = new Map();
+let recentTurnTs = [];
+let lastTurnTs = null;
+const successfulOutcomes = new Set(["completed", "asked", "blocked"]);
+const turnDay = ts => new Date(ts).toISOString().slice(0, 10);
+function addTurnToTotals(row) {
+  const day = turnDay(row.ts);
+  const projects = dailyTurns.get(day) || new Map();
+  const agents = projects.get(row.project) || new Map();
+  const total = agents.get(row.agent) || { day, project: row.project, agent: row.agent, turns: 0, failed: 0, outcomes: {}, models: new Set(), lastFailure: null };
+  total.turns++;
+  total.outcomes[row.outcome] = (total.outcomes[row.outcome] || 0) + 1;
+  if (row.model) total.models.add(row.model);
+  if (!successfulOutcomes.has(row.outcome)) {
+    total.failed++;
+    if (!total.lastFailure || row.ts > total.lastFailure.ts) {
+      total.lastFailure = { ts: row.ts, outcome: row.outcome, model: row.model, exit: row.exit, card: row.card };
+    }
+  }
+  agents.set(row.agent, total);
+  projects.set(row.project, agents);
+  dailyTurns.set(day, projects);
+}
+function rebuildTurnTotals() {
+  dailyTurns.clear();
+  recentTurnTs = [...turnRows.values()].map(row => row.ts).sort((a, b) => a - b);
+  lastTurnTs = recentTurnTs.at(-1) ?? null;
+  for (const row of turnRows.values()) addTurnToTotals(row);
+}
+function compactTurnFile(rows) {
+  const tmp = `${TURNS_FILE}.${process.pid}.tmp`;
+  writeFileSync(tmp, rows.map(row => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
+  renameSync(tmp, TURNS_FILE);
+}
+const bootTurnCutoff = Date.now() - TURN_RETENTION_MS;
+if (durableStore) {
+  await durableStore.pruneTurns(ORG_ID, bootTurnCutoff);
+  for (const row of await durableStore.loadTurns(ORG_ID, bootTurnCutoff)) turnRows.set(row.id, row);
+} else if (existsSync(TURNS_FILE)) {
+  let source = null;
+  try { source = readFileSync(TURNS_FILE, "utf8"); } catch {}
+  if (source !== null) {
+    for (const line of source.split("\n")) {
+      if (!line) continue;
+      try {
+        const row = JSON.parse(line);
+        if (row && typeof row.id === "string" && Number.isFinite(row.ts) && row.ts >= bootTurnCutoff) turnRows.set(row.id, row);
+      } catch {}
+    }
+    compactTurnFile([...turnRows.values()]);
+  }
+}
+rebuildTurnTotals();
+function trackTurn(row) {
+  turnRows.set(row.id, row);
+  addTurnToTotals(row);
+  let lo = 0, hi = recentTurnTs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (recentTurnTs[mid] <= row.ts) lo = mid + 1; else hi = mid;
+  }
+  recentTurnTs.splice(lo, 0, row.ts);
+  lastTurnTs = Math.max(lastTurnTs ?? 0, row.ts);
+}
+async function appendTurns(rows) {
+  let storedRows, duplicates;
+  if (durableStore) {
+    ({ storedRows, duplicates } = await durableStore.appendTurns(ORG_ID, rows));
+  } else {
+    storedRows = rows.filter(row => !turnRows.has(row.id));
+    duplicates = rows.length - storedRows.length;
+    const unique = [];
+    const seen = new Set();
+    for (const row of storedRows) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      unique.push(row);
+    }
+    duplicates += storedRows.length - unique.length;
+    storedRows = unique;
+    if (storedRows.length) appendFileSync(TURNS_FILE, storedRows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  }
+  for (const row of storedRows) trackTurn(row);
+  return { stored: storedRows.length, duplicates };
+}
+async function pruneTurns(olderThanMs = Date.now() - TURN_RETENTION_MS) {
+  const cutoff = Number(olderThanMs);
+  if (durableStore) await durableStore.pruneTurns(ORG_ID, cutoff);
+  for (const [id, row] of turnRows) if (row.ts < cutoff) turnRows.delete(id);
+  if (!durableStore) compactTurnFile([...turnRows.values()]);
+  rebuildTurnTotals();
+}
+const readTurnTotals = () => [...dailyTurns.values()].flatMap(projects =>
+  [...projects.values()].flatMap(agents => [...agents.values()].map(total => ({
+    day: total.day,
+    project: total.project,
+    agent: total.agent,
+    turns: total.turns,
+    failed: total.failed,
+    outcomes: { ...total.outcomes },
+    models: [...total.models].sort(),
+    lastFailure: total.lastFailure ? { ...total.lastFailure } : null,
+  }))));
+function turnHealth() {
+  const cutoff = Date.now() - 86400000;
+  let lo = 0, hi = recentTurnTs.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (recentTurnTs[mid] < cutoff) lo = mid + 1; else hi = mid;
+  }
+  return { lastRowTs: lastTurnTs, rows24h: recentTurnTs.length - lo };
+}
+let retentionError = "";
+const retentionTimer = setInterval(async () => {
+  try {
+    await pruneTurns();
+    retentionError = "";
+  } catch (error) {
+    const message = String(error?.message || error);
+    if (message !== retentionError) process.stderr.write(`[trantor] turn retention failed: ${message}\n`);
+    retentionError = message;
+  }
+}, 86400000);
+retentionTimer.unref?.();
+const turnTelemetry = { append: appendTurns, prune: pruneTurns, readTotals: readTurnTotals, health: turnHealth };
+
 let dirty = false;
 // Persist the unified log under `events`, AND mirror the card-only subset under the legacy
 // `cardEvents` key — so downgrading to a pre-0.17.54 hub still boots with its full TIMELINE
@@ -296,6 +427,6 @@ setInterval(persist, persistTickMs).unref?.();
 
   return {
     state, durableStore, persist, persistHealth, markDirty, copyTask, copyMessage, reload, startChangeSubscription,
-    HUB_SRC, appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, stripNulText,
+    turnTelemetry, HUB_SRC, appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, stripNulText,
   };
 }

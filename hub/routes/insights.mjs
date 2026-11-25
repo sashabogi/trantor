@@ -6,6 +6,32 @@ import { join } from "node:path";
 let ledgerCache = { mtimeMs: -1, rows: [] };
 let telemetryCache = { maxMtimeMs: -1, turns: [] };
 const LOGDIR = join(homedir(), ".agent-bus", "logs");
+const TURN_OUTCOMES = new Set(["completed", "asked", "blocked", "no-delivery", "empty", "stalled", "cut", "rejected", "api-error"]);
+const stringWithin = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max;
+const safeInteger = (value, min = 0) => Number.isSafeInteger(value) && value >= min;
+const optionalBoolean = (row, key) => row[key] === undefined || typeof row[key] === "boolean";
+
+function validTurnRow(row, nowMs) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+  if ("prompt" in row || "output" in row || "text" in row) return null;
+  if (typeof row.id !== "string" || !/^[0-9a-f]{32}$/i.test(row.id) || row.v !== 1) return null;
+  if (!safeInteger(row.ts, 1) || row.ts > nowMs + 60000 || !safeInteger(row.turn, 1)) return null;
+  if (!stringWithin(row.persona, 120) || !stringWithin(row.agent, 80) || !stringWithin(row.project, 80)) return null;
+  // A machine with no label configured reports "" (lib/machine-label.mjs): that is a valid row, not a dropped one.
+  if (typeof row.machine !== "string" || row.machine.length > 120) return null;
+  if (!stringWithin(row.trigger, 120) || !stringWithin(row.model, 200)) return null;
+  if (!safeInteger(row.card) || !safeInteger(row.duration_ms)) return null;
+  if (!(row.tokens === null || safeInteger(row.tokens))) return null;
+  if (!(row.exit === null || Number.isInteger(row.exit)) || !(row.effExit === null || Number.isInteger(row.effExit))) return null;
+  if (!TURN_OUTCOMES.has(row.outcome) || typeof row.verdict !== "string") return null;
+  if (row.usage !== undefined && (!row.usage || typeof row.usage !== "object" || Array.isArray(row.usage))) return null;
+  if (row.containers !== undefined && (!Array.isArray(row.containers) || row.containers.length > 100 || row.containers.some(name => !stringWithin(name, 200)))) return null;
+  if (!["cut", "stalled", "authFailed", "emptyOutput", "emptyTurn"].every(key => optionalBoolean(row, key))) return null;
+  if (row.cutSignal !== undefined && (typeof row.cutSignal !== "string" || row.cutSignal.length > 80)) return null;
+  if (row.extensions !== undefined && !safeInteger(row.extensions)) return null;
+  if (row.boxMs !== undefined && !safeInteger(row.boxMs)) return null;
+  return { ...row, id: row.id.toLowerCase(), verdict: row.verdict.slice(0, 600) };
+}
 
 function scanTelemetry() {
   let files = [];
@@ -25,8 +51,31 @@ function scanTelemetry() {
   return turns;
 }
 
-export async function routeInsights({ res, q, P, req, ctx }) {
-  const { state, json, canon, now } = ctx;
+export async function routeInsights({ res, q, P, req, auth, ctx }) {
+  const { state, json, canon, now, body, scopeAllows, turnTelemetry, AUTH_MODE } = ctx;
+    if (req.method === "POST" && P === "/telemetry/turns") {
+      const b = await body(req);
+      if (!Array.isArray(b?.rows)) return json(res, 400, { error: "rows array required" });
+      if (b.rows.length > 100) return json(res, 400, { error: "at most 100 rows per request" });
+      const rows = [];
+      let dropped = 0;
+      for (const candidate of b.rows) {
+        const row = validTurnRow(candidate, now());
+        if (row) rows.push(row); else dropped++;
+      }
+      const owner = scopeAllows(auth?.identity, "", "owner");
+      if (AUTH_MODE !== "off" && !owner && rows.some(row => auth?.identity?.name !== `${row.persona}:${row.project}`)) {
+        return json(res, 403, { error: "turn rows must name the signing seat" });
+      }
+      try {
+        const result = await turnTelemetry.append(rows);
+        return json(res, 200, { ok: true, stored: result.stored, duplicates: result.duplicates, dropped });
+      } catch (error) {
+        const reason = String(error?.message || error);
+        process.stderr.write(`[trantor] turn telemetry store failed: ${reason}\n`);
+        return json(res, 500, { error: `turn telemetry store failed: ${reason}` });
+      }
+    }
     if (req.method === "GET" && P === "/economics") {   // the brain's books, surfaced: scrooge ledger + quota profile
       const out = { scrooge: null, lifetime: null, profile: null };
       try { out.profile = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "profile.json"), "utf8")).providers || {}; } catch {}

@@ -9,7 +9,7 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
     appendEvent, appendCardEvent, appendTaskLog, markDelivered, contractsFor, canUseInboxSession, inboxWindow,
     deliverable, inboxReadable, inboxResponse, filterReadable, canRead, streams, UI,
     AUTH_MODE, persistHealth, duty, now, markDirty, assertNoSecrets, PEER_TTL_MS,
-    CONTRACT_WINDOW_MS, PUBLIC_URL,
+    CONTRACT_WINDOW_MS, PUBLIC_URL, turnTelemetry,
   } = ctx;
     if (req.method === "POST" && P === "/send") {
       const b = await body(req);
@@ -175,6 +175,7 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
     // #8723: the count is a listing in aggregate — memory rows (past PEER_TTL_MS) never count.
     if (P === "/health") return json(res, 200, { ok: true, authMode: AUTH_MODE, peers: Object.values(state.peers).filter(v => (v.lastSeen || 0) >= now() - PEER_TTL_MS).length, messages: state.messages.length, streams: streams.length,
       persist: persistHealth.view(),
+      telemetry: turnTelemetry.health(),
       // v1.4: the public front door, empty when RELAY_PUBLIC_URL is unset — pairing hands it out.
       publicUrl: PUBLIC_URL,
       // #5686: duty liveness rides /health so the app's Home strip and doctor read one truth.
