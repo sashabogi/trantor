@@ -1,4 +1,5 @@
 import { CircleHelp, ListOrdered, Search, Shield, TriangleAlert } from "lucide-react";
+import type { Peer } from "../../../shared/api/client";
 import { Avatar, Button, ProjectTile, seatLabel } from "../../index";
 import { hasSeen } from "../../../shared/seen";
 import { ago } from "../../../shared/time";
@@ -54,20 +55,22 @@ function StaleRow({ item, selected, onSelect }: { item: MessageItem; selected: b
   );
 }
 
-export function InboxList({ items, filter, selected, search, sort, onSearch, onSort, onSelect, onClearStale }: {
+export function InboxList({ items, filter, selected, search, sort, peers, onSearch, onSort, onSelect, onClearStale }: {
   items: InboxItem[];
   filter: InboxFilter;
   selected: string | null;
   search: string;
   sort: InboxSort;
+  /** Presence for the ranked order: a question from a live seat outranks one from a gone seat (#14053). */
+  peers: Peer[];
   onSearch: (search: string) => void;
   onSort: () => void;
   onSelect: (key: string) => void;
   onClearStale: (items: MessageItem[]) => void;
 }) {
   const groups = splitStaleItems(items);
-  const live = rankInboxItems(filter === "answered" ? items : groups.live, sort);
-  const stale = rankInboxItems(filter === "answered" ? [] : groups.stale, sort);
+  const live = rankInboxItems(filter === "answered" ? items : groups.live, sort, peers);
+  const stale = rankInboxItems(filter === "answered" ? [] : groups.stale, sort, peers);
   const sortLabel = sort === "ranked" ? "Ranked" : sort === "newest" ? "Newest" : "By project";
   return (
     <section aria-label="Needs you" className="flex w-[470px] shrink-0 flex-col border-r border-[var(--v2-edge)]">

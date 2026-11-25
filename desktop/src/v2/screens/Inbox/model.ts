@@ -1,4 +1,5 @@
 import type { Card, FileHold, Message, Peer, Proposal } from "../../../shared/api/client";
+import { stateOf } from "../../../shared/presence";
 import { stalenessOf, type Staleness } from "../../../features/inbox/staleness";
 
 export type InboxFilter = "needs" | "questions" | "proposals" | "collisions" | "stale" | "answered";
@@ -72,12 +73,21 @@ export function makeInboxItems(input: InboxModelInput): InboxItem[] {
   ];
 }
 
-// #13990: an answer's value is the open cards or held seats it releases, not the row's age.
-export function rankInboxItems<T extends InboxItem>(items: T[], sort: InboxSort = "ranked"): T[] {
+// #13990/#14053: an answer's value is what it releases, not the row's age. The ranked order is
+// collision gates, then proposals, then live seats' questions, then other questions. Inside a
+// group the one that releases more comes first, then the oldest. Liveness uses presence's one rule (stateOf); staleness is untouched.
+function rankGroup(item: InboxItem, live: ReadonlySet<string>): number {
+  if (item.kind === "collision") return 0;
+  if (item.kind === "proposal") return 1;
+  return live.has(item.from) ? 2 : 3;
+}
+
+export function rankInboxItems<T extends InboxItem>(items: T[], sort: InboxSort = "ranked", peers: Peer[] = []): T[] {
+  const live = new Set(peers.filter(p => stateOf(p) !== "offline").map(p => p.session));
   return [...items].sort((a, b) => {
     if (sort === "newest") return b.ts - a.ts;
     if (sort === "project") return a.project.localeCompare(b.project) || b.ts - a.ts;
-    return b.unblocks - a.unblocks || b.ts - a.ts || a.key.localeCompare(b.key);
+    return rankGroup(a, live) - rankGroup(b, live) || b.unblocks - a.unblocks || a.ts - b.ts || a.key.localeCompare(b.key);
   });
 }
 

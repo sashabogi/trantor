@@ -10,7 +10,7 @@ import { Messages } from "../../features/messages/Messages";
 import { ProjectTile } from "../ui/ProjectTile";
 import type { LensScreen, Navigate } from "../routes";
 
-export type ClassicLensProps = { client: HubClient; project: string; me: string; lens: LensScreen; onNavigate: Navigate };
+export type ClassicLensProps = { client: HubClient; project: string; me: string; lens: Exclude<LensScreen, "workspace" | "code" | "board">; onNavigate: Navigate };
 
 /** #13984 drill: the classic components draw their own ProjectHeader (title + lens row) under the 2.0 tabs;
  *  theme.css hides exactly that header inside this wrapper, leaving each lens's own filters. */
@@ -25,11 +25,9 @@ function ClassicLensBody({ client, project, me, lens, onNavigate }: ClassicLensP
     return <GraphLens client={client} project={project} lens="graph" onLens={onLens} seat={seat} onSeat={setSeat} onOpenFile={() => onNavigate("code")} />;
   }
   if (lens === "feed") return <Feed client={client} project={project} lens="feed" onLens={onLens} />;
-  if (lens === "bus") {
-    if (!me) return <NotWired title="Bus" line="Waiting for the signed identity before the bus can be read." />;
-    return <Conversation client={client} project={project} me={me} lens="bus" onLens={onLens} />;
-  }
-  return <NotWired title="Browser" line="The in-app browser is not wired yet." />;
+  // The Bus lens: it needs the signed identity before the conversation can be read.
+  if (!me) return <NotWired title="Bus" line="Waiting for the signed identity before the bus can be read." />;
+  return <Conversation client={client} project={project} me={me} lens="bus" onLens={onLens} />;
 }
 
 export function NotWired({ title, line }: { title: string; line: string }) {

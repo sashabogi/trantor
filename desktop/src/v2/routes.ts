@@ -1,7 +1,7 @@
 // What the shell can show, and which screens live inside a project (#v2-F).
 import type { HubClient } from "../shared/api/client";
 
-export const LENS_SCREENS = ["workspace", "code", "graph", "board", "feed", "bus", "browser"] as const;
+export const LENS_SCREENS = ["workspace", "code", "graph", "board", "feed", "bus"] as const;
 export type LensScreen = (typeof LENS_SCREENS)[number];
 
 export const FLEET_SCREENS = ["dashboard", "inbox", "messages", "agents", "usage", "extensions", "settings", "projects"] as const;
@@ -23,7 +23,7 @@ export type ScreenProps = {
 };
 
 export const LENS_LABEL = {
-  workspace: "Workspace", code: "Code", graph: "Graph", board: "Board", feed: "Feed", bus: "Bus", browser: "Browser",
+  workspace: "Workspace", code: "Code", graph: "Graph", board: "Board", feed: "Feed", bus: "Bus",
 } as const satisfies Record<LensScreen, string>;
 
 export function isLensScreen(s: Screen): s is LensScreen {

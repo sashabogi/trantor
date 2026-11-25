@@ -2,7 +2,7 @@
 // #v2-F: one key or ?ui=v2 opens 2.0; Back to classic clears both.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backToClassic, enterV2, UI_KEY, wantsV2 } from "./toggle";
-import { isLensScreen, readMode, saveMode } from "./routes";
+import { isLensScreen, readMode, saveMode, type Screen } from "./routes";
 
 // happy-dom under this Node exposes no localStorage, so each test gets an in-memory one.
 beforeEach(() => {
@@ -47,7 +47,9 @@ describe("the 2.0 toggle", () => {
 describe("routes", () => {
   it("knows which screens live inside a project", () => {
     expect(isLensScreen("board")).toBe(true);
-    expect(isLensScreen("browser")).toBe(true);
+    // SAFETY: "browser" was a LensScreen before #14053 removed it; the assertion feeds a stale
+    // stored route string that the literal type can no longer express.
+    expect(isLensScreen("browser" as Screen)).toBe(false);
     expect(isLensScreen("dashboard")).toBe(false);
     expect(isLensScreen("settings")).toBe(false);
   });

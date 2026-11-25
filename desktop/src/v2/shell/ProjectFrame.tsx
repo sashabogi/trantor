@@ -1,6 +1,6 @@
 // The project header and lens tabs from the Workspace artboard, shared by every in-project screen (#v2-F).
 import type { ReactNode } from "react";
-import { Code2, Columns3, Globe, LayoutPanelLeft, Network, Radio, Rss } from "lucide-react";
+import { Code2, Columns3, LayoutPanelLeft, Network, Radio, Rss } from "lucide-react";
 import type { HubClient } from "../../shared/api/client";
 import { usePeers, stateOf } from "../../shared/presence";
 import { useTasks } from "../../shared/tasks";
@@ -14,7 +14,6 @@ const LENS_ICON = {
   board: <Columns3 size={13} aria-hidden />,
   feed: <Rss size={13} aria-hidden />,
   bus: <Radio size={13} aria-hidden />,
-  browser: <Globe size={13} aria-hidden />,
 } as const satisfies Record<LensScreen, ReactNode>;
 
 const CLOSED = new Set(["done", "archived", "cancelled", "rejected"]);

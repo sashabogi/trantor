@@ -64,12 +64,12 @@ describe("ShellV2", () => {
     }
   });
 
-  it("frames project screens with the header and the seven lens tabs", async () => {
+  it("frames project screens with the header and the six lens tabs", async () => {
     await mount();
     await click('nav button[title="trantor"]');
     expect(host.querySelector("main")?.getAttribute("data-screen")).toBe("workspace");
     const tabs = [...host.querySelectorAll('[role="tablist"][aria-label="Lenses"] [role="tab"]')].map(t => t.textContent?.replace(/\d+$/, ""));
-    expect(tabs).toEqual(["Workspace", "Code", "Graph", "Board", "Feed", "Bus", "Browser"]);
+    expect(tabs).toEqual(["Workspace", "Code", "Graph", "Board", "Feed", "Bus"]);
     await click('[role="tab"]:nth-child(4)');
     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain("Board");
     expect(host.querySelector("main")?.getAttribute("data-screen")).toBe("board");

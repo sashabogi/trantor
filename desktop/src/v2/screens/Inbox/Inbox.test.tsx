@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
-// #13990: rank by released work, group stale questions, and answer without leaving the inbox.
+// #13990/#14053: rank by what an answer unblocks, group stale questions, and answer without leaving the inbox.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { HubClient, type Card, type Message } from "../../../shared/api/client";
+import { HubClient, type Card, type Message, type Peer } from "../../../shared/api/client";
 import { hasSeen } from "../../../shared/seen";
 import { InboxScreen } from "./index";
 import { makeInboxItems, rankInboxItems, splitStaleItems } from "./model";
@@ -18,15 +18,23 @@ const message = (id: number, from: string, refs: number[] = [], ts = id * 1000):
 const card = (id: number, status: string): Card => ({ id, status, project: "trantor", title: `Card ${id}` });
 
 describe("Inbox model", () => {
-  it("ranks open card references and held seats ahead of waiting questions", () => {
+  it("ranks gates, then proposals, then live seats' questions, then other questions; oldest first in each group", () => {
+    const now = Date.now();
+    const online: Peer = { session: "codex-8", project: "trantor", lastSeen: now };
+    const offline: Peer = { session: "glm-5", project: "trantor", lastSeen: now - 600_000 };
     const items = makeInboxItems({
       messages: [message(1, "codex-8", [11], 100), message(2, "glm-5", [11, 12], 50)],
       proposals: [{ id: 3, session: "kimi-9", project: "trantor", scope: "restart", condition: "dead", exclusions: "live", status: "pending", ts: 300 }],
       holds: [{ id: 4, project: "trantor", file: "src/a.ts", session: "codex-8", other: "glm-5", status: "pending", ts: 200 }],
       peers: [], cards: [card(11, "doing"), card(12, "todo"), card(13, "done")],
     });
+    // No presence: both questions come from gone seats, so age decides — message-2 (ts 50) is older.
     expect(rankInboxItems(items).map(item => item.key)).toEqual([
-      "hold-trantor-4", "message-2", "proposal-trantor-3", "message-1",
+      "hold-trantor-4", "proposal-trantor-3", "message-2", "message-1",
+    ]);
+    // codex-8 online: its question outranks glm-5's even though it is the newer one.
+    expect(rankInboxItems(items, "ranked", [offline, online]).map(item => item.key)).toEqual([
+      "hold-trantor-4", "proposal-trantor-3", "message-1", "message-2",
     ]);
     expect(rankInboxItems(items, "newest")[0]?.key).toBe("proposal-trantor-3");
   });

@@ -1,9 +1,8 @@
-// The work area for one seat: Terminal, Changes and the not-yet-wired views, the approval, the message line (#13987).
+// The work area for one seat: Terminal and Changes, the approval, the message line (#13987, #14053).
 import { lazy, Suspense, type ReactNode, type RefObject } from "react";
-import { CheckCheck, Copy, ExternalLink, FileDiff, Globe, Lightbulb, SquareTerminal } from "lucide-react";
+import { FileDiff, SquareTerminal } from "lucide-react";
 import type { FileHold, HubClient } from "../../../shared/api/client";
 import { PaneBoundary } from "../../../features/workspace/PaneBoundary";
-import { IconButton } from "../../ui/IconButton";
 import { NotWired } from "../../shell/ClassicLenses";
 import { Approval } from "./Approval";
 import { usePanes } from "./panes";
@@ -13,21 +12,12 @@ import type { DiffState } from "./useSeatDiff";
 
 const ChangesTab = lazy(() => import("./ChangesTab"));
 
-export type WorkTab = "terminal" | "changes" | "reasoning" | "preview" | "tests";
+export type WorkTab = "terminal" | "changes";
 
 const TABS: { id: WorkTab; label: string; icon: ReactNode }[] = [
   { id: "terminal", label: "Terminal", icon: <SquareTerminal size={12} aria-hidden /> },
   { id: "changes", label: "Changes", icon: <FileDiff size={12} aria-hidden /> },
-  { id: "reasoning", label: "Reasoning", icon: <Lightbulb size={12} aria-hidden /> },
-  { id: "preview", label: "Preview", icon: <Globe size={12} aria-hidden /> },
-  { id: "tests", label: "Tests", icon: <CheckCheck size={12} aria-hidden /> },
 ];
-
-const NOT_WIRED = {
-  reasoning: ["Reasoning", "The seat's reasoning stream is not wired yet."],
-  preview: ["Preview", "The in-app browser preview is not wired yet."],
-  tests: ["Tests", "Test runs per seat are not wired yet."],
-} as const satisfies Record<"reasoning" | "preview" | "tests", readonly [string, string]>;
 
 /** The live terminal for one seat; shared by Focus, Split and Grid so they never drift (#13987). */
 export function SeatTerminal({ project, seat, interactive }: { project: string; seat: SeatView; interactive: boolean }) {
@@ -43,13 +33,9 @@ function TabBody({ tab, project, seat, diff }: { tab: WorkTab; project: string; 
   if (tab === "terminal") {
     return <div className="flex min-h-[360px] min-w-0 flex-1 flex-col p-2"><SeatTerminal project={project} seat={seat} interactive /></div>;
   }
-  if (tab === "changes") {
-    if (seat.isOrchestrator) return <NotWired title="Changes" line="The orchestrator works in the project checkout; open Code to review it." />;
-    if (seat.machine) return <NotWired title="Changes" line={`${seat.label} runs on ${seat.machine}; its diff is not readable from here yet.`} />;
-    return <Suspense fallback={<div className="p-4 text-[12.5px] text-[var(--v2-muted)]">Loading the diff view</div>}><ChangesTab state={diff} seatName={seat.label} /></Suspense>;
-  }
-  const [title, line] = NOT_WIRED[tab];
-  return <NotWired title={title} line={line} />;
+  if (seat.isOrchestrator) return <NotWired title="Changes" line="The orchestrator works in the project checkout; open Code to review it." />;
+  if (seat.machine) return <NotWired title="Changes" line={`${seat.label} runs on ${seat.machine}; its diff is not readable from here yet.`} />;
+  return <Suspense fallback={<div className="p-4 text-[12.5px] text-[var(--v2-muted)]">Loading the diff view</div>}><ChangesTab state={diff} seatName={seat.label} /></Suspense>;
 }
 
 export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messageRef, onDecided }: {
@@ -76,8 +62,6 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
             <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: seat.presence === "offline" ? "var(--v2-track)" : "var(--v2-ok)" }} />
             {seat.presence === "offline" ? "offline" : "live"}{seat.machine ? ` · ${seat.machine}` : ""}
           </span>
-          <IconButton label="Copy terminal output" title="Copying terminal output is not wired yet" size={22} disabled><Copy size={13} aria-hidden /></IconButton>
-          <IconButton label="Pop out terminal" title="Popping the terminal out is not wired yet" size={22} disabled><ExternalLink size={13} aria-hidden /></IconButton>
         </span>
       </div>
       <TabBody tab={tab} project={project} seat={seat} diff={diff} />

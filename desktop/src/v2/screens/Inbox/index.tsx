@@ -60,7 +60,7 @@ export function InboxScreen({ client, onNavigate }: ScreenProps) {
         <InboxFilters items={items} settled={settled} filter={filter} project={project}
           onFilter={next => { setFilter(next); setProject(""); }} onProject={setProject}
           onMessages={() => onNavigate("messages")} />
-        <InboxList items={visible} filter={filter} selected={selectedKey} search={search} sort={sort}
+        <InboxList items={visible} filter={filter} selected={selectedKey} search={search} sort={sort} peers={data.peers}
           onSearch={setSearch} onSort={() => setSort(NEXT_SORT[sort])} onSelect={setSelectedKey} onClearStale={clearStale} />
         {selected ? (
           <InboxDetail key={selected.key} client={client} item={selected} cards={cards} peers={data.peers}
