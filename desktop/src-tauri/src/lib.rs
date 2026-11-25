@@ -51,6 +51,7 @@ mod git_scope;
 mod git_checkout;
 mod git_branch;
 mod git_commit;
+mod git_history;
 mod remote_seat;
 mod update;
 mod app;
@@ -87,6 +88,8 @@ use git_checkout::*;
 use git_branch::*;
 #[allow(unused_imports)]
 use git_commit::*;
+#[allow(unused_imports)]
+use git_history::*;
 #[allow(unused_imports)]
 use remote_seat::*;
 #[allow(unused_imports)]

@@ -24,44 +24,41 @@ export function deriveSeat(commit: CommitLike, ctx: SeatCtx): string | null {
   return onSeatBranch ? onSeatBranch[1] : null;
 }
 
-export type HistoryQuery = { text: string; author?: string; seat?: string; card?: number; file?: string };
+export type HistoryQuery = { text: string; author?: string; seat?: string; card?: number; file?: string; message?: string };
 
 /** "fix author:codex card:13970 file:a.ts" into its parts; unknown words stay free text. */
 export function parseSearch(raw: string): HistoryQuery {
   const q: HistoryQuery = { text: "" };
   const free: string[] = [];
   for (const word of raw.trim().split(/\s+/).filter(Boolean)) {
-    const m = /^(author|seat|card|file):(.*)$/i.exec(word);
+    const m = /^(author|seat|card|file|message):(.*)$/i.exec(word);
     if (!m || !m[2]) { free.push(word); continue; }
     const key = m[1].toLowerCase();
     if (key === "author") q.author = m[2].toLowerCase();
     else if (key === "seat") q.seat = m[2].toLowerCase();
     else if (key === "file") q.file = m[2];
+    else if (key === "message") q.message = m[2].toLowerCase();
     else if (/^#?\d+$/.test(m[2])) q.card = Number(m[2].replace("#", ""));
   }
   q.text = free.join(" ").toLowerCase();
   return q;
 }
 
-export type HistoryRow = { sha: string; author: string; when: string; subject: string; seat: string | null; card: number | null };
+export type HistoryRow = { sha: string; author: string; when: string; subject: string; seat: string | null; card: number | null; refs: string[] };
 
-export function toRow(c: { sha: string; author: string; when: string; subject: string }, ctx: SeatCtx): HistoryRow {
-  return { ...c, seat: deriveSeat(c, ctx), card: parseCardRef(c.subject) };
+export function toRow(c: { sha: string; author: string; when: string; subject: string; refs?: string[] }, ctx: SeatCtx): HistoryRow {
+  return { ...c, refs: c.refs ?? [], seat: deriveSeat(c, ctx), card: parseCardRef(c.subject) };
 }
 
-/** Rows matching every given key. A file: filter cannot be answered from the log (it has no per-commit
- *  file lists), so it is reported back instead of silently matching nothing. */
-export type HistoryResult = { rows: HistoryRow[]; fileUnsupported: boolean };
-
-export function filterHistory(rows: readonly HistoryRow[], q: HistoryQuery): HistoryResult {
-  const kept = rows.filter(r => {
+/** file: and message: are applied by git; the remaining keys are cheap row filters. */
+export function filterHistory(rows: readonly HistoryRow[], q: HistoryQuery): HistoryRow[] {
+  return rows.filter(r => {
     if (q.author && !r.author.toLowerCase().includes(q.author)) return false;
     if (q.seat && !(r.seat ?? "").toLowerCase().includes(q.seat)) return false;
     if (q.card !== undefined && r.card !== q.card) return false;
     if (q.text && !`${r.subject} ${r.sha} ${r.author}`.toLowerCase().includes(q.text)) return false;
     return true;
   });
-  return { rows: kept, fileUnsupported: !!q.file };
 }
 
 export type SeatInfo = { seat: string; presence: Presence; branch: string | null; ahead: number | null; machine: string | null; hasWorktree: boolean };

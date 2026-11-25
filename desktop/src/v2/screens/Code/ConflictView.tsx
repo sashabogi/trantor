@@ -1,9 +1,9 @@
-// Resolve unmerged paths on either scoped checkout. Continue and Abort belong to the history-depth slice.
+// The banner reads the paused git operation and continues only after every conflict is staged.
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { readFile, writePlain } from "../../../features/code/fileApi";
 import { conflictPaths } from "../../../features/code/gitApi";
-import { scopeStage } from "./scopeGitApi";
+import { branchMutationRefusal, scopeOperation, scopeOperationAbort, scopeOperationContinue, scopeStage, type GitOperation } from "./scopeGitApi";
 import { Button } from "../../ui/Button";
 import { countConflicts, parseConflicts, resolveChunks, type Chunk, type Choice } from "./conflicts";
 import { NotWiredBlock, PathLabel } from "./parts";
@@ -83,28 +83,61 @@ function ConflictEditor({ project, scope, path, onResolved, onError }: { project
   );
 }
 
+const operationName = (operation: NonNullable<GitOperation["operation"]>) => operation === "cherry-pick" ? "Cherry-pick" : operation[0].toUpperCase() + operation.slice(1);
+
 export function ConflictView({ project, snap, path, onPick, onResolved }: { project: string; snap: ScopeSnapshot; path: string | null; onPick: (p: string) => void; onResolved: () => void }) {
   const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<GitOperation | null>(null);
+  const [busy, setBusy] = useState<"continue" | "abort" | null>(null);
+  const [confirmAbort, setConfirmAbort] = useState(false);
   const paths = conflictPaths(snap.status);
   const scope = snap.scope;
   const active = path && paths.includes(path) ? path : paths[0] ?? null;
+  const refusal = branchMutationRefusal(scope);
+  useEffect(() => {
+    let alive = true;
+    scopeOperation(project, scope)
+      .then(value => { if (alive) { setState(value); setConfirmAbort(false); } })
+      .catch(cause => { if (alive) setError(message(cause)); });
+    return () => { alive = false; };
+  }, [project, scope, snap.readAt, snap.status]);
   const take = (p: string, pick: Choice) => {
     readFile(project, p, scope ?? undefined).then(b => resolveFile(project, scope, p, allPicks(countConflicts(parseConflicts(b.text)), pick)))
       .then(onResolved).catch(e => setError(message(e)));
   };
+  const finish = async (action: "continue" | "abort") => {
+    setBusy(action);
+    setError(null);
+    try {
+      if (action === "continue") await scopeOperationContinue(project, scope);
+      else await scopeOperationAbort(project, scope);
+      setState(await scopeOperation(project, scope));
+      setConfirmAbort(false);
+      onResolved();
+    } catch (cause) {
+      setError(message(cause instanceof Error ? cause : String(cause)));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const operation = state?.operation ?? null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <aside aria-label="Conflicted files" className="flex w-[300px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-[var(--v2-edge)] p-3">
-        <div className="rounded-[10px] border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] p-3 text-[12px] text-[var(--v2-text-2)]">
-          <div className="mb-1 flex items-center gap-1.5 font-semibold text-[var(--v2-warn)]"><AlertTriangle size={13} aria-hidden />Merge paused</div>
-          Git lists {paths.length} {paths.length === 1 ? "file" : "files"} as unmerged on {snap.branch ?? scope ?? "the project checkout"}. Whether it is a merge or a rebase is not readable yet.
+        {operation && <div role="status" className="rounded-[10px] border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] p-3 text-[12px] text-[var(--v2-text-2)]">
+          <div className="mb-1 flex items-center gap-1.5 font-semibold text-[var(--v2-warn)]"><AlertTriangle size={13} aria-hidden />{operationName(operation)} paused</div>
+          {paths.length} {paths.length === 1 ? "conflicted file" : "conflicted files"} on {snap.branch ?? scope ?? "the project checkout"}.
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <Button disabledReason={paths.length > 0 ? `${paths.length} files still have conflicts` : "Continue needs a git command. Not wired yet."}>Continue</Button>
-            <Button disabledReason="Abort needs a git command and asks first. Not wired yet.">Abort…</Button>
+            <Button disabledReason={refusal ?? (busy ? `${busy === "continue" ? "Continuing" : "Aborting"} ${operation}` : paths.length > 0 ? `${paths.length} files still have conflicts` : null)} onClick={() => void finish("continue")}>{busy === "continue" ? "Continuing…" : "Continue"}</Button>
+            {!confirmAbort && <Button variant="danger" disabledReason={refusal ?? (busy ? "Another git operation is running" : null)} onClick={() => setConfirmAbort(true)}>Abort…</Button>}
           </div>
-        </div>
+          {confirmAbort && <div className="mt-2 rounded-md border border-[var(--v2-bad)] p-2">
+            <div className="mb-2">Abort this {operation} and discard its conflict resolutions?</div>
+            <div className="flex gap-1.5"><Button variant="danger" disabledReason={busy ? "Aborting" : null} onClick={() => void finish("abort")}>Confirm abort</Button><Button disabledReason={busy ? "Aborting" : null} onClick={() => setConfirmAbort(false)}>Cancel</Button></div>
+          </div>}
+        </div>}
         {error && <div role="alert" className="text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
-        {paths.length === 0 && <div className="text-[12px] text-[var(--v2-ok)]">No unmerged files. Nothing is waiting on you.</div>}
+        {paths.length === 0 && <div className="text-[12px] text-[var(--v2-ok)]">{operation ? `No unmerged files. The ${operation} is ready to continue.` : "No unmerged files. Nothing is waiting on you."}</div>}
         {paths.map(p => (
           <div key={p} className={`rounded-lg border p-2 ${p === active ? "border-[var(--v2-accent)]" : "border-[var(--v2-edge)]"}`}>
             <button type="button" onClick={() => onPick(p)} className="flex w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-[12px]"><span className="text-[var(--v2-bad)]">!</span><PathLabel path={p} /></button>

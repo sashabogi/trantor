@@ -10,9 +10,10 @@ import type { Letter } from "./model";
 export type ChipFile = { path: string; letter: Letter | "U"; plus: number | null; minus: number | null };
 export type PatchState = { kind: "loading" } | { kind: "error"; reason: string } | { kind: "ok"; patch: string; truncated?: boolean };
 
-export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpenFile, onApply, empty }: {
+export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpenFile, onApply, empty, project, scope }: {
   chips: ChipFile[]; selected: string | null; onSelect: (path: string) => void; patch: PatchState;
   onAddToChat: (text: string) => void; onOpenFile?: (path: string) => void; onApply?: ApplyPatch; empty: string;
+  project?: string; scope?: string | null;
 }) {
   const [layout, setLayout] = useState<DiffLayout>("combined");
   const [all, setAll] = useState(false);
@@ -38,7 +39,7 @@ export function DiffPane({ chips, selected, onSelect, patch, onAddToChat, onOpen
       {patch.kind === "ok" && patch.truncated && <div className="border-b border-[var(--v2-edge)] px-4 py-1.5 text-[11.5px] text-[var(--v2-warn)]">The patch is capped at 400 KB, so this diff is partial.</div>}
       {patch.kind === "ok" && (parsed.length === 0
         ? <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">{empty}</div>
-        : <DiffView files={shown} layout={layout} onLayout={setLayout} onAddToChat={onAddToChat} onOpenFile={onOpenFile} onApply={onApply} />)}
+        : <DiffView files={shown} layout={layout} onLayout={setLayout} onAddToChat={onAddToChat} onOpenFile={onOpenFile} onApply={onApply} project={project} scope={scope} />)}
     </div>
   );
 }

@@ -50,7 +50,7 @@ function ChangesBody(p: { project: string; snap: ScopeSnapshot; acts: ChatActs; 
       <div className="flex w-[320px] shrink-0 flex-col border-r border-[var(--v2-edge)]">
         <ChangesList project={p.project} snap={p.snap} selected={selected} onSelect={setPicked} onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
       </div>
-      <DiffPane chips={chips} selected={selected} onSelect={setPicked} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile} onApply={apply}
+      <DiffPane chips={chips} selected={selected} onSelect={setPicked} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile} onApply={apply} project={p.project} scope={p.snap.scope}
         empty={chips.length === 0 ? "Nothing has changed on this checkout." : "Git shows no text diff for this file."} />
     </div>
   );
@@ -59,16 +59,18 @@ function ChangesBody(p: { project: string; snap: ScopeSnapshot; acts: ChatActs; 
 function HistoryBody(p: { project: string; snap: ScopeSnapshot; cards: Card[]; selectedKey: string | null; onSelect: (k: string) => void; acts: ChatActs; onNavigate: Navigate; seats: readonly string[]; onMutated: () => void; onError: (message: string) => void }) {
   const ctx = useMemo(() => ({ seats: p.seats, branch: p.snap.branch }), [p.seats, p.snap.branch]);
   const rows: HistoryRow[] = useMemo(() => p.snap.log.map(c => toRow(c, ctx)), [p.snap.log, ctx]);
+  const [historyRows, setHistoryRows] = useState(rows);
   const ahead = p.snap.seatBacked && p.snap.ahead ? p.snap.ahead : null;
-  const key = p.selectedKey ?? (ahead ? UNLANDED_KEY : rows[0]?.sha ?? null);
+  const key = p.selectedKey ?? (ahead ? UNLANDED_KEY : historyRows[0]?.sha ?? null);
   const diff = useSeatDiff(p.project, p.snap.scope, key === UNLANDED_KEY, statusSignature(p.snap));
-  const row = rows.find(r => r.sha === key) ?? null;
+  const row = historyRows.find(r => r.sha === key) ?? null;
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <HistoryView rows={rows} branch={p.snap.branch} unlanded={ahead} selected={key} onSelect={p.onSelect} seatBacked={p.snap.seatBacked} />
+      <HistoryView rows={rows} branch={p.snap.branch} unlanded={ahead} selected={key} onSelect={p.onSelect} seatBacked={p.snap.seatBacked}
+        project={p.project} scope={p.snap.scope} seats={p.seats} onRows={setHistoryRows} />
       {key === UNLANDED_KEY && ahead
-        ? <UnlandedDetail branch={p.snap.branch} count={ahead} diff={diff} acts={p.acts} />
-        : <CommitDetail row={row} project={p.project} scope={p.snap.scope} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} />}
+        ? <UnlandedDetail branch={p.snap.branch} count={ahead} diff={diff} acts={p.acts} project={p.project} scope={p.snap.scope} />
+        : <CommitDetail row={row} selectedSha={key === UNLANDED_KEY ? null : key} project={p.project} scope={p.snap.scope} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} onSelectCommit={p.onSelect} />}
     </div>
   );
 }

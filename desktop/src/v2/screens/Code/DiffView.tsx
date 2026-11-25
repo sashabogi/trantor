@@ -1,13 +1,14 @@
 // A readable diff from git's own unified output (#13988): code lines never wrap, they scroll
 // sideways. Combined is one column; Side by side pairs deletions with additions.
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { FileText, History } from "lucide-react";
 import { Seg } from "../../ui/Seg";
 import { IconButton } from "../../ui/IconButton";
 import { Button } from "../../ui/Button";
 import { hunkText, pairHunk, patchForHunk, patchForLines, type DiffFile, type DiffHunk, type DiffLine } from "./diff";
 import { StatusLetter } from "./parts";
-import type { GitPatchAction } from "./scopeGitApi";
+import { scopeBlame, type GitBlameLine, type GitPatchAction } from "./scopeGitApi";
+import { FileHistoryControl } from "./HistoryView";
 
 export type DiffLayout = "combined" | "split";
 export type ApplyPatch = (patch: string, action: GitPatchAction, path: string) => Promise<void>;
@@ -117,22 +118,57 @@ function HunkBlock({ file, hunk, layout, busy, onAddToChat, onApply }: {
   );
 }
 
-function FileHeader({ file, layout, onLayout, onOpenFile }: { file: DiffFile; layout: DiffLayout; onLayout: (l: DiffLayout) => void; onOpenFile?: (path: string) => void }) {
+function LineHistoryStrip({ project, scope, path }: { project: string; scope: string | null; path: string }) {
+  const [lines, setLines] = useState<GitBlameLine[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setLines(null);
+    setError(null);
+    scopeBlame(project, scope, path)
+      .then(value => { if (alive) setLines(value); })
+      .catch(cause => { if (alive) setError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { alive = false; };
+  }, [project, scope, path]);
+  return (
+    <aside aria-label={`Line history: ${path}`} className="w-[250px] shrink-0 border-l border-[var(--v2-edge)] bg-[var(--v2-panel-2)]">
+      <div className="border-b border-[var(--v2-edge)] px-2 py-1 text-[10.5px] font-semibold text-[var(--v2-muted)]">Line · author · age · commit</div>
+      {!lines && !error && <div className="px-2 py-2 text-[11px] text-[var(--v2-muted)]">Reading blame</div>}
+      {error && <div role="alert" className="px-2 py-2 text-[11px] text-[var(--v2-bad)]">{error}</div>}
+      {lines?.map(line => (
+        <div key={line.line} title={`${line.subject} · ${line.sha}`} className="v2-mono flex h-[19px] items-center gap-1.5 overflow-hidden whitespace-nowrap px-2 text-[10px] text-[var(--v2-muted)]">
+          <span className="w-6 shrink-0 text-right text-[var(--v2-track)]">{line.line}</span>
+          <span className="min-w-0 flex-1 truncate text-[var(--v2-text-2)]">{line.author}</span>
+          <span className="shrink-0">{line.when}</span>
+          <span className="shrink-0 text-[var(--v2-accent)]">{line.sha.slice(0, 7)}</span>
+        </div>
+      ))}
+    </aside>
+  );
+}
+
+function FileHeader({ file, layout, onLayout, onOpenFile, project, scope, lineOn, onLineHistory }: {
+  file: DiffFile; layout: DiffLayout; onLayout: (l: DiffLayout) => void; onOpenFile?: (path: string) => void;
+  project?: string; scope?: string | null; lineOn: boolean; onLineHistory: () => void;
+}) {
   return (
     <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2">
       <StatusLetter letter={file.status} />
       <span className="v2-mono min-w-0 flex-1 truncate text-[12px] text-[var(--v2-text)]">{file.path}</span>
       <Seg label="Diff layout" value={layout} onChange={onLayout} options={[{ value: "combined", label: "Combined" }, { value: "split", label: "Side by side" }]} />
-      <IconButton label="Open file in editor" title="Open the file" size={24} disabled={!onOpenFile || file.status === "D"} onClick={() => onOpenFile?.(file.path)}><FileText size={13} aria-hidden /></IconButton>
-      <IconButton label="Line history" title="Line history needs a git blame command. Not wired yet." size={24} disabled><History size={13} aria-hidden /></IconButton>
+      {onOpenFile && <IconButton label="Open file in editor" title={file.status === "D" ? "The deleted file cannot be opened" : "Open the file"} size={24} disabled={file.status === "D"} onClick={() => onOpenFile(file.path)}><FileText size={13} aria-hidden /></IconButton>}
+      {project && <FileHistoryControl project={project} scope={scope ?? null} path={file.path} />}
+      {project && <IconButton label="Line history" title="Show author, age and commit beside every line" size={24} aria-pressed={lineOn} onClick={onLineHistory}><History size={13} aria-hidden /></IconButton>}
     </div>
   );
 }
 
-export function DiffView({ files, layout, onLayout, onAddToChat, onOpenFile, onApply }: {
+export function DiffView({ files, layout, onLayout, onAddToChat, onOpenFile, onApply, project, scope }: {
   files: DiffFile[]; layout: DiffLayout; onLayout: (l: DiffLayout) => void; onAddToChat: (text: string) => void; onOpenFile?: (path: string) => void; onApply?: ApplyPatch;
+  project?: string; scope?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
+  const [blamePath, setBlamePath] = useState<string | null>(null);
   const apply: ApplyPatch = async (patch, action, path) => {
     if (!onApply) return;
     setBusy(true);
@@ -144,9 +180,15 @@ export function DiffView({ files, layout, onLayout, onAddToChat, onOpenFile, onA
     <div className="flex min-h-0 flex-1 flex-col overflow-auto" data-diff-scroll>
       {files.map(file => (
         <section key={file.path} aria-label={`Diff of ${file.path}`} className="flex flex-col">
-          <FileHeader file={file} layout={layout} onLayout={onLayout} onOpenFile={onOpenFile} />
-          {file.binary && <div className="px-4 py-3 text-[12px] text-[var(--v2-muted)]">Binary file: git shows no text diff.</div>}
-          {file.hunks.map(h => <HunkBlock key={h.header} file={file} hunk={h} layout={layout} busy={busy} onAddToChat={onAddToChat} onApply={onApply ? apply : undefined} />)}
+          <FileHeader file={file} layout={layout} onLayout={onLayout} onOpenFile={onOpenFile} project={project} scope={scope}
+            lineOn={blamePath === file.path} onLineHistory={() => setBlamePath(path => path === file.path ? null : file.path)} />
+          <div className="flex min-w-0">
+            <div className="min-w-0 flex-1">
+              {file.binary && <div className="px-4 py-3 text-[12px] text-[var(--v2-muted)]">Binary file: git shows no text diff.</div>}
+              {file.hunks.map(h => <HunkBlock key={h.header} file={file} hunk={h} layout={layout} busy={busy} onAddToChat={onAddToChat} onApply={onApply ? apply : undefined} />)}
+            </div>
+            {project && blamePath === file.path && <LineHistoryStrip project={project} scope={scope ?? null} path={file.path} />}
+          </div>
         </section>
       ))}
     </div>

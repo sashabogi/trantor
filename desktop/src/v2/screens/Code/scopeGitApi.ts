@@ -58,6 +58,41 @@ export async function scopeShow(project: string, agent: GitScopeArg, sha: string
   return JSON.parse(await invoke<string>("git_show", { project, ...scopeArgs(agent), sha }));
 }
 
+export type GitHistoryEntry = { sha: string; author: string; when: string; subject: string; refs: string[] };
+export type GitHistoryFilter = { all: boolean; file?: string; message?: string; limit?: number };
+
+export async function scopeHistory(project: string, agent: GitScopeArg, filter: GitHistoryFilter): Promise<GitHistoryEntry[]> {
+  return JSON.parse(await invoke<string>("git_history", {
+    project, ...scopeArgs(agent), all: filter.all, file: filter.file ?? null, message: filter.message ?? null, limit: filter.limit ?? null,
+  }));
+}
+
+export type GitCommitMeta = { sha: string; author: string; when: string; subject: string; message: string; parents: string[]; github_url: string | null };
+
+export async function scopeCommitMeta(project: string, agent: GitScopeArg, sha: string): Promise<GitCommitMeta> {
+  return JSON.parse(await invoke<string>("git_commit_meta", { project, ...scopeArgs(agent), sha }));
+}
+
+export type GitBlameLine = { line: number; sha: string; author: string; when: string; subject: string };
+
+export async function scopeBlame(project: string, agent: GitScopeArg, path: string): Promise<GitBlameLine[]> {
+  return JSON.parse(await invoke<string>("git_blame", { project, ...scopeArgs(agent), path }));
+}
+
+export type GitOperation = { operation: "merge" | "rebase" | "cherry-pick" | "revert" | null; conflicts: number };
+
+export async function scopeOperation(project: string, agent: GitScopeArg): Promise<GitOperation> {
+  return JSON.parse(await invoke<string>("git_operation", { project, ...scopeArgs(agent) }));
+}
+
+export async function scopeOperationContinue(project: string, agent: GitScopeArg): Promise<void> {
+  await invoke("git_operation_continue", { project, ...scopeArgs(agent) });
+}
+
+export async function scopeOperationAbort(project: string, agent: GitScopeArg): Promise<void> {
+  await invoke("git_operation_abort", { project, ...scopeArgs(agent) });
+}
+
 export type GitBranch = {
   name: string; sha: string; committed_at: number; ahead: number | null; behind: number | null;
   current: boolean; remote: boolean; worktree: string | null;

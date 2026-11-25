@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { DiffView } from "./DiffView";
 import { parseUnifiedDiff } from "./diff";
 
@@ -19,9 +20,14 @@ let apply: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   apply = vi.fn().mockResolvedValue(undefined);
+  mockIPC(command => {
+    if (command === "git_blame") return JSON.stringify([{ line: 1, sha: "abcdef1234567890", author: "Tess", when: "2h ago", subject: "first" }]);
+    if (command === "git_history") return JSON.stringify([]);
+    return null;
+  });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); });
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
 const mount = async () => {
   await act(async () => {
@@ -83,4 +89,17 @@ describe("DiffView patch controls", () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("no longer applies");
     expect(line(1)?.getAttribute("data-selected")).toBe("true");
   });
+});
+
+it("turns on the per-line blame strip and opens file history from the diff header", async () => {
+  await act(async () => {
+    root.render(<DiffView files={[file]} layout="combined" onLayout={() => {}} onAddToChat={() => {}} project="trantor" scope={null} />);
+  });
+  await flush();
+  await click(host.querySelector('[aria-label="Line history"]'));
+  expect(host.querySelector('[aria-label="Line history: a.txt"]')?.textContent).toContain("Tess");
+  expect(host.querySelector('[aria-label="Line history: a.txt"]')?.textContent).toContain("2h ago");
+  expect(host.querySelector('[aria-label="Line history: a.txt"]')?.textContent).toContain("abcdef1");
+  await click(host.querySelector('[aria-label="File history for a.txt"]'));
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain("File history");
 });

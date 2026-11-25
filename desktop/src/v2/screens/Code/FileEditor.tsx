@@ -12,6 +12,7 @@ import { useFileDoc } from "./useFileDoc";
 import { EditorFooter } from "./EditorFooter";
 import { useChangeMarkers } from "./useChangeMarkers";
 import { FilePreview, previewKind } from "./FilePreview";
+import { FileHistoryControl } from "./HistoryView";
 
 const NO_SEATS: AskSeat[] = [];
 
@@ -47,6 +48,7 @@ function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenGr
       <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">
         <span className="v2-mono min-w-0 flex-1 truncate">{path.split("/").join(" › ")}</span>
         <ReviewChip project={project} seat={scope} path={path} onOpenGraph={onOpenGraph} />
+        <FileHistoryControl project={project} scope={scope} path={path} />
         {doc.load.truncated && <span className="text-[var(--v2-warn)]">first 512 KB only: saving is off</span>}
         {doc.saveError && <span role="alert" className="text-[var(--v2-bad)]">{doc.saveError}</span>}
         <AskControls getEditor={() => editorRef.current} path={path} scope={scope} seats={seats} menuOpen={seatMenu} onMenuOpen={setSeatMenu} onAsk={onAsk} onSendToSeat={onSendToSeat} />

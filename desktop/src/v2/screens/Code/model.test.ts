@@ -39,14 +39,14 @@ describe("history search", () => {
     expect(parseSearch("restore card:13970 author:Cod")).toEqual({ text: "restore", card: 13970, author: "cod" });
   });
   it("filters by card, seat, author and text together", () => {
-    expect(filterHistory(rows, parseSearch("card:13970")).rows.map(r => r.sha)).toEqual(["a1"]);
-    expect(filterHistory(rows, parseSearch("seat:codex")).rows.map(r => r.sha)).toEqual(["a1"]);
-    expect(filterHistory(rows, parseSearch("author:sasha tidy")).rows.map(r => r.sha)).toEqual(["b2"]);
+    expect(filterHistory(rows, parseSearch("card:13970")).map(r => r.sha)).toEqual(["a1"]);
+    expect(filterHistory(rows, parseSearch("seat:codex")).map(r => r.sha)).toEqual(["a1"]);
+    expect(filterHistory(rows, parseSearch("author:sasha tidy")).map(r => r.sha)).toEqual(["b2"]);
   });
-  it("reports file: as unsupported instead of matching nothing", () => {
-    const r = filterHistory(rows, parseSearch("file:a.ts"));
-    expect(r.fileUnsupported).toBe(true);
-    expect(r.rows).toHaveLength(2);
+  it("parses native file and whole-message filters without dropping rows locally", () => {
+    const query = parseSearch("file:a.ts message:needle");
+    expect(query).toMatchObject({ file: "a.ts", message: "needle" });
+    expect(filterHistory(rows, query)).toHaveLength(2);
   });
 });
 
