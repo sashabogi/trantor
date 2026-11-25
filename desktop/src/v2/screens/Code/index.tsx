@@ -24,6 +24,8 @@ import { sidebarVisible } from "./model";
 import { useScopeGit, type ScopeSnapshot, type ScopeState } from "./useScopeGit";
 import { useSeats } from "./useSeats";
 import { useCodeCommands } from "./useCodeCommands";
+import { branchMutationRefusal } from "./scopeGitApi";
+import { useShellMode } from "../../shell/shellMode";
 import { useTabs } from "./useTabs";
 
 const FileEditor = lazy(() => import("./FileEditor"));
@@ -52,7 +54,9 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const visible = sidebarVisible(tabs.active.kind, override);
 
   const addToChat = useCallback((text: string) => { setDraft(d => (d.trim() ? `${d}\n${text}` : text)); setChatOpen(true); }, []);
-  const acts = useMemo(() => ({ addToChat, copy }), [addToChat]);
+  const mode = useShellMode();
+  const branchRefusal = branchMutationRefusal(scope, mode) ?? (seats.find(seat => seat.seat === scope)?.presence === "working" ? `${scope} is working; change its worktree after the turn ends` : null);
+  const acts = useMemo(() => ({ addToChat, copy, branchRefusal }), [addToChat, branchRefusal]);
   const [reveal, setReveal] = useState<{ tab: string; line: number; column?: number; nonce: number } | null>(null);
   const openFile = (path: string, line?: number, column?: number) => {
     const id = `file:${scope ?? ""}:${path}`;
@@ -118,13 +122,13 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
         <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
           onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
           onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
-        <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} />
+        <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />
         {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
         {/* #14071: the tab's body always fills the column, so the panel stays at the bottom under short content. */}
         <div data-testid="code-main" className="flex min-h-0 flex-1 flex-col overflow-auto">
           <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
             selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
-            onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty}
+            onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty} onError={setNotice}
             liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
         </div>
         {/* #14080: keyed by project so one project never shows another project's shell. */}
@@ -142,7 +146,7 @@ type MainProps = {
   onMutated: () => void; onOpenFile: (p: string) => void; onOpenConflict: (p: string | null) => void; conflictPath: string | null;
   reveal: { tab: string; line: number; column?: number; nonce: number } | null;
   markDirty: (id: string, dirty: boolean) => void;
-  liveSeats: { seat: string }[]; onAsk: (text: string) => void; onSendToSeat: (seat: string, text: string) => void;
+  liveSeats: { seat: string }[]; onAsk: (text: string) => void; onSendToSeat: (seat: string, text: string) => void; onError: (message: string) => void;
 };
 
 function Main(p: MainProps) {
@@ -164,5 +168,5 @@ function Main(p: MainProps) {
     return <ConflictView project={p.project} snap={p.snap} path={p.conflictPath ?? conflictPaths(p.snap.status)[0] ?? null} onPick={path => p.onOpenConflict(path)} onResolved={p.onMutated} />;
   }
   return <SourceControlTab project={p.project} snap={p.snap} view={p.view} cards={p.cards} seats={p.seats} selectedKey={p.selectedKey} focusChange={p.focusChange}
-    onSelectKey={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} />;
+    onSelectKey={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} />;
 }

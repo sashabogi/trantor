@@ -10,6 +10,7 @@ import { IconButton } from "../../ui/IconButton";
 import { seatLabel } from "../../ui/identity";
 import { MenuItem, Popover } from "../../shell/Popover";
 import { DiffPane, type ChipFile } from "./DiffPane";
+import { CreateBranchDialog } from "./BranchPicker";
 import type { HistoryRow, Letter } from "./model";
 import { useCommitShow, type CommitPatch, type SeatBranchDiff } from "./usePatch";
 import type { Navigate } from "../../routes";
@@ -17,10 +18,13 @@ import type { Navigate } from "../../routes";
 const DONE = new Set(["done", "archived"]);
 const cardTone = (status: string): ChipTone => (DONE.has(status) ? "ok" : status === "testing" ? "warn" : "info");
 
-type Acts = { addToChat: (text: string) => void; copy: (text: string) => void };
+type Acts = { addToChat: (text: string) => void; copy: (text: string) => void; branchRefusal: string | null };
 
-function Actions({ title, sha, acts }: { title: string; sha: string; acts: Acts }) {
+function Actions({ title, sha, acts, project, scope, onMutated, onError }: {
+  title: string; sha: string; acts: Acts; project: string; scope: string | null; onMutated: () => void; onError: (message: string) => void;
+}) {
   const [more, setMore] = useState(false);
+  const [create, setCreate] = useState(false);
   return (
     <span className="relative flex shrink-0 gap-0.5">
       <IconButton label="Open on GitHub" title="Open on GitHub needs the remote URL, which no command reads yet." disabled><ExternalLink size={14} aria-hidden /></IconButton>
@@ -28,13 +32,14 @@ function Actions({ title, sha, acts }: { title: string; sha: string; acts: Acts 
       <IconButton label="Add this commit to the chat" title="Add to chat" onClick={() => acts.addToChat(`Commit ${sha}: ${title}`)}><MessageSquarePlus size={14} aria-hidden /></IconButton>
       <IconButton label="Crew review this commit" title="Crew review: two other seats review it, read-only. No start command from the desktop yet." disabled><Users size={14} aria-hidden /></IconButton>
       <IconButton label="Review this commit and every later one" title="Review through latest needs the crew review command. Not wired yet." disabled><ScanSearch size={14} aria-hidden /></IconButton>
-      <IconButton label="Create a branch here" title="Branch from here needs a git branch command. Not wired yet." disabled><GitBranchPlus size={14} aria-hidden /></IconButton>
+      <IconButton label="Create a branch here" title={acts.branchRefusal ?? `Create a branch at ${sha.slice(0, 7)}`} disabled={!!acts.branchRefusal} onClick={() => setCreate(true)}><GitBranchPlus size={14} aria-hidden /></IconButton>
       <IconButton label="Revert, copy id, cherry-pick" title="More: copy id, revert, cherry-pick" onClick={() => setMore(m => !m)}><MoreHorizontal size={14} aria-hidden /></IconButton>
       <Popover open={more} onClose={() => setMore(false)} label="Commit actions" align="right">
         <MenuItem onSelect={() => { acts.copy(sha); setMore(false); }}><Copy size={12} aria-hidden />Copy id</MenuItem>
         <MenuItem onSelect={() => setMore(false)} title="Revert needs a git revert command. Not wired yet."><span className="opacity-50">Revert (not wired)</span></MenuItem>
         <MenuItem onSelect={() => setMore(false)} title="Cherry-pick needs a git cherry-pick command. Not wired yet."><span className="opacity-50">Cherry-pick (not wired)</span></MenuItem>
       </Popover>
+      {create && <CreateBranchDialog project={project} scope={scope} sha={sha} onClose={() => setCreate(false)} onCreated={onMutated} onError={onError} />}
     </span>
   );
 }
@@ -50,7 +55,9 @@ function CommitBody({ show, acts }: { show: CommitPatch; acts: Acts }) {
   return <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={show.state} onAddToChat={acts.addToChat} empty="This commit changes no file text." />;
 }
 
-function SingleCommit({ row, project, scope, cards, acts, onNavigate }: { row: HistoryRow; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate }) {
+function SingleCommit({ row, project, scope, cards, acts, onNavigate, onMutated, onError }: {
+  row: HistoryRow; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate; onMutated: () => void; onError: (message: string) => void;
+}) {
   const who = row.seat ?? row.author;
   const card = row.card === null ? null : cards.find(c => c.id === row.card) ?? null;
   const show = useCommitShow(project, scope, row.sha);
@@ -59,7 +66,7 @@ function SingleCommit({ row, project, scope, cards, acts, onNavigate }: { row: H
       <div className="flex flex-col gap-2 border-b border-[var(--v2-edge)] px-4 py-3">
         <div className="flex flex-wrap items-center gap-2.5">
           <h2 className="m-0 min-w-0 flex-[1_1_300px] text-[16px] font-[650]">{row.subject}</h2>
-          <Actions title={row.subject} sha={row.sha} acts={acts} />
+          <Actions title={row.subject} sha={row.sha} acts={acts} project={project} scope={scope} onMutated={onMutated} onError={onError} />
         </div>
         <div className="flex flex-wrap items-center gap-2.5 text-[12px] text-[var(--v2-muted)]">
           <span className="inline-flex items-center gap-1.5"><Avatar name={who} size={20} /><span className="text-[var(--v2-text-2)]">{seatLabel(who)}</span>{row.seat && row.author !== row.seat && <span>({row.author})</span>}</span>
@@ -94,9 +101,10 @@ export function UnlandedDetail({ branch, count, diff, acts }: { branch: string |
   );
 }
 
-export function CommitDetail({ row, project, scope, cards, acts, onNavigate }: {
+export function CommitDetail({ row, project, scope, cards, acts, onNavigate, onMutated, onError }: {
   row: HistoryRow | null; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate;
+  onMutated: () => void; onError: (message: string) => void;
 }) {
   if (!row) return <div className="flex flex-1 items-center justify-center px-6 text-[12.5px] text-[var(--v2-muted)]">Pick a commit to read it.</div>;
-  return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} />;
+  return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} />;
 }

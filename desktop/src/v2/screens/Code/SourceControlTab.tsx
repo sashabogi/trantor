@@ -14,7 +14,7 @@ import { useFileDiff, useSeatDiff } from "./usePatch";
 import type { ScmView } from "./Toolbar";
 import type { ScopeSnapshot } from "./useScopeGit";
 
-export type ChatActs = { addToChat: (text: string) => void; copy: (text: string) => void };
+export type ChatActs = { addToChat: (text: string) => void; copy: (text: string) => void; branchRefusal: string | null };
 
 /** Changes when the working tree does; the diff readers refetch on it. */
 export function statusSignature(snap: ScopeSnapshot): string {
@@ -49,7 +49,7 @@ function ChangesBody(p: { project: string; snap: ScopeSnapshot; acts: ChatActs; 
   );
 }
 
-function HistoryBody(p: { project: string; snap: ScopeSnapshot; cards: Card[]; selectedKey: string | null; onSelect: (k: string) => void; acts: ChatActs; onNavigate: Navigate; seats: readonly string[] }) {
+function HistoryBody(p: { project: string; snap: ScopeSnapshot; cards: Card[]; selectedKey: string | null; onSelect: (k: string) => void; acts: ChatActs; onNavigate: Navigate; seats: readonly string[]; onMutated: () => void; onError: (message: string) => void }) {
   const ctx = useMemo(() => ({ seats: p.seats, branch: p.snap.branch }), [p.seats, p.snap.branch]);
   const rows: HistoryRow[] = useMemo(() => p.snap.log.map(c => toRow(c, ctx)), [p.snap.log, ctx]);
   const ahead = p.snap.seatBacked && p.snap.ahead ? p.snap.ahead : null;
@@ -61,14 +61,14 @@ function HistoryBody(p: { project: string; snap: ScopeSnapshot; cards: Card[]; s
       <HistoryView rows={rows} branch={p.snap.branch} unlanded={ahead} selected={key} onSelect={p.onSelect} seatBacked={p.snap.seatBacked} />
       {key === UNLANDED_KEY && ahead
         ? <UnlandedDetail branch={p.snap.branch} count={ahead} diff={diff} acts={p.acts} />
-        : <CommitDetail row={row} project={p.project} scope={p.snap.scope} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} />}
+        : <CommitDetail row={row} project={p.project} scope={p.snap.scope} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} />}
     </div>
   );
 }
 
 export function SourceControlTab(p: {
   project: string; snap: ScopeSnapshot; view: ScmView; cards: Card[]; seats: readonly string[]; selectedKey: string | null; onSelectKey: (k: string) => void;
-  acts: ChatActs; onNavigate: Navigate; onMutated: () => void; onOpenFile: (path: string) => void; onOpenConflict: (path: string | null) => void;
+  acts: ChatActs; onNavigate: Navigate; onMutated: () => void; onError: (message: string) => void; onOpenFile: (path: string) => void; onOpenConflict: (path: string | null) => void;
   /** the change an open intent focused, shown until the operator picks another (#14044) */
   focusChange: string | null;
 }) {
@@ -83,7 +83,7 @@ export function SourceControlTab(p: {
       )}
       {p.view === "changes"
         ? <ChangesBody project={p.project} snap={p.snap} acts={p.acts} onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} focusPath={p.focusChange} />
-        : <HistoryBody project={p.project} snap={p.snap} cards={p.cards} selectedKey={p.selectedKey} onSelect={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} seats={p.seats} />}
+        : <HistoryBody project={p.project} snap={p.snap} cards={p.cards} selectedKey={p.selectedKey} onSelect={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} seats={p.seats} onMutated={p.onMutated} onError={p.onError} />}
     </div>
   );
 }

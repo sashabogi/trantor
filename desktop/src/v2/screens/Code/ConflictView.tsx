@@ -1,10 +1,9 @@
-// The merge conflict view (#13988), shown when git lists unmerged paths. Taking a side writes the
-// file and stages it through the classic write and stage commands. Continue and Abort have no
-// command yet, so they are disabled with the reason.
+// Resolve unmerged paths on either scoped checkout. Continue and Abort belong to the history-depth slice.
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { readFile, writePlain } from "../../../features/code/fileApi";
-import { conflictPaths, gitStage } from "../../../features/code/gitApi";
+import { conflictPaths } from "../../../features/code/gitApi";
+import { scopeStage } from "./scopeGitApi";
 import { Button } from "../../ui/Button";
 import { countConflicts, parseConflicts, resolveChunks, type Chunk, type Choice } from "./conflicts";
 import { NotWiredBlock, PathLabel } from "./parts";
@@ -12,12 +11,12 @@ import type { ScopeSnapshot } from "./useScopeGit";
 
 const message = (e: Error | string) => (e instanceof Error ? e.message : String(e));
 
-async function resolveFile(project: string, scope: string, path: string, picks: ReadonlyMap<number, Choice>): Promise<void> {
-  const body = await readFile(project, path, scope);
+async function resolveFile(project: string, scope: string | null, path: string, picks: ReadonlyMap<number, Choice>): Promise<void> {
+  const body = await readFile(project, path, scope ?? undefined);
   if (body.truncated) throw new Error("The file is larger than the 512 KB read cap, so it cannot be resolved here.");
   const text = resolveChunks(parseConflicts(body.text), picks);
-  await writePlain(project, path, scope, text);
-  await gitStage(project, scope, [path], false);
+  await writePlain(project, path, scope ?? undefined, text);
+  await scopeStage(project, scope, [path], false);
 }
 
 function allPicks(count: number, pick: Choice): Map<number, Choice> {
@@ -36,14 +35,14 @@ function Side({ title, label, text, onAccept }: { title: string; label: string; 
   );
 }
 
-function ConflictEditor({ project, scope, path, onResolved, onError }: { project: string; scope: string; path: string; onResolved: () => void; onError: (m: string) => void }) {
+function ConflictEditor({ project, scope, path, onResolved, onError }: { project: string; scope: string | null; path: string; onResolved: () => void; onError: (m: string) => void }) {
   const [chunks, setChunks] = useState<Chunk[] | null>(null);
   const [picks, setPicks] = useState<Map<number, Choice>>(new Map());
   useEffect(() => {
     let alive = true;
     setChunks(null);
     setPicks(new Map());
-    readFile(project, path, scope).then(b => { if (alive) setChunks(parseConflicts(b.text)); }).catch(e => { if (alive) onError(message(e)); });
+    readFile(project, path, scope ?? undefined).then(b => { if (alive) setChunks(parseConflicts(b.text)); }).catch(e => { if (alive) onError(message(e)); });
     return () => { alive = false; };
   }, [project, scope, path, onError]);
   const total = useMemo(() => (chunks ? countConflicts(chunks) : 0), [chunks]);
@@ -89,9 +88,8 @@ export function ConflictView({ project, snap, path, onPick, onResolved }: { proj
   const paths = conflictPaths(snap.status);
   const scope = snap.scope;
   const active = path && paths.includes(path) ? path : paths[0] ?? null;
-  if (!scope) return <div className="p-4"><NotWiredBlock title="Conflicts are resolved in a seat's worktree" line="Writing and staging a resolved file needs a seat scope. Choice a seat in the branch picker." /></div>;
   const take = (p: string, pick: Choice) => {
-    readFile(project, p, scope).then(b => resolveFile(project, scope, p, allPicks(countConflicts(parseConflicts(b.text)), pick)))
+    readFile(project, p, scope ?? undefined).then(b => resolveFile(project, scope, p, allPicks(countConflicts(parseConflicts(b.text)), pick)))
       .then(onResolved).catch(e => setError(message(e)));
   };
   return (
@@ -99,7 +97,7 @@ export function ConflictView({ project, snap, path, onPick, onResolved }: { proj
       <aside aria-label="Conflicted files" className="flex w-[300px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-[var(--v2-edge)] p-3">
         <div className="rounded-[10px] border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] p-3 text-[12px] text-[var(--v2-text-2)]">
           <div className="mb-1 flex items-center gap-1.5 font-semibold text-[var(--v2-warn)]"><AlertTriangle size={13} aria-hidden />Merge paused</div>
-          Git lists {paths.length} {paths.length === 1 ? "file" : "files"} as unmerged on {snap.branch ?? scope}. Whether it is a merge or a rebase is not readable yet.
+          Git lists {paths.length} {paths.length === 1 ? "file" : "files"} as unmerged on {snap.branch ?? scope ?? "the project checkout"}. Whether it is a merge or a rebase is not readable yet.
           <div className="mt-2 flex flex-wrap gap-1.5">
             <Button disabledReason={paths.length > 0 ? `${paths.length} files still have conflicts` : "Continue needs a git command. Not wired yet."}>Continue</Button>
             <Button disabledReason="Abort needs a git command and asks first. Not wired yet.">Abort…</Button>

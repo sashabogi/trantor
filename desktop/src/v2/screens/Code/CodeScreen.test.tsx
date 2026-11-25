@@ -29,7 +29,7 @@ const SHOW = {
   files: [{ path: "src/landed.ts", status: "M", plus: 1, minus: 1 }],
   patch: "diff --git a/src/landed.ts b/src/landed.ts\n--- a/src/landed.ts\n+++ b/src/landed.ts\n@@ -1,1 +1,1 @@\n-before\n+after landing\n",
 };
-type IpcArgs = { project?: string; agent?: string; scope?: string; sha?: string; paths?: string[]; unstage?: boolean; message?: string; strategy?: string; reference?: string; action?: string };
+type IpcArgs = { project?: string; agent?: string; scope?: string; sha?: string; name?: string; paths?: string[]; unstage?: boolean; message?: string; strategy?: string; reference?: string; action?: string };
 type Call = { command: string; args: IpcArgs };
 let calls: Call[] = [];
 
@@ -59,6 +59,7 @@ beforeEach(() => {
     if (command === "git_discard") return "/Trash/Trantor discard test";
     if (command === "git_pull") return JSON.stringify(named.strategy === "ff" ? { status: "diverged", reason: "Branches diverged. Choose Merge or Rebase." } : { status: "pulled", reason: "Integrated" });
     if (command === "git_stash_list") return "[]";
+    if (command === "git_branch_list") return JSON.stringify({ current: named.scope === "project" ? "main" : "seat/codex-8", branches: [] });
     if (command === "file_diff") return "diff --git a/bin/a.mjs b/bin/a.mjs\n--- a/bin/a.mjs\n+++ b/bin/a.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\n";
     if (command === "seat_diff") return JSON.stringify({ branch: "seat/codex-8", base: "deadbee", files: [], patch: "", truncated: false });
     if (command === "plugin:event|listen") return 1;
@@ -199,5 +200,21 @@ describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
     expect(calls.find(c => c.command === "git_show")?.args).toEqual({ project: "trantor", scope: "project", sha: "fedcba9" });
     expect(host.querySelector('[aria-label="Changed files"]')?.textContent).toContain("src/landed.ts");
     expect(host.querySelector("[data-diff-scroll]")?.textContent).toContain("after landing");
+  });
+
+  it("creates a branch from the selected commit", async () => {
+    localStorage.setItem(MODE_KEY, "developer");
+    await mount();
+    await click('[role="group"][aria-label="View"] button:last-child');
+    await click('[data-sha="fedcba9"]');
+    await click('button[aria-label="Create a branch here"]');
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="New branch name"]');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "from-commit");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { button("Create branch")?.click(); });
+    await flush();
+    expect(calls.find(c => c.command === "git_branch_create")?.args).toEqual({ project: "trantor", scope: "project", name: "from-commit", sha: "fedcba9" });
   });
 });

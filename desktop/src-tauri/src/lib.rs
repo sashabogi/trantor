@@ -49,6 +49,7 @@ mod drafts;
 mod git_panel;
 mod git_scope;
 mod git_checkout;
+mod git_branch;
 mod remote_seat;
 mod update;
 mod app;
@@ -81,6 +82,8 @@ use git_panel::*;
 use git_scope::*;
 #[allow(unused_imports)]
 use git_checkout::*;
+#[allow(unused_imports)]
+use git_branch::*;
 #[allow(unused_imports)]
 use remote_seat::*;
 #[allow(unused_imports)]

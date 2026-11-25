@@ -40,6 +40,47 @@ export async function scopeShow(project: string, agent: GitScopeArg, sha: string
   return JSON.parse(await invoke<string>("git_show", { project, ...scopeArgs(agent), sha }));
 }
 
+export type GitBranch = {
+  name: string; sha: string; committed_at: number; ahead: number | null; behind: number | null;
+  current: boolean; remote: boolean; worktree: string | null;
+};
+export type GitBranchList = { current: string | null; branches: GitBranch[] };
+export type GitBranchResult = { status: "done" | "conflict" | "dirty"; reason: string; conflicts: string[] };
+export type GitBranchDeleteResult = { status: "deleted" | "confirm"; unique: number };
+export type GitDirtySwitch = "ask" | "bring" | "stash";
+
+export async function scopeBranches(project: string, agent: GitScopeArg): Promise<GitBranchList> {
+  return JSON.parse(await invoke<string>("git_branch_list", { project, ...scopeArgs(agent) }));
+}
+
+export async function scopeBranchCreate(project: string, agent: GitScopeArg, name: string, sha?: string): Promise<void> {
+  await invoke("git_branch_create", { project, ...scopeArgs(agent), name, sha: sha ?? null });
+}
+
+export async function scopeBranchSwitch(project: string, agent: GitScopeArg, name: string, dirty: GitDirtySwitch): Promise<GitBranchResult> {
+  return JSON.parse(await invoke<string>("git_branch_switch", { project, ...scopeArgs(agent), name, dirty }));
+}
+
+export async function scopeBranchRename(project: string, agent: GitScopeArg, old: string, next: string): Promise<void> {
+  await invoke("git_branch_rename", { project, ...scopeArgs(agent), old, new: next });
+}
+
+export async function scopeBranchDelete(project: string, agent: GitScopeArg, name: string, force = false): Promise<GitBranchDeleteResult> {
+  return JSON.parse(await invoke<string>("git_branch_delete", { project, ...scopeArgs(agent), name, force }));
+}
+
+async function integrate(project: string, agent: GitScopeArg, name: string, operation: "merge" | "rebase"): Promise<GitBranchResult> {
+  return JSON.parse(await invoke<string>(`git_branch_${operation}`, { project, ...scopeArgs(agent), name }));
+}
+
+export function scopeBranchMerge(project: string, agent: GitScopeArg, name: string): Promise<GitBranchResult> {
+  return integrate(project, agent, name, "merge");
+}
+
+export function scopeBranchRebase(project: string, agent: GitScopeArg, name: string): Promise<GitBranchResult> {
+  return integrate(project, agent, name, "rebase");
+}
+
 export type GitPullStrategy = "ff" | "merge" | "rebase";
 export type GitPullResult = { status: "pulled" | "upToDate" | "diverged"; reason: string };
 
@@ -66,6 +107,13 @@ export async function scopeStashChange(project: string, agent: GitScopeArg, refe
 
 /** The one reason the main checkout gives when the mode does not offer a mutation. */
 export const CHECKOUT_REFUSAL = "On the main checkout, pushing and discarding go through the orchestrator";
+
+export const BRANCH_REFUSAL = "On the main checkout, branch changes go through the orchestrator. Developer mode allows them.";
+
+/** Creating, switching, renaming, deleting, merging and rebasing follow the same mode rule as push and discard. */
+export function branchMutationRefusal(agent: GitScopeArg, mode: Mode = readMode()): string | null {
+  return agent || MODE_CONFIG[mode].ownCheckoutMutations ? null : BRANCH_REFUSAL;
+}
 
 export function checkoutMutationRefusal(agent: GitScopeArg, mode: Mode = readMode()): string | null {
   return agent || MODE_CONFIG[mode].ownCheckoutMutations ? null : CHECKOUT_REFUSAL;

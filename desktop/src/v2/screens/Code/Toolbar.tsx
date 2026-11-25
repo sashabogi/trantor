@@ -70,9 +70,9 @@ function SyncMenu({ project, snap, scope, onDone, onError }: {
   );
 }
 
-export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMutated, onError }: {
+export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMutated, onError, onOpenConflict }: {
   project: string; snap: ScopeSnapshot | null; seats: SeatInfo[]; scope: string | null; acts: PickerActions;
-  view: ScmView; onView: (v: ScmView) => void; onMutated: () => void; onError: (m: string) => void;
+  view: ScmView; onView: (v: ScmView) => void; onMutated: () => void; onError: (m: string) => void; onOpenConflict: (path: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useDismiss(open, () => setOpen(false));
@@ -88,7 +88,7 @@ export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMut
           <span className="h-[7px] w-[7px] rounded-full" style={{ background: tone }} /><GitBranch size={12} aria-hidden />
           <span className="v2-mono">{name}</span><ChevronDown size={12} aria-hidden />
         </button>
-        {open && <BranchPicker seats={seats} scope={scope} acts={acts} onClose={() => setOpen(false)} />}
+        {open && <BranchPicker project={project} seats={seats} snap={snap} scope={scope} acts={acts} onClose={() => setOpen(false)} onMutated={onMutated} onError={onError} onOpenConflict={onOpenConflict} />}
       </div>
       {snap && !snap.seatBacked && (
         <span className="inline-flex items-center text-[11.5px] text-[var(--v2-muted)]" data-testid="checkout-ahead"

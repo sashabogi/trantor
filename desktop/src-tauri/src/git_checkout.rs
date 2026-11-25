@@ -134,7 +134,7 @@ fn copy_path(source: &Path, destination: &Path) -> Result<(), String> {
 }
 
 /// Every path in a `status -z` listing, a rename's old name included, so discard all restores it too.
-fn changed_paths(status: &str) -> Vec<String> {
+pub(crate) fn changed_paths(status: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut records = status.split('\0');
     while let Some(record) = records.next() {
@@ -161,7 +161,7 @@ fn holds_checkout(folder: &Path, depth: usize) -> bool {
     })
 }
 
-fn refuse_nested_checkouts(dir: &Path, paths: &[String]) -> Result<(), String> {
+pub(crate) fn refuse_nested_checkouts(dir: &Path, paths: &[String]) -> Result<(), String> {
     for path in paths {
         let full = dir.join(path);
         let is_dir = std::fs::symlink_metadata(&full).map(|m| m.is_dir()).unwrap_or(false);
