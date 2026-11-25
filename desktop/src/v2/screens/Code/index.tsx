@@ -128,6 +128,14 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           onOpenFile={openFile} onOpenChange={openChange} onMutated={refresh} onOpenSource={() => { tabs.activate("source"); setOverride(false); }}
           onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}
+      {/* #14241: on the source tab the changes list is its own full-height panel; the bottom panel sits under the editor only. */}
+      {tabs.active.kind === "source" && snap && (
+        <div data-testid="source-list-panel" className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
+          <SourceListColumn project={project} snap={snap} view={view} seats={seatNames} rows={rows} onRows={setHistoryRows}
+            selected={selectedChange} onSelect={setPicked} selectedKey={key} onSelectKey={setKey}
+            onMutated={refresh} onOpenConflict={openConflict} />
+        </div>
+      )}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-[6px]">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
           <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
@@ -135,13 +143,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
             onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
           <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />
           {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-v2-body text-[var(--v2-bad)]">{notice}</button>}
-          {/* #14241: the source tab's list runs full height on the left; every tab's body fills the right column. */}
           <div className="flex min-h-0 min-w-0 flex-1">
-            {tabs.active.kind === "source" && snap && (
-              <SourceListColumn project={project} snap={snap} view={view} seats={seatNames} rows={rows} onRows={setHistoryRows}
-                selected={selectedChange} onSelect={setPicked} selectedKey={key} onSelectKey={setKey}
-                onMutated={refresh} onOpenConflict={openConflict} />
-            )}
             {/* #14071: the tab's body always fills the column, so short content still stretches to the panel. */}
             <div data-testid="code-main" className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
               <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards}

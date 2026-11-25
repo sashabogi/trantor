@@ -88,16 +88,19 @@ describe("CodeScreen", () => {
       || panel?.querySelector('button[aria-label="Open bottom panel"]') != null).toBe(true);
   });
 
-  // #14241: the source tab's changes list runs full height, outside the code-main column.
-  it("the changes list runs beside the code-main column, not inside it", async () => {
+  // #14241: the source tab's changes list is its own full-height panel, outside the column that holds the bottom panel.
+  it("the changes list runs full height beside the editor and bottom panel, not above the bottom panel", async () => {
     await mount();
     const list = host.querySelector('[data-testid="source-list"]');
     const main = host.querySelector('[data-testid="code-main"]');
-    const mainColumn = main?.parentElement ?? null;
+    const listPanel = host.querySelector('[data-testid="source-list-panel"]');
+    // SAFETY: code-main sits in a row inside the editor panel, which sits in the right column with the bottom panel.
+    const rightColumn = main?.parentElement?.parentElement?.parentElement ?? null;
     expect(list).not.toBeNull();
-    expect(list?.parentElement).toBe(mainColumn);
-    expect(main?.previousElementSibling).toBe(list);
-    expect(main?.contains(list)).toBe(false);
+    expect(listPanel?.contains(list)).toBe(true);
+    expect(listPanel?.nextElementSibling).toBe(rightColumn);
+    expect(rightColumn?.contains(list)).toBe(false);
+    expect(rightColumn?.querySelector('section[aria-label="Bottom panel"], button[aria-label="Open bottom panel"]')).not.toBeNull();
     expect(list?.textContent).toContain("Staged 1");
     expect(main?.querySelector("[data-diff-scroll]")).not.toBeNull();
   });
