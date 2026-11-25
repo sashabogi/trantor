@@ -30,9 +30,10 @@ export function CollapsibleSection({ section, title, badge, actions, sizing = "c
     return next;
   });
   // Collapsed is only its header row, never squashed; open bodies scroll inside themselves.
-  const spaceClass = !open ? "shrink-0" : sizing === "fill" ? "min-h-0 flex-1" : "max-h-[40%] min-h-0 shrink";
+  // #14058 drill: with every section open Files was squeezed to nothing and its header drawn under the next one, so open sections keep a floor.
+  const spaceClass = !open ? "shrink-0" : sizing === "fill" ? "min-h-[150px] flex-1" : "max-h-[40%] min-h-[64px] shrink";
   return (
-    <section aria-label={title} data-section={section} className={`flex min-h-0 flex-col border-b border-[var(--v2-edge)] ${spaceClass}`}>
+    <section aria-label={title} data-section={section} className={`flex flex-col border-b border-[var(--v2-edge)] ${spaceClass}`}>
       <div className="flex shrink-0 items-center pr-2">
         <button type="button" aria-expanded={open} aria-controls={id} data-section-toggle={section}
           title={open ? `Hide ${title}` : `Show ${title}`} onClick={toggle}

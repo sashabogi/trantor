@@ -107,8 +107,8 @@ export function ScmSidebar(p: ScmSidebarProps) {
       {p.state.kind === "error" && (
         <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-bad)]">{p.state.reason}</div>
       )}
-      {/* #14058: the column never scrolls as a whole: headers always fit, open bodies scroll in place */}
-      <div className="flex min-h-0 flex-1 flex-col">
+      {/* #14058: open bodies scroll in place; the column itself scrolls only when the sections' floors no longer fit */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         <CollapsibleSection section="changes" title="Changes" badge={snap ? <CountBadge n={snap.status.length} /> : undefined}>
           {snap
             ? <ChangesSection project={p.project} snap={snap} selected={p.selectedPath ?? null} onOpen={p.onOpenChange}

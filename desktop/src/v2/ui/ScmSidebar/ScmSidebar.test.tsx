@@ -304,11 +304,14 @@ describe("Branches and seats (#14047)", () => {
 });
 
 describe("headers always on screen (#14058)", () => {
-  it("the column does not scroll as a whole; only the open section bodies scroll", async () => {
+  it("open section bodies scroll in place, and open sections keep a floor so none is squeezed under the next header", async () => {
     await render();
     const column = host.querySelector('section[data-section="changes"]')?.parentElement;
     expect(column?.className).toContain("flex-1");
-    expect(column?.className).not.toContain("overflow");
+    // #14058 drill: the column scrolls only when the floors no longer fit (a very short window).
+    expect(column?.className).toContain("overflow-y-auto");
+    expect(host.querySelector('section[data-section="files"]')?.className).toContain("min-h-[150px]");
+    expect(host.querySelector('section[data-section="commits"]')?.className).toContain("min-h-[64px]");
     for (const s of ["changes", "files", "commits", "branches"]) {
       expect(sectionBody(s)?.className).toContain("overflow-y-auto");
     }
