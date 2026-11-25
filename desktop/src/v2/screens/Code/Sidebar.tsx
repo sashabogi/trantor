@@ -58,7 +58,7 @@ export type SidebarProps = {
 function Body(p: SidebarProps) {
   const cards = useTasks(p.client, p.project);
   if (p.view === "explorer") return <div className="min-h-0 flex-1 overflow-y-auto"><ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} /></div>;
-  if (p.view === "search") return <SearchPane project={p.project} scope={p.scope} onOpen={p.onOpenFile} />;
+  if (p.view === "search") return <SearchPane project={p.project} scope={p.scope} onOpen={p.onOpenFile} onMutated={p.onMutated} />;
   if (p.view === "agents") return <AgentsPane seats={p.seats} scope={p.scope} onPick={p.onPickSeat} />;
   return <CardsPane cards={cards} />;
 }

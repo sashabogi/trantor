@@ -46,6 +46,9 @@ portable-pty = "0.9"
 notify = "6"
 md5 = "0.7"
 libc = "0.2"
+# #14104: replace_text's $1 group references need a capture-capable engine; already in the lock
+# graph, so this line adds no new code to the build.
+regex = "1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # #6317: the vendored tao's Objective-C exception reporter (src/key_drill.rs routes it into
