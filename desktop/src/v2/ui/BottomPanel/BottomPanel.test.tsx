@@ -11,6 +11,7 @@ import { ACTIVE_TAB_KEY, HEIGHT_KEY, MAXIMISED_KEY, OPEN_KEY } from "./state";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const TERMINAL = <div data-testid="terminal-body">Terminal body</div>;
 const OUTPUT = <div data-testid="output-body">Output body</div>;
+const PROBLEMS = <div data-testid="problems-body">Problems body</div>;
 let host: HTMLDivElement;
 let root: Root;
 
@@ -34,9 +35,9 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function mountPanel(props?: { terminal?: ReactNode; output?: ReactNode }) {
+async function mountPanel(props?: { terminal?: ReactNode; output?: ReactNode; problems?: ReactNode }) {
   await act(async () => {
-    root.render(<BottomPanel {...(props ?? { terminal: TERMINAL, output: OUTPUT })} />);
+    root.render(<BottomPanel {...(props ?? { terminal: TERMINAL, output: OUTPUT, problems: PROBLEMS })} />);
   });
 }
 
@@ -114,6 +115,10 @@ describe("controls", () => {
     expect(tab("Output")?.getAttribute("aria-selected")).toBe("true");
     expect(host.querySelector('[data-testid="output-body"]')).not.toBeNull();
     expect(localStorage.getItem(ACTIVE_TAB_KEY)).toBe("output");
+    await click(tab("Problems"));
+    expect(tab("Problems")?.getAttribute("aria-selected")).toBe("true");
+    expect(host.querySelector('[data-testid="problems-body"]')).not.toBeNull();
+    expect(localStorage.getItem(ACTIVE_TAB_KEY)).toBe("problems");
     for (const label of ["Maximise bottom panel", "Close bottom panel"]) {
       expect(byLabel(label)?.title, label).not.toBe("");
     }

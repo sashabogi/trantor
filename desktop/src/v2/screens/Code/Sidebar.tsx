@@ -1,5 +1,5 @@
 // The sidebar beside file tabs (#13988): Explorer, Search, the source control sidebar, Agents,
-// Cards and Problems. The "source" view is the same ScmSidebar the Workspace left column shows
+// Cards. The "source" view is the same ScmSidebar the Workspace left column shows
 // (#14044): Changes, Files and Recent commits, one flat list with the commit box.
 import { Maximize2 } from "lucide-react";
 import type { Card, HubClient } from "../../../shared/api/client";
@@ -11,7 +11,6 @@ import { PRESENCE_LABEL, seatLabel } from "../../ui/identity";
 import { ScmSidebar } from "../../ui/ScmSidebar";
 import type { SideView } from "./IconBar";
 import type { SeatInfo } from "./model";
-import { NotWiredBlock } from "./parts";
 import { SearchPane, type OpenAt } from "./SearchPane";
 import type { ScopeState } from "./useScopeGit";
 
@@ -61,11 +60,10 @@ function Body(p: SidebarProps) {
   if (p.view === "explorer") return <div className="min-h-0 flex-1 overflow-y-auto"><ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} /></div>;
   if (p.view === "search") return <SearchPane project={p.project} scope={p.scope} onOpen={p.onOpenFile} />;
   if (p.view === "agents") return <AgentsPane seats={p.seats} scope={p.scope} onPick={p.onPickSeat} />;
-  if (p.view === "cards") return <CardsPane cards={cards} />;
-  return <div className="p-3"><NotWiredBlock title="Problems and review findings" line="Review findings are not wired into this screen yet, so nothing is counted here." /></div>;
+  return <CardsPane cards={cards} />;
 }
 
-const TITLES = { explorer: "Explorer", search: "Search", source: "Source control", agents: "Agents", cards: "Cards", problems: "Problems" } as const satisfies Record<SideView, string>;
+const TITLES = { explorer: "Explorer", search: "Search", source: "Source control", agents: "Agents", cards: "Cards" } as const satisfies Record<SideView, string>;
 
 export function Sidebar(p: SidebarProps) {
   if (p.view === "source") {

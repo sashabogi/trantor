@@ -1,4 +1,4 @@
-// Developer mode's bottom panel frame; terminal and output bodies arrive as props (#14071).
+// Developer mode's bottom panel frame; terminal, output and problems bodies arrive as props (#14071).
 import { useEffect, useRef, type ReactNode } from "react";
 import { Maximize2, Minimize2, PanelBottomOpen, X } from "lucide-react";
 import { useShellMode } from "../../shell/shellMode";
@@ -7,13 +7,14 @@ import { ResizeHandle } from "./ResizeHandle";
 
 type PanelTab = { id: BottomPanelTab; label: string; body: ReactNode };
 
-export function BottomPanel({ terminal, output }: { terminal?: ReactNode; output?: ReactNode }) {
+export function BottomPanel({ terminal, output, problems }: { terminal?: ReactNode; output?: ReactNode; problems?: ReactNode }) {
   const mode = useShellMode();
   const state = useBottomPanelState(mode);
   const panel = useRef<HTMLElement | null>(null);
   const tabs = ([
     { id: "terminal", label: "Terminal", body: terminal },
     { id: "output", label: "Output", body: output },
+    { id: "problems", label: "Problems", body: problems },
   ] satisfies PanelTab[]).filter(tab => tab.body !== undefined && tab.body !== null);
   const selected = tabs.find(tab => tab.id === state.activeTab) ?? tabs[0];
   const columnHeight = () => panel.current?.parentElement?.getBoundingClientRect().height || window.innerHeight;

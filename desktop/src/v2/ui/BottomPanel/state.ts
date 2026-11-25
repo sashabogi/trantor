@@ -2,7 +2,7 @@
 import { useCallback, useState } from "react";
 import type { Mode } from "../../shell/shellMode";
 
-export type BottomPanelTab = "terminal" | "output";
+export type BottomPanelTab = "terminal" | "output" | "problems";
 export const OPEN_KEY = "trantor.v2.bottomPanel.open";
 export const HEIGHT_KEY = "trantor.v2.bottomPanel.height";
 export const ACTIVE_TAB_KEY = "trantor.v2.bottomPanel.activeTab";
@@ -35,8 +35,10 @@ function readHeight(): number {
 }
 
 function readActiveTab(): BottomPanelTab {
-  try { return localStorage.getItem(ACTIVE_TAB_KEY) === "output" ? "output" : "terminal"; }
-  catch { return "terminal"; }
+  try {
+    const saved = localStorage.getItem(ACTIVE_TAB_KEY);
+    return saved === "output" || saved === "problems" ? saved : "terminal";
+  } catch { return "terminal"; }
 }
 
 export function useBottomPanelState(mode: Mode) {

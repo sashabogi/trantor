@@ -7,6 +7,7 @@ import { useTasks } from "../../../shared/tasks";
 import { BottomPanel } from "../../ui/BottomPanel";
 import { Terminals } from "../../ui/BottomPanel/Terminals";
 import { Output } from "../../ui/BottomPanel/Output";
+import { Problems } from "../../ui/BottomPanel/Problems";
 import { conflictPaths } from "../../../features/code/gitApi";
 import type { ScreenProps } from "../../routes";
 import { NotWiredBlock } from "./parts";
@@ -114,7 +115,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
             liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
         </div>
         {/* #14080: keyed by project so one project never shows another project's shell. */}
-        <BottomPanel terminal={<Terminals key={project} project={project} />} output={<Output />} />
+        <BottomPanel terminal={<Terminals key={project} project={project} />} output={<Output />}
+          problems={<Problems project={project} seat={scope} onOpen={openFile} />} />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
     </div>

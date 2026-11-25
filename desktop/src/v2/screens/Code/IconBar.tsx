@@ -1,9 +1,9 @@
 // The left icon bar (#13988). A sidebar that folds away still leaves its icon here.
-import { Bot, FolderTree, GitBranch, LayoutList, Search, TriangleAlert } from "lucide-react";
+import { Bot, FolderTree, GitBranch, LayoutList, Search } from "lucide-react";
 import type { ReactNode } from "react";
 import { IconButton } from "../../ui/IconButton";
 
-export type SideView = "explorer" | "search" | "source" | "agents" | "cards" | "problems";
+export type SideView = "explorer" | "search" | "source" | "agents" | "cards";
 
 const ITEMS: { view: SideView; label: string; title: string; icon: ReactNode }[] = [
   { view: "explorer", label: "Explorer", title: "Explorer", icon: <FolderTree size={17} aria-hidden /> },
@@ -11,7 +11,6 @@ const ITEMS: { view: SideView; label: string; title: string; icon: ReactNode }[]
   { view: "source", label: "Source control", title: "Source control", icon: <GitBranch size={17} aria-hidden /> },
   { view: "agents", label: "Agents", title: "Agents", icon: <Bot size={17} aria-hidden /> },
   { view: "cards", label: "Cards", title: "Cards", icon: <LayoutList size={17} aria-hidden /> },
-  { view: "problems", label: "Problems and review findings", title: "Problems and review findings", icon: <TriangleAlert size={17} aria-hidden /> },
 ];
 
 export function IconBar({ active, folded, onPick, changeCount }: { active: SideView; folded: boolean; onPick: (v: SideView) => void; changeCount: number }) {
