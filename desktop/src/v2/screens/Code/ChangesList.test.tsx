@@ -102,4 +102,18 @@ describe("CommitBox G3", () => {
     await click(button("Commit and push"));
     expect(calls).toEqual([]);
   });
+
+  it("wraps the commit buttons instead of clipping them, each filling its own line", async () => {
+    await mount();
+    const commit = button("Commit 1 file to main");
+    const push = button("Commit and push");
+    expect(commit).toBeTruthy();
+    expect(push).toBeTruthy();
+    expect(commit?.parentElement?.className).toContain("flex-wrap");
+    for (const target of [commit, push]) {
+      expect(target?.className).toContain("grow");
+      expect(target?.className).toContain("shrink-0");
+      expect(target?.className).toContain("basis-auto");
+    }
+  });
 });

@@ -14,14 +14,26 @@ const patch = [
   " first", "-old one", "+new one", " middle", "-old two", "+new two", " last",
 ].join("\n");
 const file = parseUnifiedDiff(patch)[0];
+const deletionsOnly = parseUnifiedDiff([
+  "diff --git a/b.txt b/b.txt", "index 3..4 100644", "--- a/b.txt", "+++ b/b.txt", "@@ -1,2 +0,0 @@", "-gone", "-also gone",
+].join("\n"))[0];
+const blame = [
+  { line: 1, sha: "abcdef1234567890", author: "Tess", when: "2h ago", subject: "first" },
+  { line: 2, sha: "abcdef1234567890", author: "Tess", when: "2h ago", subject: "first" },
+  { line: 3, sha: "0123456789abcdef", author: "Ivo", when: "3d ago", subject: "second" },
+  { line: 4, sha: "0123456789abcdef", author: "Ivo", when: "3d ago", subject: "second" },
+  { line: 5, sha: "0123456789abcdef", author: "Ivo", when: "3d ago", subject: "second" },
+];
 let host: HTMLDivElement;
 let root: Root;
 let apply: ReturnType<typeof vi.fn>;
+let blameAnswer: () => Promise<string>;
 
 beforeEach(() => {
   apply = vi.fn().mockResolvedValue(undefined);
+  blameAnswer = async () => JSON.stringify(blame);
   mockIPC(command => {
-    if (command === "git_blame") return JSON.stringify([{ line: 1, sha: "abcdef1234567890", author: "Tess", when: "2h ago", subject: "first" }]);
+    if (command === "git_blame") return blameAnswer();
     if (command === "git_history") return JSON.stringify([]);
     return null;
   });
@@ -42,6 +54,8 @@ const click = async (target: Element | null | undefined, shiftKey = false) => {
 const button = (text: string) => [...host.querySelectorAll("button")].find(item => item.textContent === text);
 const line = (index: number) => host.querySelector(`[data-line-index="${index}"]`);
 const lastCall = () => apply.mock.calls[apply.mock.calls.length - 1];
+const patchLabels = () =>
+  [...host.querySelectorAll("button")].map(item => item.textContent).filter(text => /^(Stage|Unstage|Discard) /.test(text ?? ""));
 
 describe("DiffView patch controls", () => {
   it("sends a complete hunk patch for stage, unstage and discard", async () => {
@@ -57,12 +71,22 @@ describe("DiffView patch controls", () => {
     }
   });
 
+  it("shows three patch buttons whose labels follow the selection", async () => {
+    await mount();
+    expect(patchLabels()).toEqual(["Stage hunk", "Unstage hunk", "Discard hunk"]);
+    await click(line(1));
+    await click(line(5), true);
+    expect(patchLabels()).toEqual(["Stage 4 lines", "Unstage 4 lines", "Discard 4 lines"]);
+    await click(line(2));
+    expect(patchLabels()).toEqual(["Stage 3 lines", "Unstage 3 lines", "Discard 3 lines"]);
+  });
+
   it("shift-selects a changed-line range and stages only those lines", async () => {
     await mount();
     await click(line(1));
     await click(line(5), true);
     expect(host.querySelectorAll("[data-selected=true]").length).toBe(4);
-    await click(button("Stage lines"));
+    await click(button("Stage 4 lines"));
     const selectedPatch = lastCall()[0];
     expect(selectedPatch).toContain("-old one\n+new one\n middle\n-old two\n+new two");
     expect(lastCall()[1]).toBe("stage");
@@ -71,7 +95,8 @@ describe("DiffView patch controls", () => {
   it("unstaging one added line keeps the other addition as context and leaves the deletions out", async () => {
     await mount();
     await click(line(2));
-    await click(button("Unstage lines"));
+    expect(patchLabels()).toEqual(["Stage 1 line", "Unstage 1 line", "Discard 1 line"]);
+    await click(button("Unstage 1 line"));
     const selectedPatch = lastCall()[0];
     expect(selectedPatch).toContain("@@ -1,4 +1,5 @@ fn");
     expect(selectedPatch).toContain(" first\n+new one\n middle\n new two\n last");
@@ -82,24 +107,72 @@ describe("DiffView patch controls", () => {
   it("shows a failed apply reason and keeps the selection for a refreshed diff", async () => {
     apply.mockRejectedValue(new Error("The patch no longer applies; the diff was refreshed."));
     await mount();
-    await click(button("Discard lines"));
-    expect(apply).not.toHaveBeenCalled();
     await click(line(1));
-    await click(button("Discard lines"));
+    await click(button("Discard 1 line"));
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("no longer applies");
     expect(line(1)?.getAttribute("data-selected")).toBe("true");
   });
 });
 
-it("turns on the per-line blame strip and opens file history from the diff header", async () => {
-  await act(async () => {
-    root.render(<DiffView files={[file]} layout="combined" onLayout={() => {}} onAddToChat={() => {}} project="trantor" scope={null} />);
+describe("DiffView line history", () => {
+  const mountHistory = async (layout: "combined" | "split", files = [file]) => {
+    await act(async () => {
+      root.render(<DiffView files={files} layout={layout} onLayout={() => {}} onAddToChat={() => {}} project="trantor" scope={null} />);
+    });
+    await flush();
+    await click(host.querySelector('[aria-label="Line history"]'));
+  };
+
+  it("gives every diff row a blame cell matched by the old line number, and marks added lines as not committed", async () => {
+    await mountHistory("combined");
+    const cells = [...host.querySelectorAll("[data-blame-cell]")];
+    expect(cells.length).toBe(8);
+    expect(cells[0].textContent).toBe("");
+    const rowCells = [...host.querySelectorAll("[data-kind] [data-blame-cell]")];
+    expect(rowCells.length).toBe(7);
+    expect(rowCells[0].textContent).toContain("Tess");
+    expect(rowCells[0].textContent).toContain("2h ago");
+    expect(rowCells[0].textContent).toContain("abcdef1");
+    expect(rowCells[1].textContent).toContain("Tess");
+    expect(rowCells[2].textContent).toBe("not committed");
+    expect(rowCells[3].textContent).toContain("Ivo");
+    expect(rowCells[3].textContent).toContain("3d ago");
+    expect(rowCells[4].textContent).toContain("Ivo");
+    expect(rowCells[5].textContent).toBe("not committed");
+    expect(rowCells[6].textContent).toContain("0123456");
+    expect(host.querySelector('[aria-label="Line history: a.txt"]')?.textContent).toContain("Ivo");
   });
-  await flush();
-  await click(host.querySelector('[aria-label="Line history"]'));
-  expect(host.querySelector('[aria-label="Line history: a.txt"]')?.textContent).toContain("Tess");
-  expect(host.querySelector('[aria-label="Line history: a.txt"]')?.textContent).toContain("2h ago");
-  expect(host.querySelector('[aria-label="Line history: a.txt"]')?.textContent).toContain("abcdef1");
-  await click(host.querySelector('[aria-label="File history for a.txt"]'));
-  expect(host.querySelector('[role="dialog"]')?.textContent).toContain("File history");
+
+  it("gives every paired row in side by side a blame cell from its old side", async () => {
+    await mountHistory("split");
+    const rowCells = [...host.querySelectorAll("[data-blame-cell]")].slice(1);
+    expect(rowCells.length).toBe(5);
+    expect(rowCells[0].textContent).toContain("Tess");
+    expect(rowCells[1].textContent).toContain("Tess");
+    expect(rowCells[3].textContent).toContain("Ivo");
+  });
+
+  it("names the author of a removed line when a side by side row has no new side", async () => {
+    await mountHistory("split", [deletionsOnly]);
+    const cells = [...host.querySelectorAll("[data-blame-cell]")];
+    expect(cells.length).toBe(3);
+    expect(cells[0].textContent).toBe("");
+    expect(cells.slice(1).every(cell => (cell.textContent ?? "").includes("Tess"))).toBe(true);
+  });
+
+  it("keeps the reading state and surfaces a blame error", async () => {
+    blameAnswer = () => new Promise<string>(() => undefined);
+    await mountHistory("combined");
+    expect(host.textContent).toContain("Reading blame");
+    await act(async () => { root.render(<div />); });
+    blameAnswer = async () => { throw "fatal: no such path"; };
+    await mountHistory("combined");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("no such path");
+  });
+
+  it("opens file history from the diff header", async () => {
+    await mountHistory("combined");
+    await click(host.querySelector('[aria-label="File history for a.txt"]'));
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain("File history");
+  });
 });

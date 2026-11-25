@@ -86,12 +86,13 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
         <span className="flex-1" />
         <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" disabledReason={busy ? "Working" : historyReason} onClick={undo}><Undo2 size={12} aria-hidden />Undo last commit</Button>
       </div>
-      <div className="flex gap-1.5">
-        <Button variant="primary" onClick={() => commit()} disabledReason={reason} className="flex-1 justify-center">
+      {/* #14237: the buttons wrap instead of clipping; alone on its line, each fills the row. */}
+      <div className="flex flex-wrap gap-1.5">
+        <Button variant="primary" onClick={() => commit()} disabledReason={reason} className="grow shrink-0 basis-auto justify-center">
           {amend ? "Amend commit" : `Commit ${staged} ${staged === 1 ? "file" : "files"}`} to {target}
           {!snap.seatBacked && <MainCheckoutMark />}
         </Button>
-        <Button onClick={() => commit(true)} disabledReason={reason ?? pushRefusal} className="justify-center">Commit and push</Button>
+        <Button onClick={() => commit(true)} disabledReason={reason ?? pushRefusal} className="grow shrink-0 basis-auto justify-center">Commit and push</Button>
       </div>
     </div>
   );

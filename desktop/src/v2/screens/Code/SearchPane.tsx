@@ -178,26 +178,29 @@ type BoxesProps = {
   on: Toggles; flip: (key: keyof Toggles) => void; canReplaceAll: boolean; onReplaceAll: () => void;
 };
 
-/** The search box with its option toggles, the replace box, and the include and exclude boxes. */
+/** The search field with the match toggles inside it, the replace row, and the glob boxes. */
+// #14237: the match toggles sit inside the search field's right edge; the glob toggle moved to the
+// replace row, so the query keeps most of the sidebar's width.
 function SearchBoxes(p: BoxesProps) {
   const toggle = (key: keyof Toggles, label: string, icon: ReactNode) => (
     <IconButton label={label} title={label} size={26} aria-pressed={p.on[key]} onClick={() => p.flip(key)} className={p.on[key] ? ON : ""}>{icon}</IconButton>
   );
   return (
     <>
-      <div className="flex items-center gap-1 pr-3">
+      <div className="m-3 flex items-center gap-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] pl-2.5 pr-1 py-0.5 focus-within:border-[var(--v2-accent)]">
         <label htmlFor="v2-text-search" className="sr-only">Search text</label>
         <input id="v2-text-search" autoFocus value={p.q} onChange={e => p.onQ(e.target.value)}
-          placeholder={p.on.useRegex ? "Search with a regular expression" : "Search in files"} className={`${INPUT} min-w-0 flex-1`} />
+          placeholder={p.on.useRegex ? "Search with a regular expression" : "Search in files"}
+          className="min-w-0 flex-1 border-0 bg-transparent px-1 py-1 text-[12px] text-[var(--v2-text)] !outline-none" />
         {toggle("caseSensitive", "Match case", <CaseSensitive size={15} aria-hidden />)}
         {toggle("useRegex", "Regular expression", <Regex size={15} aria-hidden />)}
         {toggle("wholeWord", "Whole word", <WholeWord size={15} aria-hidden />)}
-        {toggle("showGlobs", "Files to include and exclude", <Ellipsis size={15} aria-hidden />)}
       </div>
       <div className="flex items-center gap-1 pr-3">
         <label htmlFor="v2-text-replace" className="sr-only">Replace with</label>
         <input id="v2-text-replace" value={p.replacement} onChange={e => p.onReplacement(e.target.value)}
           placeholder={p.on.useRegex ? "Replace with, $1 for a group" : "Replace with"} className={`${INPUT} min-w-0 flex-1`} />
+        {toggle("showGlobs", "Files to include and exclude", <Ellipsis size={15} aria-hidden />)}
         <IconButton label="Replace all" title="Replace all in every file" size={26} disabled={!p.canReplaceAll} onClick={p.onReplaceAll}>
           <Replace size={15} aria-hidden />
         </IconButton>

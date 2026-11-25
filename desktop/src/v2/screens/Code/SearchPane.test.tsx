@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // #14074: the Search view's Text mode, grouped by file, with the native command mocked at the IPC edge.
 // #14104: the option toggles, the glob boxes, and replace with a count-then-confirm step.
+// #14237: the match toggles sit inside the search field, the glob toggle on the replace row.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +88,18 @@ describe("SearchPane text mode", () => {
   it("is the default mode, with a labelled input", () => {
     expect(host.querySelector("label[for=v2-text-search]")?.textContent).toBe("Search text");
     expect(pane().placeholder).toBe("Search in files");
+  });
+
+  it("holds the match toggles inside the search field and the glob toggle on the replace row", () => {
+    const field = need(need(host.querySelector<HTMLInputElement>("#v2-text-search")).parentElement);
+    expect(field.className).toContain("rounded-lg");
+    for (const label of ["Match case", "Regular expression", "Whole word"]) {
+      expect(field.querySelector(`button[aria-label='${label}']`)).not.toBeNull();
+    }
+    expect(field.querySelector("button[aria-label='Files to include and exclude']")).toBeNull();
+    const replaceRow = need(need(host.querySelector<HTMLInputElement>("#v2-text-replace")).parentElement);
+    expect(replaceRow.querySelector("button[aria-label='Files to include and exclude']")).not.toBeNull();
+    expect(replaceRow.querySelector("button[aria-label='Replace all']")).not.toBeNull();
   });
 
   it("groups matches by file, counts them and highlights the match", async () => {
