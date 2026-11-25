@@ -15,11 +15,14 @@ async function machineId(): Promise<string | undefined> {
   return machineIdCache;
 }
 
-export type BalancesState = { report: BalancesReport | null; failure: string | null; spinning: boolean; refetch: () => void };
+export type BalancesState = { report: BalancesReport | null; failure: string | null; refreshError: string | null; spinning: boolean; refetch: () => void };
 
 export function useBalances(client: HubClient): BalancesState {
   const [report, setReport] = useState<BalancesReport | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  // #14055 — the refresh command's failure is evidence: kept here and shown beside the chips,
+  // never swallowed, so a dim strip always says which of stale-or-failed it is.
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [spinning, setSpinning] = useState(false);
   const pull = useCallback(async () => {
     const machine = await machineId();
@@ -35,7 +38,8 @@ export function useBalances(client: HubClient): BalancesState {
     if (busy.current) return;
     busy.current = true;
     setSpinning(true);
-    try { await invoke("balances_refresh"); } catch { /* CLI missing or failed: the read below still shows the latest truth */ }
+    setRefreshError(null);
+    try { await invoke("balances_refresh"); } catch (e) { setRefreshError(e instanceof Error ? e.message : String(e)); }
     await pull();
     setSpinning(false);
     busy.current = false;
@@ -55,5 +59,5 @@ export function useBalances(client: HubClient): BalancesState {
     return () => { alive = false; clearInterval(t); window.removeEventListener("focus", onFocus); };
   }, [pull, refetch]);
 
-  return { report, failure, spinning, refetch: () => void refetch() };
+  return { report, failure, refreshError, spinning, refetch: () => void refetch() };
 }

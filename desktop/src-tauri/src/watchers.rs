@@ -143,10 +143,37 @@ pub(crate) fn spawn_chat_watcher(
     });
 }
 
+/// One trace line per balances refresh phase into app-trace.log (#14055): the strip dims with no
+/// evidence when the refresh fails, so the investigation can tell a dead CLI from a provider 401.
+/// Same pattern as genesis.rs wake_trace.
+fn balances_refresh_line(step: &str) -> String {
+    format!("balances refresh: {}", crate::succession::trace_summary(step))
+}
+
+fn balances_refresh_trace(step: &str) {
+    crate::changes::trace(balances_refresh_line(step));
+}
+
+/// First line of a (possibly multi-line) error string: the trace carries one bounded line, the
+/// caller's Err keeps the whole trimmed stderr.
+fn first_line(s: &str) -> &str {
+    s.lines().next().unwrap_or("")
+}
+
 /// Re-query the providers NOW through their owner (SYSTEM-CONTRACT §4: balances belong to
 /// lib/balances.mjs; the app never calls a provider itself). The strip re-reads the snapshot after.
 #[tauri::command]
 pub(crate) fn balances_refresh() -> Result<(), String> {
+    balances_refresh_trace("start");
+    let result = balances_refresh_run();
+    match &result {
+        Ok(()) => balances_refresh_trace("ok"),
+        Err(error) => balances_refresh_trace(&format!("error: {}", first_line(error))),
+    }
+    result
+}
+
+fn balances_refresh_run() -> Result<(), String> {
     let out = trantor_cli::command()
         .args(["balances", "--json"])
         .output()
@@ -155,6 +182,27 @@ pub(crate) fn balances_refresh() -> Result<(), String> {
         Ok(())
     } else {
         Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod balances_refresh_tests {
+    use super::{balances_refresh_line, first_line};
+
+    #[test]
+    fn balances_refresh_lines_name_the_phase_and_stay_on_one_bounded_line() {
+        assert_eq!(balances_refresh_line("start"), "balances refresh: start");
+        assert_eq!(balances_refresh_line("ok"), "balances refresh: ok");
+        let long = format!("error: provider 401\n{}", "x".repeat(600));
+        let line = balances_refresh_line(&long);
+        assert!(!line.contains('\n'), "{line}");
+        assert!(line.chars().count() < 280, "{}", line.chars().count());
+    }
+
+    #[test]
+    fn a_multiline_stderr_traces_only_its_first_line() {
+        assert_eq!(first_line("provider 401\nsecond\nthird"), "provider 401");
+        assert_eq!(first_line(""), "");
     }
 }
 

@@ -97,6 +97,17 @@ describe("quota rows", () => {
     expect(c.tooltip).toBe("Kimi Code · usage unread");
   });
 
+  // #14055 — "usage unread" is an evidence line: the adapter's reason rides in the tooltip.
+  it("carries the adapter's reason in the tooltip when Kimi usage is unread", () => {
+    const noWindow = chipFrom(row({ provider: "kimi", label: "Kimi Code", kind: "quota", detail: "usage unread: no remaining figure in the usage window" }))!;
+    expect(noWindow.value).toBe("usage unread");
+    expect(noWindow.tone).toBe("warn");
+    expect(noWindow.tooltip).toContain("no remaining figure in the usage window");
+    const expired = chipFrom(row({ provider: "kimi", label: "Kimi Code", kind: "quota", detail: "Kimi Code login token expired; open Kimi Code to refresh" }))!;
+    expect(expired.value).toBe("usage unread");
+    expect(expired.tooltip).toContain("login token expired");
+  });
+
   // #7413 — qwen reads only the wall: an active plan has no number, and that is not "unknown".
   it("reads an active plan with a console-only gauge as active, never a question mark", () => {
     const c = chipFrom(row({ provider: "qwen", label: "Qwen", kind: "quota", plan: "token plan", detail: "plan active (remaining % is console-only)" }))!;

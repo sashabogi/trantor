@@ -2,7 +2,7 @@
 // balanceChips so the two bars can never disagree (#v2-F).
 import { RefreshCw, Server } from "lucide-react";
 import type { BalancesReport, HubClient, MachinesHealthReport } from "../../shared/api/client";
-import { chipFrom, isStale, isZombie, sortRows, type BalanceChip, type BalanceRow } from "../../features/fleet/balanceChips";
+import { agoLabel, chipFrom, isStale, isZombie, sortRows, type BalanceChip, type BalanceRow } from "../../features/fleet/balanceChips";
 import { BrandMark } from "../../features/fleet/BrandMark";
 import { machineHealthLine, machineStale, useMachinesHealth } from "../../features/fleet/MachineHealth";
 import { IconButton } from "../ui/IconButton";
@@ -58,9 +58,18 @@ function Machines({ report }: { report: MachinesHealthReport | null }) {
   );
 }
 
+// A long refresh error must not blow out the footer: the visible line is bounded, the tooltip
+// keeps the whole message (#14055).
+const CLIP = 100;
+function clipLine(s: string): string {
+  const one = s.trim().split("\n")[0] ?? "";
+  return one.length > CLIP ? `${one.slice(0, CLIP - 1)}…` : one;
+}
+
 export type PlansBarProps = {
   report: BalancesReport | null;
   failure: string | null;
+  refreshError: string | null;
   machines: MachinesHealthReport | null;
   spinning: boolean;
   onRefresh: () => void;
@@ -68,9 +77,20 @@ export type PlansBarProps = {
 };
 
 /** Pure: the tests feed reports straight in. */
-export function PlansBar({ report, failure, machines, spinning, onRefresh, onOpenUsage }: PlansBarProps) {
+export function PlansBar({ report, failure, refreshError, machines, spinning, onRefresh, onOpenUsage }: PlansBarProps) {
   const chips = balanceChips(report);
   const dim = failure !== null || (report != null && isStale(report.ts));
+  // #14055 — dimming alone never said WHY: the snapshot age (or the refresh error) rides beside
+  // the chips and in the tooltip, not only inside each chip's own staleness line.
+  const asOf = report != null && isStale(report.ts) ? `as of ${agoLabel(Date.now() - report.ts)} ago` : null;
+  const why = refreshError != null
+    ? {
+        text: `refresh failed: ${clipLine(refreshError)}`,
+        title: `Last provider refresh failed: ${refreshError}${asOf ? `\nPlans snapshot ${asOf}.` : ""}`,
+      }
+    : asOf != null
+      ? { text: asOf, title: `Plans snapshot ${asOf} — the chips stay dim until a fresh refresh lands.` }
+      : null;
   const hub = failure !== null ? { color: "var(--v2-bad)", text: "hub unreachable" }
     : report ? { color: "var(--v2-ok)", text: "hub connected" } : { color: "var(--v2-track)", text: "connecting" };
   return (
@@ -83,6 +103,11 @@ export function PlansBar({ report, failure, machines, spinning, onRefresh, onOpe
         {!chips.length && failure === null && <span className="shrink-0">{report ? "No plans reported yet" : "Reading plans"}</span>}
         {chips.map(c => <PlanChip key={c.key} chip={c} onOpen={onOpenUsage} />)}
       </div>
+      {why != null && (
+        <span data-bar-why className="v2-mono shrink-0 whitespace-nowrap" style={{ color: "var(--v2-warn)" }} title={why.title}>
+          {why.text}
+        </span>
+      )}
       <IconButton label="Refresh plans and balances" title="Re-query every provider now" size={24} onClick={onRefresh}>
         <RefreshCw size={11} aria-hidden className={spinning ? "animate-spin" : undefined} />
       </IconButton>
@@ -97,7 +122,7 @@ export function PlansBar({ report, failure, machines, spinning, onRefresh, onOpe
 }
 
 export function BottomBar({ client, onOpenUsage }: { client: HubClient; onOpenUsage: () => void }) {
-  const { report, failure, spinning, refetch } = useBalances(client);
+  const { report, failure, refreshError, spinning, refetch } = useBalances(client);
   const machines = useMachinesHealth(client);
-  return <PlansBar report={report} failure={failure} machines={machines} spinning={spinning} onRefresh={refetch} onOpenUsage={onOpenUsage} />;
+  return <PlansBar report={report} failure={failure} refreshError={refreshError} machines={machines} spinning={spinning} onRefresh={refetch} onOpenUsage={onOpenUsage} />;
 }

@@ -128,8 +128,9 @@ export function untilLong(t: number | string | null | undefined, now = Date.now(
   return `${m}m`;
 }
 
-// "as of 2h ago" — the staleness line a stale snapshot earns.
-function agoLabel(ms: number): string {
+// "as of 2h ago" — the staleness line a stale snapshot earns. Exported because the 2.0 footer
+// prints the same age beside the chips (#14055): one formatter, no drift between bar and tooltip.
+export function agoLabel(ms: number): string {
   const mins = Math.round(ms / 60000);
   if (mins < 60) return `${mins}m`;
   const hrs = Math.round(ms / 3600000);
