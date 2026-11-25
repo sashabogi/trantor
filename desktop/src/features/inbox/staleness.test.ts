@@ -1,12 +1,12 @@
-// Staleness is computed from the WORK, and only the work: a newer message from the same seat, or
-// every cited card closed. These tests pin the rules AND the two deliberate non-rules — age and
-// sender liveness — because both were tried, both were wrong, and both will be proposed again.
+// A newer message, closed work, or an old question with no open card makes a message stale.
+// Sender liveness stays a deliberate non-signal: offline is not the same as gone.
 import { describe, expect, it } from "vitest";
-import { stalenessOf } from "./staleness";
+import { STALE_QUESTION_MS, stalenessOf } from "./staleness";
 import type { Card, Message, Peer } from "../../shared/api/client";
 
+const NOW = Date.now();
 const msg = (over: Partial<Message> = {}): Message =>
-  ({ id: 1, ts: 0, from: "seat:trantor", to: "me:trantor", text: "?", ...over });
+  ({ id: 1, ts: NOW, from: "seat:trantor", to: "me:trantor", text: "?", ...over });
 
 const card = (id: number, status: string): Card =>
   ({ id, project: "trantor", title: `card ${id}`, status });
@@ -54,14 +54,34 @@ describe("stalenessOf", () => {
     expect(stalenessOf(m, [m], [], [card(100, "done")]).stale).toBe(false);
   });
 
-  it("age is never a staleness signal — a nine-hour-old unanswered question still matters", () => {
-    const m = msg({ ts: Date.now() - 9 * 60 * 60 * 1000 });
-    expect(stalenessOf(m, [m], [], []).stale).toBe(false);
+  it("a nine-hour-old unanswered question still matters", () => {
+    const m = msg({ ts: NOW - 9 * 60 * 60 * 1000 });
+    expect(stalenessOf(m, [m], [], [], NOW).stale).toBe(false);
   });
 
-  it("sender liveness is not a signal — an offline sender's question still matters", () => {
+  it("a 26-day-old question with no open card is stale, whatever other messages the view has", () => {
+    const m = msg({ ts: NOW - 26 * 86_400_000 });
+    const other = msg({ id: 99, from: "other:trantor" });
+    const expected = { stale: true, reason: "asked 26d ago; no open card" } as const;
+    expect(stalenessOf(m, [m], [], [], NOW)).toEqual(expected);
+    expect(stalenessOf(m, [m, other], [], [], NOW)).toEqual(expected);
+  });
+
+  it("an open cited card keeps an old question live", () => {
+    const m = msg({ ts: NOW - 26 * 86_400_000, refs: [100] });
+    expect(stalenessOf(m, [m], [], [card(100, "doing")], NOW).stale).toBe(false);
+  });
+
+  it("age becomes stale only AFTER seven days without an open card", () => {
+    const boundary = msg({ ts: NOW - STALE_QUESTION_MS });
+    const old = msg({ ts: NOW - STALE_QUESTION_MS - 1 });
+    expect(stalenessOf(boundary, [boundary], [], [], NOW).stale).toBe(false);
+    expect(stalenessOf(old, [old], [], [], NOW)).toEqual({ stale: true, reason: "asked 7d ago; no open card" });
+  });
+
+  it("sender liveness is not a signal — an offline sender's recent question still matters", () => {
     const peers: Peer[] = [{ session: "seat:trantor", online: false, lastSeen: 0 }];
     const m = msg({ from: "seat:trantor" });
-    expect(stalenessOf(m, [m], peers, []).stale).toBe(false);
+    expect(stalenessOf(m, [m], peers, [], NOW).stale).toBe(false);
   });
 });

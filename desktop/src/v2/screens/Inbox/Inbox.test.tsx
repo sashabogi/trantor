@@ -8,11 +8,12 @@ import { HubClient, type Card, type Message, type Peer } from "../../../shared/a
 import { hasSeen } from "../../../shared/seen";
 import { InboxScreen } from "./index";
 import { makeInboxItems, rankInboxItems, splitStaleItems } from "./model";
+import { actionableCount, buildQueue } from "../Dashboard/model";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const message = (id: number, from: string, refs: number[] = [], ts = id * 1000): Message => ({
+const message = (id: number, from: string, refs: number[] = [], ts = Date.now()): Message => ({
   id, from, to: "sasha", project: "trantor", text: `Question ${id}`, refs, ts,
 });
 const card = (id: number, status: string): Card => ({ id, status, project: "trantor", title: `Card ${id}` });
@@ -49,6 +50,21 @@ describe("Inbox model", () => {
     expect(groups.stale.map(item => item.key)).toEqual(["message-10", "message-12"]);
     expect(groups.stale[0]?.stale).toEqual({ stale: true, reason: "codex-8 asked again since" });
     expect(groups.stale[1]?.stale).toEqual({ stale: true, reason: "#20 is done" });
+  });
+
+  it("puts the 26-day-old orphaned question in Stale and out of the Dashboard count", () => {
+    const now = Date.now();
+    const old = message(12274, "trantor-duty:trantor", [12274], now - 26 * 86_400_000);
+    const items = makeInboxItems({ messages: [old], proposals: [], holds: [], peers: [], cards: [] });
+    const groups = splitStaleItems(items);
+    const queue = buildQueue({
+      messages: [old], allMessages: [old], cards: [], holds: [], proposals: [], decided: new Set(), now,
+    });
+    expect(groups.live).toEqual([]);
+    expect(groups.stale.map(item => item.key)).toEqual(["message-12274"]);
+    expect(groups.stale[0]?.stale).toEqual({ stale: true, reason: "asked 26d ago; no open card" });
+    expect(queue).toEqual([]);
+    expect(actionableCount(queue)).toBe(0);
   });
 });
 
