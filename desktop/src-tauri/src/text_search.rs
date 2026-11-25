@@ -205,9 +205,12 @@ fn parse_record(raw: &[u8]) -> Option<(String, u64, String)> {
     Some((path.to_string(), line.parse().ok()?, text.to_string()))
 }
 
-fn grep_command(root: &Path, query: &str, how: &SearchHow) -> Command {
+fn grep_command(root: &Path, query: &str, how: &SearchHow, untracked: bool) -> Command {
     let mut cmd = Command::new("git");
-    cmd.arg("-C").arg(root).args(["grep", "-n", "-z", "-I", "--untracked", "--no-color"]);
+    cmd.arg("-C").arg(root).args(["grep", "-n", "-z", "-I", "--no-color"]);
+    if untracked {
+        cmd.arg("--untracked");
+    }
     cmd.arg(if how.regex { "-E" } else { "-F" });
     if how.whole_word {
         cmd.arg("-w");
@@ -249,17 +252,27 @@ fn stat_of(path: &Path) -> (u64, u64) {
     std::fs::metadata(path).map(|m| (mtime_ms_of(&m), m.len())).unwrap_or((0, 0))
 }
 
-fn run_grep(root: &Path, query: &str, how: &SearchHow) -> Result<TextSearchResult, String> {
-    let matcher = Matcher::build(how, query);
-    let mut child = grep_command(root, query, how)
+/// One grep pass folded into `result`. `skip` holds the paths an earlier pass already
+/// reported, so the untracked pass (which also re-lists tracked, unignored files) adds nothing twice.
+fn grep_pass(
+    root: &Path,
+    query: &str,
+    how: &SearchHow,
+    untracked: bool,
+    matcher: Option<&Matcher>,
+    skip: &std::collections::HashSet<String>,
+    result: &mut TextSearchResult,
+) -> Result<(), String> {
+    let mut child = grep_command(root, query, how, untracked)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("git grep failed: {e}"))?;
     let stdout = child.stdout.take().ok_or("git grep gave no output")?;
     let mut reader = BufReader::new(stdout);
-    let mut result = TextSearchResult::default();
     let mut buf = Vec::new();
+    let mut last: Option<String> = None;
+    let start_files = result.files.len();
     loop {
         buf.clear();
         match reader.read_until(b'\n', &mut buf) {
@@ -268,18 +281,22 @@ fn run_grep(root: &Path, query: &str, how: &SearchHow) -> Result<TextSearchResul
         }
         let Some((path, line, text)) = parse_record(&buf) else { continue };
         let path = path.strip_prefix("./").unwrap_or(&path).to_string();
-        if result.files.last().map(|f| f.path != path).unwrap_or(true) {
+        if skip.contains(&path) {
+            continue;
+        }
+        if last.as_deref() != Some(path.as_str()) {
             if result.files.len() >= MAX_FILES {
                 result.truncated = true;
                 break;
             }
-            result.files.push(FileMatches { path, matches: Vec::new(), mtime_ms: 0, bytes: 0 });
+            result.files.push(FileMatches { path: path.clone(), matches: Vec::new(), mtime_ms: 0, bytes: 0 });
+            last = Some(path);
         }
         if result.total >= MAX_MATCHES {
             result.truncated = true;
             break;
         }
-        let span = matcher.as_ref().and_then(|m| m.first(&text, how.whole_word));
+        let span = matcher.and_then(|m| m.first(&text, how.whole_word));
         let column = span.map(|(s, _)| utf16_units(&text[..s]) + 1).unwrap_or(1);
         let mark_len = span.map(|(s, e)| utf16_units(&text[s..e]));
         let cut: String = text.chars().take(MAX_LINE_CHARS).collect();
@@ -294,10 +311,24 @@ fn run_grep(root: &Path, query: &str, how: &SearchHow) -> Result<TextSearchResul
     drop(reader);
     let out = child.wait_with_output().map_err(|e| format!("git grep failed: {e}"))?;
     // Exit 1 means no match; anything above that with nothing read is a real failure (not a repo,
-    // or an expression git rejects — both belong in the box as an error, not as zero results).
-    if result.files.is_empty() && out.status.code().map(|c| c > 1).unwrap_or(false) {
+    // or an expression git rejects, both belong in the box as an error, not as zero results).
+    if result.files.len() == start_files && out.status.code().map(|c| c > 1).unwrap_or(false) {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
+    Ok(())
+}
+
+fn run_grep(root: &Path, query: &str, how: &SearchHow) -> Result<TextSearchResult, String> {
+    let matcher = Matcher::build(how, query);
+    let mut result = TextSearchResult::default();
+    // #14268: the untracked flag drops a tracked file that an ignore rule matches, so tracked files
+    // get their own pass (ignore rules do not apply to them) and the untracked pass adds new paths only.
+    grep_pass(root, query, how, false, matcher.as_ref(), &std::collections::HashSet::new(), &mut result)?;
+    if !result.truncated {
+        let seen: std::collections::HashSet<String> = result.files.iter().map(|f| f.path.clone()).collect();
+        grep_pass(root, query, how, true, matcher.as_ref(), &seen, &mut result)?;
+    }
+    result.files.sort_by(|a, b| a.path.cmp(&b.path));
     for f in result.files.iter_mut() {
         let (mtime, bytes) = stat_of(&root.join(&f.path));
         f.mtime_ms = mtime;
@@ -819,6 +850,65 @@ mod tests {
         let d = repo("repmissing");
         let r = replace_in(&d, "gone.txt", "needle", "pin", &how(false, false, false), None, 0, 0);
         assert!(r.unwrap_err().contains("cannot replace gone.txt"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn stage(dir: &Path, paths: &[&str]) {
+        let ok = Command::new("git").arg("-C").arg(dir).arg("add").args(paths).status().unwrap();
+        assert!(ok.success());
+    }
+
+    // #14268: a repo shaped like the reported one, with tracked and untracked files plus the
+    // ignore files another tool wrote.
+    fn reported_repo(name: &str) -> std::path::PathBuf {
+        let d = repo(name);
+        write(&d, "src/app.ts", "import { add, multiply } from \"./math\";\n\n\n\n\n\n\nreturn items.map(x => multiply(x, k));\n");
+        write(&d, "src/math.ts", "\n\n\n\n\n\n\n\nexport function multiply(a: number, b: number): number {\n");
+        write(&d, ".gitignore", "graft/\n");
+        write(&d, ".ignore", "graft/\n");
+        write(&d, "graft/out.ts", "multiply\n");
+        stage(&d, &["src/math.ts", ".gitignore"]);
+        write(&d, "notes.txt", "untracked multiply note\n");
+        d
+    }
+
+    #[test]
+    fn finds_every_match_in_every_file() {
+        let d = reported_repo("reported");
+        let r = search_in(&d, "multiply", &how(false, false, false)).unwrap();
+        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["notes.txt", "src/app.ts", "src/math.ts"]);
+        assert_eq!(r.total, 4);
+        let app = r.files.iter().find(|f| f.path == "src/app.ts").unwrap();
+        assert_eq!(app.matches.iter().map(|m| m.line).collect::<Vec<_>>(), vec![1, 8]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_tracked_file_that_an_ignore_rule_matches_is_still_searched() {
+        let d = reported_repo("ignored-tracked");
+        write(&d, ".gitignore", "graft/\n*.ts\n");
+        let r = search_in(&d, "multiply", &how(false, false, false)).unwrap();
+        let paths: Vec<&str> = r.files.iter().map(|f| f.path.as_str()).collect();
+        // math.ts is tracked, so it stays; app.ts is untracked and ignored, so it stays out
+        assert_eq!(paths, vec!["notes.txt", "src/math.ts"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn toggles_still_narrow_the_matches() {
+        let d = reported_repo("toggles");
+        write(&d, "src/case.ts", "Multiply\nmultiplyAll\nmultiply\n");
+        let all = search_in(&d, "multiply", &how(false, false, false)).unwrap();
+        let case = search_in(&d, "multiply", &how(true, false, false)).unwrap();
+        let word = search_in(&d, "multiply", &how(false, false, true)).unwrap();
+        let re = search_in(&d, "multiply[(]x", &how(false, true, false)).unwrap();
+        let count = |r: &TextSearchResult, p: &str| r.files.iter().find(|f| f.path == p).map(|f| f.matches.len()).unwrap_or(0);
+        assert_eq!(count(&all, "src/case.ts"), 3);
+        assert_eq!(count(&case, "src/case.ts"), 2);
+        assert_eq!(count(&word, "src/case.ts"), 2);
+        assert_eq!(count(&re, "src/app.ts"), 1);
+        assert_eq!(count(&re, "src/math.ts"), 0);
         let _ = std::fs::remove_dir_all(&d);
     }
 }
