@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // #14044 drill: the source control sidebar's header, flat Changes list, Files, Recent commits,
-// remembered sections and clicks. #14047: the ahead/behind line beside the branch and the
-// Branches and seats rows. Fakes sit at the Tauri IPC and a per-test localStorage only.
+// remembered sections and clicks; #14047 ahead/behind + seats rows; #14058 every header stays on
+// screen, each open body scrolls in itself. Fakes: the Tauri IPC and a per-test localStorage.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -300,5 +300,58 @@ describe("Branches and seats (#14047)", () => {
     await click(host.querySelector('button[data-scope-row="glm-5"]'));
     await click(host.querySelector('button[data-scope-row="main"]'));
     expect(picked).toEqual(["glm-5", null]);
+  });
+});
+
+describe("headers always on screen (#14058)", () => {
+  it("the column does not scroll as a whole; only the open section bodies scroll", async () => {
+    await render();
+    const column = host.querySelector('section[data-section="changes"]')?.parentElement;
+    expect(column?.className).toContain("flex-1");
+    expect(column?.className).not.toContain("overflow");
+    for (const s of ["changes", "files", "commits", "branches"]) {
+      expect(sectionBody(s)?.className).toContain("overflow-y-auto");
+    }
+  });
+
+  it("with Files open the later headers sit outside the Files body, after it in the column", async () => {
+    await render();
+    const files = sectionBody("files");
+    const commitsHeader = host.querySelector('button[data-section-toggle="commits"]');
+    const branchesHeader = host.querySelector('button[data-section-toggle="branches"]');
+    expect(commitsHeader).not.toBeNull();
+    expect(branchesHeader).not.toBeNull();
+    expect(files?.contains(commitsHeader)).toBe(false);
+    expect(files?.contains(branchesHeader)).toBe(false);
+  });
+
+  it("Files takes the remaining space; the other three stop at 40% of the column", async () => {
+    await render();
+    expect(host.querySelector('section[data-section="files"]')?.className).toContain("flex-1");
+    for (const s of ["changes", "commits", "branches"]) {
+      expect(host.querySelector(`section[data-section="${s}"]`)?.className).toContain("max-h-[40%]");
+    }
+  });
+
+  it("a collapsed section is only its header row and gives the space back", async () => {
+    await render();
+    await click(host.querySelector('button[data-section-toggle="files"]'));
+    const files = host.querySelector('section[data-section="files"]');
+    expect(files?.className).toContain("shrink-0");
+    expect(files?.className).not.toContain("flex-1");
+    expect(sectionBody("files")).toBeNull();
+  });
+
+  it("the header row reads as a control: chevron, badge, aria-expanded, Show/Hide title", async () => {
+    await render();
+    const toggle = host.querySelector<HTMLButtonElement>('button[data-section-toggle="commits"]');
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle?.title).toBe("Hide Recent commits");
+    expect(toggle?.querySelector("svg")).not.toBeNull();
+    expect(toggle?.querySelector("[data-count]")?.textContent).toBe("2");
+    await click(toggle);
+    const collapsed = host.querySelector<HTMLButtonElement>('button[data-section-toggle="commits"]');
+    expect(collapsed?.getAttribute("aria-expanded")).toBe("false");
+    expect(collapsed?.title).toBe("Show Recent commits");
   });
 });

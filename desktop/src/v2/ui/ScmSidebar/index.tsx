@@ -1,7 +1,7 @@
 // The source control sidebar (#14044): the one column the Workspace's left side and Code's sidebar
 // share: Changes (flat list with the commit box), Files, Recent commits, every section collapsible
-// and remembered in localStorage. Stage and commit reuse the Code screen's git bridge, so the
-// main-checkout rules travel with them: no push, no discard. #14047: ahead/behind + seats rows.
+// and remembered in localStorage; stage/commit reuse the Code screen's git bridge (no push, no
+// discard). #14047: ahead/behind + seats rows. #14058: every header stays on screen, bodies scroll alone.
 import { useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { ago } from "../../../shared/time";
@@ -107,14 +107,15 @@ export function ScmSidebar(p: ScmSidebarProps) {
       {p.state.kind === "error" && (
         <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-bad)]">{p.state.reason}</div>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* #14058: the column never scrolls as a whole: headers always fit, open bodies scroll in place */}
+      <div className="flex min-h-0 flex-1 flex-col">
         <CollapsibleSection section="changes" title="Changes" badge={snap ? <CountBadge n={snap.status.length} /> : undefined}>
           {snap
             ? <ChangesSection project={p.project} snap={snap} selected={p.selectedPath ?? null} onOpen={p.onOpenChange}
               onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
             : <Pending state={p.state} />}
         </CollapsibleSection>
-        <CollapsibleSection section="files" title="Files">
+        <CollapsibleSection section="files" title="Files" sizing="fill">
           <ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} />
         </CollapsibleSection>
         <CollapsibleSection section="commits" title="Recent commits" badge={snap ? <CountBadge n={snap.log.length} /> : undefined}>
