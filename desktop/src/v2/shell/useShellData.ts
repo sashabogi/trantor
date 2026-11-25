@@ -2,7 +2,8 @@
 // project's hub, the signed identity, and the same peek-only inbox count (#v2-F).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { HubClient, hubForProject, knownProjects, localSessions, type Peer } from "../../shared/api/client";
+import { HubClient, hubForProject, knownProjects, localSessions, type LocalSession, type Peer } from "../../shared/api/client";
+import { isHostSession } from "../screens/Workspace/seatModel";
 import { countUnseen, onSeenChange } from "../../shared/seen";
 import { usePendingHolds } from "../../shared/FileHolds";
 import { usePendingProposals } from "../../shared/Proposals";
@@ -73,7 +74,15 @@ function useUnread(client: HubClient, me: string) {
   return unread;
 }
 
-/** Projects with an open local session or an online peer: the rail's "active now" tiles. */
+/** #14271: a project has an orchestrator only for a herdr-confirmed local pane or its online host session; a crew seat or tool peer is not one. */
+export function liveOrchestratorProjects(open: LocalSession[], peers: Peer[]): string[] {
+  const names = new Set<string>();
+  for (const s of open) if (s.status) names.add(s.project);
+  for (const p of peers) if (p.online && p.project && isHostSession(p.session) && p.session.endsWith(`:${p.project}`)) names.add(p.project);
+  return [...names].sort();
+}
+
+/** Projects with a live orchestrator: the rail's "active now" tiles. */
 function useLiveProjects(client: HubClient) {
   const [live, setLive] = useState<string[]>([]);
   useEffect(() => {
@@ -85,10 +94,7 @@ function useLiveProjects(client: HubClient) {
         ...urls.map(u => new HubClient(u).peers().catch((): Peer[] => [])),
       ]);
       if (!alive) return;
-      const names = new Set<string>();
-      for (const s of open) if (s.status) names.add(s.project);
-      for (const p of lists.flat()) if (p.online && p.project) names.add(p.project);
-      setLive([...names].sort());
+      setLive(liveOrchestratorProjects(open, lists.flat()));
     };
     void pull();
     const t = setInterval(() => void pull(), 30_000);

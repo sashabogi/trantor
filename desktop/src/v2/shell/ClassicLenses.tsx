@@ -7,7 +7,9 @@ import { GraphLens } from "../../features/code/graph/GraphLens";
 import { Feed } from "../../features/feed/Feed";
 import { Conversation } from "../../features/chat/Conversation";
 import { Messages } from "../../features/messages/Messages";
+import { Play } from "lucide-react";
 import { ProjectTile } from "../ui/ProjectTile";
+import { IconButton } from "../ui/IconButton";
 import type { LensScreen, Navigate } from "../routes";
 import { landingLens } from "./shellMode";
 
@@ -45,7 +47,11 @@ export function MessagesLens({ client, me }: { client: HubClient; me: string }) 
   return <Messages client={client} me={me} />;
 }
 
-export function AllProjects({ projects, live, onNavigate, onStartProject }: { projects: string[]; live: string[]; onNavigate: Navigate; onStartProject?: () => void }) {
+export function AllProjects({ projects, live, onNavigate, onStartProject, onWake }: {
+  projects: string[]; live: string[]; onNavigate: Navigate; onStartProject?: () => void;
+  /** #14271: Start on a project with no live orchestrator. */
+  onWake?: (project: string) => void;
+}) {
   return (
     <div className="px-5 py-4">
       <div className="flex items-center gap-3">
@@ -60,13 +66,19 @@ export function AllProjects({ projects, live, onNavigate, onStartProject }: { pr
       <p className="mt-1 text-v2-body text-[var(--v2-muted)]">{projects.length} known · {live.length} with live sessions</p>
       <ul className="mt-4 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 p-0">
         {projects.map(p => (
-          <li key={p}>
+          <li key={p} className="group relative">
             <button type="button" onClick={() => onNavigate(landingLens(), p)}
               className="v2-hover flex w-full items-center gap-2.5 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2 text-left text-v2-base text-[var(--v2-text)]">
               <ProjectTile name={p} size={26} />
               <span className="min-w-0 flex-1 truncate">{p}</span>
               {live.includes(p) && <span role="img" aria-label="live" title="Has a live session" className="h-[7px] w-[7px] rounded-full bg-[var(--v2-accent)]" />}
             </button>
+            {onWake && !live.includes(p) && (
+              <IconButton label={`Start ${p}`} title="Start the orchestrator" size={24} onClick={() => onWake(p)}
+                className="absolute top-1/2 right-2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100">
+                <Play size={12} aria-hidden />
+              </IconButton>
+            )}
           </li>
         ))}
       </ul>

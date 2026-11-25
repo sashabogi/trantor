@@ -59,7 +59,7 @@ function EmptyCrew() {
   );
 }
 
-export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
+export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenProps) {
   const { RightPanel } = usePanes();
   const data = useWorkspaceData(client, project);
   const [selKey, setSelKeyState] = useState<string | null>(() => readSeat(project));
@@ -133,7 +133,7 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
       </div>
       <ChatColumn col={chatCol} workspace={workspaceRef}>
         <RightPanel project={project} seat={selected} orchestrator={seats.find(s => s.isOrchestrator)}
-          changed={diff.diff?.files.length ?? 0} onNavigate={onNavigate} onClose={() => chatCol.setOpen(false)} />
+          changed={diff.diff?.files.length ?? 0} onNavigate={onNavigate} wake={wake} onClose={() => chatCol.setOpen(false)} />
       </ChatColumn>
       {recording && (me
         ? <DrillMode me={me} onClose={() => setRecording(false)} />

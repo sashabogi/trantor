@@ -49,7 +49,7 @@ function FleetScreenView({ screen, props, projects, live, me }: {
     case "usage": return <UsageScreen {...props} />;
     case "extensions": return <ExtensionsScreen {...props} />;
     case "settings": return <SettingsScreen {...props} />;
-    case "projects": return <AllProjects projects={projects} live={live} onNavigate={props.onNavigate} onStartProject={props.onStartProject} />;
+    case "projects": return <AllProjects projects={projects} live={live} onNavigate={props.onNavigate} onStartProject={props.onStartProject} onWake={props.wake?.start} />;
     default: return null;
   }
 }
@@ -84,7 +84,10 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
   const togglePalette = useCallback(() => setPalette(cur => (cur ? null : { kind: "global" })), []);
   usePaletteKey(togglePalette);
   const start = useStartProject({ addProject: data.addProject, onNavigate, deps: startDeps });
-  const props: ScreenProps = { client: data.client, project: data.active, onNavigate, onStartProject: start.startProject };
+  // #14271: one wake path for the Start buttons and the chat panel; it also makes the project active and opens its Workspace.
+  const wakeProject = useCallback((project: string) => { void start.retry(project); onNavigate("workspace", project); }, [start, onNavigate]);
+  const wake = { wakes: start.wakes, start: wakeProject };
+  const props: ScreenProps = { client: data.client, project: data.active, onNavigate, onStartProject: start.startProject, wake };
   const notice = data.active ? (
     <WakeLine project={data.active} state={start.wakes.get(data.active)} startedAt={start.wakeStarts.get(data.active)}
       hint={start.planHint === data.active} onRetry={p => void start.retry(p)} onDismiss={start.dismissWake}
@@ -100,7 +103,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
         notice={<WakeNotice wakes={start.wakes} wakeStarts={start.wakeStarts} activeProject={data.active} />} />
       <AgentCliBanner />
       <div className="flex min-h-0 flex-1">
-        <Rail screen={screen} project={data.active} live={data.live} unread={data.unread} needsYou={data.needsYou} update={data.update} onNavigate={onNavigate} />
+        <Rail screen={screen} project={data.active} live={data.live} unread={data.unread} needsYou={data.needsYou} update={data.update} onNavigate={onNavigate} onWake={wakeProject} />
         <main data-screen={screen} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
           {isLensScreen(screen)
             ? <LensScreenView screen={screen} props={props} me={data.me} notice={notice} />

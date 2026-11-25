@@ -1,5 +1,6 @@
 // What the shell can show, and which screens live inside a project (#v2-F).
 import type { HubClient } from "../shared/api/client";
+import type { WakeRowState } from "../features/genesis/wakeRow";
 
 export const LENS_SCREENS = ["workspace", "code", "graph", "board", "feed", "bus"] as const;
 export type LensScreen = (typeof LENS_SCREENS)[number];
@@ -20,7 +21,11 @@ export type ScreenProps = {
   onNavigate: Navigate;
   /** Opens the Start a project sheet (#13984). */
   onStartProject?: () => void;
+  /** #14271: the shared wake, so a project with no orchestrator can start one from its own screens. */
+  wake?: WakeApi;
 };
+
+export type WakeApi = { wakes: Map<string, WakeRowState>; start: (project: string) => void };
 
 export const LENS_LABEL = {
   workspace: "Workspace", code: "Code", graph: "Graph", board: "Board", feed: "Feed", bus: "Bus",

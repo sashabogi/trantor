@@ -5,7 +5,8 @@ import { ArrowLeft } from "lucide-react";
 import { Chat, DEFAULT_CHAT_DEPS, type ChatDeps } from "../../../features/chat/Chat";
 import { SessionsMode } from "../../../features/code/SessionsMode";
 import type { SessionRow } from "../../../features/code/sessionsApi";
-import type { Navigate } from "../../routes";
+import type { Navigate, WakeApi } from "../../routes";
+import { StartOrchestrator } from "./StartOrchestrator";
 import { setOpenIntent } from "../../shell/openIntent";
 import { IconButton } from "../../ui/IconButton";
 import { ChatHeader, type SheetKind } from "./ChatHeader";
@@ -35,9 +36,9 @@ function Sheet({ kind, onBack, children }: { kind: SheetKind; onBack: () => void
   );
 }
 
-export function RightPanel({ project, seat, orchestrator, changed, onNavigate, onClose }: {
+export function RightPanel({ project, seat, orchestrator, changed, onNavigate, onClose, wake }: {
   project: string; seat: SeatView | undefined; orchestrator: SeatView | undefined; changed: number;
-  onNavigate: Navigate; onClose: () => void;
+  onNavigate: Navigate; onClose: () => void; wake?: WakeApi;
 }) {
   const [sheet, setSheet] = useState<SheetKind | null>(null);
   const [session, setSession] = useState<SessionRow | null>(null);
@@ -53,7 +54,7 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
         sessionId={session?.id ?? orchestrator?.session ?? null} onGit={openGit} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
         <ChatNoTray onOpenChange={openChange}><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
-          onClose={() => setSession(null)} /></ChatNoTray>
+          emptyAction={wake ? <StartOrchestrator project={project} wake={wake} /> : undefined} onClose={() => setSession(null)} /></ChatNoTray>
       </div>
       {sheet === "sessions" && (
         <Sheet kind="sessions" onBack={back}>

@@ -1,8 +1,9 @@
 // The left rail from the Workspace artboard: fleet screens, active-project tiles, settings (#v2-F).
 import { useState, type ReactNode } from "react";
-import { ArrowDownToLine, Blocks, Bot, ChevronsLeft, ChevronsRight, FolderOpen, Gauge, Inbox, LayoutDashboard, MessagesSquare, Settings } from "lucide-react";
+import { ArrowDownToLine, Blocks, Bot, ChevronsLeft, ChevronsRight, FolderOpen, Gauge, Inbox, LayoutDashboard, MessagesSquare, Play, Settings } from "lucide-react";
 import type { AppUpdate } from "../../shared/api/client";
 import { ProjectTile } from "../ui/ProjectTile";
+import { IconButton } from "../ui/IconButton";
 import { PRESENCE_COLOR } from "../ui/identity";
 import { isLensScreen, type Navigate, type Screen } from "../routes";
 import { useRegisterCommands } from "./commands";
@@ -42,6 +43,8 @@ export type RailProps = {
   needsYou: number;
   update: AppUpdate | null;
   onNavigate: Navigate;
+  /** #14271: Start on a project with no live orchestrator; absent hides the button. */
+  onWake?: (project: string) => void;
 };
 
 const FLEET: { screen: Screen; label: string; icon: ReactNode }[] = [
@@ -53,7 +56,7 @@ const FLEET: { screen: Screen; label: string; icon: ReactNode }[] = [
   { screen: "extensions", label: "Extensions", icon: <Blocks size={18} aria-hidden /> },
 ];
 
-export function Rail({ screen, project, live, unread, needsYou, update, onNavigate }: RailProps) {
+export function Rail({ screen, project, live, unread, needsYou, update, onNavigate, onWake }: RailProps) {
   // #14070: each mode keeps its own choice, so Developer starts on icons whatever Orchestrator shows.
   const { railKey, landing } = MODE_CONFIG[useShellMode()];
   const [picked, setPicked] = useState<Record<string, boolean>>({});
@@ -83,9 +86,17 @@ export function Rail({ screen, project, live, unread, needsYou, update, onNaviga
         const open = inProject && p === project;
         const needs = p === project && !!needsYou;
         return (
-          <RailButton key={p} label={open ? `${p}, open` : p} title={p} active={open} expanded={expanded} dot={needs} onClick={() => onNavigate(landing, p)}>
-            <ProjectTile name={p} size={26} dot={!expanded && needs ? "needs-you" : undefined} />
-          </RailButton>
+          <div key={p} className={`group relative flex shrink-0 ${expanded ? "w-full" : "w-10"}`}>
+            <RailButton label={open ? `${p}, open` : p} title={p} active={open} expanded={expanded} dot={needs} onClick={() => onNavigate(landing, p)}>
+              <ProjectTile name={p} size={26} dot={!expanded && needs ? "needs-you" : undefined} />
+            </RailButton>
+            {onWake && !live.includes(p) && (
+              <IconButton label={`Start ${p}`} title="Start the orchestrator" size={20} onClick={() => onWake(p)}
+                className={`absolute opacity-0 group-hover:opacity-100 focus-visible:opacity-100 ${expanded ? "top-[10px] right-1" : "right-[-2px] bottom-[-2px]"}`}>
+                <Play size={11} aria-hidden />
+              </IconButton>
+            )}
+          </div>
         );
       })}
       <RailButton label="All projects" title="All projects" active={screen === "projects"} expanded={expanded} onClick={() => onNavigate("projects")}>

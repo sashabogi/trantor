@@ -3,7 +3,7 @@ import { HandoffRecapStatus } from "../workspace/HandoffRecapStatus";
 // its terminal, since a terminal is a bad place to read one. Tool calls render as collapsed cards
 // that fill in when a result arrives. Liveness is row-level (#5475/#5474): the watcher pushes each
 // row live in streaming.ts, falling back to polling when no watcher is offered.
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type PointerEvent as RPointerEvent } from "react";
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
@@ -454,8 +454,10 @@ function decodeOrchStatus(payload: OrchStatusRaw): OrchStatusDecoded {
   };
 }
 
-export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS }: {
+export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS, emptyAction }: {
   project: string; sessionId?: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
+  /** #14271: the 2.0 panel's replacement for the "no session hosted" sentence (it carries Start orchestrator). */
+  emptyAction?: ReactNode;
   /** Test seam — production callers omit it and get the real modules. */
   deps?: ChatDeps;
 }) {
@@ -1274,12 +1276,12 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
 
       <div className="relative min-h-0 flex-1">
       <div ref={transcript} onScroll={onTranscriptScroll} className="h-full overflow-y-auto px-3 pb-2">
-        {!target && (
+        {!target && (emptyAction ?? (
           <div className="tr-card-ghost px-4 py-3 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed">
             No orchestrator session is hosted for this project yet. Open one from the Workspace lens
             and this becomes the conversation with it.
           </div>
-        )}
+        ))}
         {/* The "session continued" divider is a TURN now (#5646): applySessionChanged keeps the
             predecessor thread and appends a divider item, so a second panel-level rule here would
             draw the same line twice. */}
