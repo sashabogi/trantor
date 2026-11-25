@@ -137,8 +137,8 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
 
         <section className="mb-8">
           <h2 className="tr-sec-title">Trantor 2.0</h2>
-          <p className="tr-sec-sub">Preview the new shell. Its account menu has Back to classic.</p>
-          <button type="button" onClick={enterV2} className="tr-input mt-3">Try Trantor 2.0</button>
+          <p className="tr-sec-sub">You are on the classic shell. Trantor 2.0 is the app now, and its Settings has Back to classic.</p>
+          <button type="button" onClick={enterV2} className="tr-input mt-3">Open Trantor 2.0</button>
         </section>
 
         <section className="mb-8">

@@ -1,9 +1,13 @@
-// The classic/2.0 switch: one localStorage key, or ?ui=v2 for a one-off look (#v2-F).
+// The classic/2.0 switch: 2.0 is the app since release 2.0.0; classic is one stored choice away,
+// or ?ui=classic (?ui=v2) for a one-off look (#v2-F).
 export const UI_KEY = "trantor.ui";
+const CLASSIC = "classic";
 
 export function wantsV2(search: string = window.location.search): boolean {
-  if (new URLSearchParams(search).get("ui") === "v2") return true;
-  try { return localStorage.getItem(UI_KEY) === "v2"; } catch { return false; }
+  const once = new URLSearchParams(search).get("ui");
+  if (once === "v2") return true;
+  if (once === CLASSIC) return false;
+  try { return localStorage.getItem(UI_KEY) !== CLASSIC; } catch { return true; }
 }
 
 function reloadWithout(param: string) {
@@ -18,6 +22,6 @@ export function enterV2() {
 }
 
 export function backToClassic() {
-  try { localStorage.removeItem(UI_KEY); } catch { /* storage blocked: nothing to clear */ }
+  try { localStorage.setItem(UI_KEY, CLASSIC); } catch { /* storage blocked: ?ui=classic still works */ }
   reloadWithout("ui");
 }

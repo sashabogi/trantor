@@ -16,8 +16,9 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("the 2.0 toggle", () => {
-  it("is classic by default", () => {
-    expect(wantsV2("")).toBe(false);
+  it("is 2.0 by default, and classic for one look with ?ui=classic", () => {
+    expect(wantsV2("")).toBe(true);
+    expect(wantsV2("?ui=classic")).toBe(false);
   });
 
   it("opens 2.0 from the stored key or the URL", () => {
@@ -35,11 +36,12 @@ describe("the 2.0 toggle", () => {
     expect(reload).toHaveBeenCalledOnce();
   });
 
-  it("backToClassic clears the key and reloads without ?ui", () => {
+  it("backToClassic stores the choice and reloads without ?ui", () => {
     localStorage.setItem(UI_KEY, "v2");
     const replace = vi.spyOn(window.location, "replace").mockImplementation(() => {});
     backToClassic();
-    expect(localStorage.getItem(UI_KEY)).toBeNull();
+    expect(localStorage.getItem(UI_KEY)).toBe("classic");
+    expect(wantsV2("")).toBe(false);
     expect(replace).toHaveBeenCalledOnce();
     expect(String(replace.mock.calls[0][0])).not.toContain("ui=v2");
   });
