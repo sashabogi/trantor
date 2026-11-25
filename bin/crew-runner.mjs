@@ -1103,7 +1103,8 @@ exit $turn_exit`;
     // so a handoff spawn would only leak an unmanaged interactive window.
     TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
     TRANTOR_HEAVY_GATE_WAIT_DIR: HEAVY_WAIT_DIR,
-    PATH: `${HEAVY_SHIM_DIR}:${process.env.PATH || ""}`,
+    // Spelled out here, not HEAVY_SHIM_DIR: the turn drills run this function alone, without the module's constants (#14048).
+    PATH: `${join(import.meta.dirname, "heavy-gate-shim")}:${process.env.PATH || ""}`,
     // #6206: the seat's transcript dir — a real CLI ignores it, a drill's fake CLI writes
     // its transcript lines there so the watchdog sees the liveness a real claude shows.
     TRANTOR_TRANSCRIPT_DIR: TRANSCRIPT_DIR };
