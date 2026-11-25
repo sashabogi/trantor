@@ -1,10 +1,12 @@
 // The left rail from the Workspace artboard: fleet screens, active-project tiles, settings (#v2-F).
 import { useState, type ReactNode } from "react";
-import { Blocks, Bot, ChevronsLeft, ChevronsRight, FolderOpen, Gauge, Inbox, LayoutDashboard, MessagesSquare, Settings } from "lucide-react";
+import { ArrowDownToLine, Blocks, Bot, ChevronsLeft, ChevronsRight, FolderOpen, Gauge, Inbox, LayoutDashboard, MessagesSquare, Settings } from "lucide-react";
+import type { AppUpdate } from "../../shared/api/client";
 import { ProjectTile } from "../ui/ProjectTile";
 import { PRESENCE_COLOR } from "../ui/identity";
 import { isLensScreen, type Navigate, type Screen } from "../routes";
 import { useRegisterCommands } from "./commands";
+import { openSettingsAt } from "./settingsIntent";
 import { MODE_CONFIG, useShellMode } from "./shellMode";
 
 function readExpanded(key: string) {
@@ -38,6 +40,7 @@ export type RailProps = {
   live: string[];
   unread: number;
   needsYou: number;
+  update: AppUpdate | null;
   onNavigate: Navigate;
 };
 
@@ -50,7 +53,7 @@ const FLEET: { screen: Screen; label: string; icon: ReactNode }[] = [
   { screen: "extensions", label: "Extensions", icon: <Blocks size={18} aria-hidden /> },
 ];
 
-export function Rail({ screen, project, live, unread, needsYou, onNavigate }: RailProps) {
+export function Rail({ screen, project, live, unread, needsYou, update, onNavigate }: RailProps) {
   // #14070: each mode keeps its own choice, so Developer starts on icons whatever Orchestrator shows.
   const { railKey, landing } = MODE_CONFIG[useShellMode()];
   const [picked, setPicked] = useState<Record<string, boolean>>({});
@@ -88,9 +91,16 @@ export function Rail({ screen, project, live, unread, needsYou, onNavigate }: Ra
       <RailButton label="All projects" title="All projects" active={screen === "projects"} expanded={expanded} onClick={() => onNavigate("projects")}>
         <FolderOpen size={18} aria-hidden />
       </RailButton>
-      <RailButton label="Settings" title="Settings" active={screen === "settings"} expanded={expanded} onClick={() => onNavigate("settings")} className="mt-auto">
-        <Settings size={18} aria-hidden />
-      </RailButton>
+      <div className="mt-auto flex flex-col gap-1">
+        {update?.updateAvailable && (
+          <RailButton label={`Update v${update.latest}`} title={`Update v${update.latest}`} expanded={expanded} onClick={() => { openSettingsAt("general"); onNavigate("settings"); }}>
+            <ArrowDownToLine size={18} aria-hidden className="text-[var(--v2-accent)]" />
+          </RailButton>
+        )}
+        <RailButton label="Settings" title="Settings" active={screen === "settings"} expanded={expanded} onClick={() => onNavigate("settings")}>
+          <Settings size={18} aria-hidden />
+        </RailButton>
+      </div>
       <button type="button" aria-label={action} title={action} onClick={toggle}
         className={`mb-2.5 flex h-10 shrink-0 items-center rounded-[10px] border-0 bg-transparent text-[var(--v2-muted)] hover:bg-[var(--v2-raised)] hover:text-[var(--v2-text)] ${expanded ? "w-full gap-2.5 px-2" : "w-10 justify-center"}`}>
         <span className="flex w-[26px] shrink-0 items-center justify-center">

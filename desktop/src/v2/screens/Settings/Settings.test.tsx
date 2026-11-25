@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
 import { AutonomyPage } from "./AutonomyPage";
-import { GeneralPage } from "./GeneralPages";
+import { GeneralPage, UpdateRow } from "./GeneralPages";
 import { SettingsNav } from "./SettingsNav";
 import { filterSections, SECTIONS } from "./sections";
 import { dialBlockedBy, resetPlan, type AutonomyState, type Resolved } from "./autonomyModel";
@@ -120,13 +120,44 @@ describe("changing a dial", () => {
 });
 
 describe("Back to classic (#13984 drill)", () => {
-  it("General carries a visible Back to classic button that calls the handler", () => {
+  it("General carries a visible Back to classic button that calls the handler", async () => {
+    mockIPC(() => null);
     const back = vi.fn();
     act(() => root.render(<GeneralPage onBackToClassic={back} />));
+    await flush();
     const btn = [...host.querySelectorAll("button")].find(b => b.textContent === "Back to classic");
     expect(btn).toBeDefined();
     act(() => btn?.click());
     expect(back).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("UpdateRow", () => {
+  it("checks once on mount and shows an available update without a click", async () => {
+    const commands: string[] = [];
+    mockIPC(command => {
+      commands.push(command);
+      if (command === "app_update_check") return {
+        current: "2.0.0", latest: "2.0.1", tag: "app-v2.0.1", assetName: "Trantor.dmg",
+        url: "https://example.test/Trantor.dmg", size: 1, updateAvailable: true,
+      };
+      return null;
+    });
+    act(() => root.render(<UpdateRow />));
+    await flush();
+    expect(commands.filter(command => command === "app_update_check")).toHaveLength(1);
+    expect(host.textContent).toContain("Update available: v2.0.1");
+  });
+
+  it("keeps Check now when no newer release is available", async () => {
+    mockIPC(command => command === "app_update_check" ? {
+      current: "2.0.1", latest: "2.0.1", tag: "app-v2.0.1", assetName: "Trantor.dmg",
+      url: "https://example.test/Trantor.dmg", size: 1, updateAvailable: false,
+    } : null);
+    act(() => root.render(<UpdateRow />));
+    await flush();
+    const check = [...host.querySelectorAll("button")].find(button => button.textContent === "Check now");
+    expect(check).toBeDefined();
   });
 });
 

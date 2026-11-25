@@ -49,6 +49,7 @@ export function UpdateRow() {
     if (u) setUpdate(u); else setErr("couldn't reach GitHub, try again later");
     setChecking(false);
   };
+  useEffect(() => { void check(); }, []);
   const install = async () => {
     if (!update) return;
     setInstalling(true); setErr("");

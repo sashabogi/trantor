@@ -3,6 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Rail, type RailProps } from "./Rail";
+import { takeSettingsSection } from "./settingsIntent";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -30,7 +31,7 @@ afterEach(() => {
 });
 
 const mount = (overrides: Partial<RailProps> = {}) => act(() => root.render(<Rail
-  screen="dashboard" project="trantor" live={["trantor"]} unread={0} needsYou={0} onNavigate={() => {}} {...overrides}
+  screen="dashboard" project="trantor" live={["trantor"]} unread={0} needsYou={0} update={null} onNavigate={() => {}} {...overrides}
 />));
 const nav = () => host.querySelector<HTMLElement>('nav[aria-label="Primary"]');
 const toggle = () => act(() => host.querySelector<HTMLButtonElement>('button[aria-label$="the sidebar"]')?.click());
@@ -88,5 +89,26 @@ describe("Rail", () => {
     expect(host.querySelector('button[aria-label="Inbox, 7 unread"] [data-badge]')?.textContent).toBe("7");
     expect(host.querySelector('button[aria-label="trantor"] > [data-dot="needs-you"]')).not.toBeNull();
     expect(host.querySelector('[data-project-tile="trantor"] [data-dot="needs-you"]')).toBeNull();
+  });
+
+  it("shows the update entry above Settings only when a release is available", () => {
+    const onNavigate = vi.fn();
+    const update = { current: "2.0.0", latest: "2.0.1", tag: "app-v2.0.1", assetName: "Trantor.dmg", url: "https://example.test/Trantor.dmg", size: 1 };
+    mount({ onNavigate });
+    expect(host.querySelector('button[aria-label="Update v2.0.1"]')).toBeNull();
+    mount({ onNavigate, update: { ...update, updateAvailable: false } });
+    expect(host.querySelector('button[aria-label="Update v2.0.1"]')).toBeNull();
+
+    mount({ onNavigate, update: { ...update, updateAvailable: true } });
+    const button = host.querySelector<HTMLButtonElement>('button[aria-label="Update v2.0.1"]');
+    expect(button?.getAttribute("title")).toBe("Update v2.0.1");
+    expect(button?.querySelector("svg")).not.toBeNull();
+    expect(button?.nextElementSibling).toBe(host.querySelector('button[aria-label="Settings"]'));
+    act(() => button?.click());
+    expect(onNavigate).toHaveBeenCalledWith("settings");
+    expect(takeSettingsSection()).toBe("general");
+
+    toggle();
+    expect(host.querySelector('button[aria-label="Update v2.0.1"]')?.textContent).toBe("Update v2.0.1");
   });
 });

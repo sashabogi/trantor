@@ -9,11 +9,17 @@ import { WorkingAgreements } from "./PolicyCards";
 import { AccountsPage, AgentClisCard, AgentsPage, HubPage, IdentityPage, PhoneCard } from "./SystemPages";
 import { SettingsNav } from "./SettingsNav";
 import { SECTIONS, filterSections, type SectionId } from "./sections";
+import { takeSettingsSection, watchSettingsSection } from "../../shell/settingsIntent";
 import { useSettingsData } from "./useSettingsData";
 
 export function SettingsScreen({ client, project, onNavigate }: ScreenProps) {
   const [query, setQuery] = useState("");
-  const [active, setActive] = useState<SectionId>("autonomy");
+  const [active, setActive] = useState<SectionId>(() => takeSettingsSection() ?? "autonomy");
+  // #14204: a page asked for while Settings is already open clears the search so it cannot be hidden.
+  useEffect(() => watchSettingsSection(() => {
+    const id = takeSettingsSection();
+    if (id) { setQuery(""); setActive(id); }
+  }), []);
   const data = useSettingsData(project);
   const matches = useMemo(() => filterSections(query), [query]);
   // A search that hides the open page moves to its first hit so the right pane never shows a stranger.

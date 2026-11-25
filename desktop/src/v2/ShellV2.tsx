@@ -100,7 +100,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
         notice={<WakeNotice wakes={start.wakes} wakeStarts={start.wakeStarts} activeProject={data.active} />} />
       <AgentCliBanner />
       <div className="flex min-h-0 flex-1">
-        <Rail screen={screen} project={data.active} live={data.live} unread={data.unread} needsYou={data.needsYou} onNavigate={onNavigate} />
+        <Rail screen={screen} project={data.active} live={data.live} unread={data.unread} needsYou={data.needsYou} update={data.update} onNavigate={onNavigate} />
         <main data-screen={screen} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
           {isLensScreen(screen)
             ? <LensScreenView screen={screen} props={props} me={data.me} notice={notice} />
