@@ -126,10 +126,10 @@ describe("DiffView line history", () => {
   it("gives every diff row a blame cell matched by the old line number, and marks added lines as not committed", async () => {
     await mountHistory("combined");
     const cells = [...host.querySelectorAll("[data-blame-cell]")];
-    expect(cells.length).toBe(8);
-    expect(cells[0].textContent).toBe("");
+    expect(cells.length).toBe(7);
     const rowCells = [...host.querySelectorAll("[data-kind] [data-blame-cell]")];
     expect(rowCells.length).toBe(7);
+    expect(rowCells[0].parentElement?.firstElementChild).toBe(rowCells[0]);
     expect(rowCells[0].textContent).toContain("Tess");
     expect(rowCells[0].textContent).toContain("2h ago");
     expect(rowCells[0].textContent).toContain("abcdef1");
@@ -145,7 +145,7 @@ describe("DiffView line history", () => {
 
   it("gives every paired row in side by side a blame cell from its old side", async () => {
     await mountHistory("split");
-    const rowCells = [...host.querySelectorAll("[data-blame-cell]")].slice(1);
+    const rowCells = [...host.querySelectorAll("[data-blame-cell]")];
     expect(rowCells.length).toBe(5);
     expect(rowCells[0].textContent).toContain("Tess");
     expect(rowCells[1].textContent).toContain("Tess");
@@ -155,9 +155,8 @@ describe("DiffView line history", () => {
   it("names the author of a removed line when a side by side row has no new side", async () => {
     await mountHistory("split", [deletionsOnly]);
     const cells = [...host.querySelectorAll("[data-blame-cell]")];
-    expect(cells.length).toBe(3);
-    expect(cells[0].textContent).toBe("");
-    expect(cells.slice(1).every(cell => (cell.textContent ?? "").includes("Tess"))).toBe(true);
+    expect(cells.length).toBe(2);
+    expect(cells.every(cell => (cell.textContent ?? "").includes("Tess"))).toBe(true);
   });
 
   it("keeps the reading state and surfaces a blame error", async () => {

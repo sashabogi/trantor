@@ -25,12 +25,12 @@ function Gutter({ n }: { n: number | null }) {
   return <span className="w-[34px] shrink-0 select-none pr-1.5 text-right text-[10.5px] text-[var(--v2-track)]">{n ?? ""}</span>;
 }
 
-// #14237: the history cell rides on its own diff row, so it can never drift off the line it describes.
+// #14237: the history cell leads its own diff row, so it lines up and stays in view whatever the line length.
 // Blame is read at HEAD, so a row is matched by its old line number and an added line has no author yet.
 function BlameCell({ line, uncommitted = false }: { line: GitBlameLine | null; uncommitted?: boolean }) {
   return (
     <span data-blame-cell title={line ? `${line.subject} · ${line.sha}` : undefined}
-      className="v2-mono flex h-[19px] w-[190px] shrink-0 select-none items-center gap-1.5 overflow-hidden whitespace-nowrap border-l border-[var(--v2-edge)] px-2 text-[10px] text-[var(--v2-muted)]">
+      className="v2-mono flex h-[19px] w-[190px] shrink-0 select-none items-center gap-1.5 overflow-hidden whitespace-nowrap border-r border-[var(--v2-edge)] px-2 text-[10px] text-[var(--v2-muted)]">
       {!line && uncommitted && <span className="min-w-0 flex-1 truncate">not committed</span>}
       {line && <>
         <span className="min-w-0 flex-1 truncate text-[var(--v2-text-2)]">{line.author}</span>
@@ -60,10 +60,10 @@ function CombinedLine({ l, index, selected, onSelect, blame }: { l: DiffLine; in
     <div data-kind={l.kind} data-selected={selected || undefined} {...interactive}
       className="v2-mono flex min-w-max whitespace-pre text-[12px] leading-[19px] data-[selected=true]:outline data-[selected=true]:outline-1 data-[selected=true]:-outline-offset-1 data-[selected=true]:outline-[var(--v2-accent)]"
       style={{ background: ROW_BG[l.kind] }}>
+      {blame !== undefined && <BlameCell line={blame?.get(l.oldNo ?? -1) ?? null} uncommitted={!!blame && l.kind === "add"} />}
       <Gutter n={l.oldNo} /><Gutter n={l.newNo} />
       <span className="w-3 shrink-0 select-none text-[var(--v2-muted)]">{SIGN[l.kind]}</span>
-      <span className={`pr-4 text-[var(--v2-text-2)]${blame === undefined ? "" : " min-w-0 flex-1"}`}>{l.text}</span>
-      {blame !== undefined && <BlameCell line={blame?.get(l.oldNo ?? -1) ?? null} uncommitted={!!blame && l.kind === "add"} />}
+      <span className="pr-4 text-[var(--v2-text-2)]">{l.text}</span>
     </div>
   );
 }
@@ -122,7 +122,6 @@ function HunkBlock({ file, hunk, layout, busy, onAddToChat, onApply, blame }: {
         <span className="min-w-[120px] flex-1">{hunk.header}</span>
         <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" onClick={() => onAddToChat(hunkText(file, hunk))} title="Attach this hunk to the chat">Add to chat</Button>
         {onApply && (["stage", "unstage", "discard"] as const).map(action => <PatchButton key={action} action={action} unit={unit} busy={busy} onRun={run} />)}
-        {blame !== undefined && <BlameCell line={null} />}
       </div>
       {blame && !blame.lines && !blame.error && <div className="px-3 py-1 text-[11px] text-[var(--v2-muted)]">Reading blame</div>}
       {blame?.error && <div role="alert" className="px-3 py-1 text-[11px] text-[var(--v2-bad)]">{blame.error}</div>}
@@ -133,10 +132,10 @@ function HunkBlock({ file, hunk, layout, busy, onAddToChat, onApply, blame }: {
           const left = r.left ? hunk.lines.indexOf(r.left) : undefined;
           const right = r.right ? hunk.lines.indexOf(r.right) : undefined;
           return <div key={i} className="flex">
+            {blame === undefined ? null : <BlameCell line={blame?.lines?.get(r.left?.oldNo ?? -1) ?? null} uncommitted={!!blame.lines && !r.left && !!r.right} />}
             <SplitCell l={r.left} side="left" index={left} selected={left !== undefined && selected.has(left)} onSelect={onApply ? select : undefined} />
             <div className="w-px shrink-0 bg-[var(--v2-edge)]" />
             <SplitCell l={r.right} side="right" index={right} selected={right !== undefined && selected.has(right)} onSelect={onApply ? select : undefined} />
-            {blame === undefined ? null : <BlameCell line={blame?.lines?.get(r.left?.oldNo ?? -1) ?? null} uncommitted={!!blame.lines && !r.left && !!r.right} />}
           </div>;
         })}</div>}
     </div>
