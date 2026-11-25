@@ -179,3 +179,36 @@ describe("folders", () => {
     expect(folderDeleteQuestion("a", 1)).toContain("It holds 1 file.");
   });
 });
+
+describe("header and keyboard controls (#14268)", () => {
+  it("the header New folder button asks for a name and makes the folder with a .gitkeep", async () => {
+    await mount();
+    await click(host.querySelector('button[aria-label="New folder"]'));
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="folder name"]');
+    if (!input) throw new Error("no folder name input");
+    input.value = "lib";
+    await press(input, "Enter");
+    await flush();
+    expect(call("create_file")?.args).toMatchObject({ path: "lib/.gitkeep" });
+  });
+
+  it("a drag carries the path as text so WebKit starts it", async () => {
+    await mount();
+    const data: Record<string, string> = {};
+    await act(async () => {
+      const event = new Event("dragstart", { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: { effectAllowed: "", setData: (k: string, v: string) => { data[k] = v; } } });
+      item("README.md")?.dispatchEvent(event);
+    });
+    expect(data["text/plain"]).toBe("README.md");
+  });
+
+  it("Escape closes the delete question and deletes nothing", async () => {
+    await mount();
+    await choose("README.md", "Delete");
+    expect(question()).not.toBeNull();
+    await press(document.body, "Escape");
+    expect(question()).toBeNull();
+    expect(call("delete_file")).toBeUndefined();
+  });
+});

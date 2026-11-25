@@ -1,7 +1,7 @@
 // The 2.0 file tree for the Workspace Files column and the Code Explorer: git status letters, tinted names and
 // folder dots like a real IDE's explorer (#13987 drill). The classic FileTree stays for classic screens.
 import { useRef, useState, type KeyboardEvent, type RefObject } from "react";
-import { CircleHelp, Plus } from "lucide-react";
+import { CircleHelp, FolderPlus, Plus } from "lucide-react";
 import { createFile, deleteFile, renameFile, safePath, type FileEntry } from "../../features/code/fileApi";
 import { Popover } from "../shell/Popover";
 import { IconButton } from "./IconButton";
@@ -145,6 +145,9 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
         <span className="flex-1" />
         <IconButton label="New file" title="Create a new file (relative path, e.g. src/foo.ts)" size={24} onClick={() => setEdit({ kind: "create", dir: "", folder: false })}>
           <Plus size={13} aria-hidden />
+        </IconButton>
+        <IconButton label="New folder" title="Create a new folder at the top of the project" size={24} onClick={() => setEdit({ kind: "create", dir: "", folder: true })}>
+          <FolderPlus size={13} aria-hidden />
         </IconButton>
         <Legend />
       </div>

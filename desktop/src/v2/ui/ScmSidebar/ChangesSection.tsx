@@ -49,7 +49,9 @@ function ChangeRow({ change, snap, selected, onOpen, onStage, onConflict, onDisc
   return (
     <div data-change={change.path} data-selected={selected || undefined}
       className={`group flex items-center gap-1.5 px-3 py-[3px] text-v2-body ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
+      {/* #14268: Enter opens the diff, Space stages or unstages, like an IDE's changes list. */}
       <button type="button" onClick={() => onOpen(change.path)} title={`Show the diff for ${change.path}`}
+        onKeyDown={e => { if (e.key === " " && !change.conflict) { e.preventDefault(); onStage(change.path, fullyStaged); } }}
         className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left">
         <StatusLetter letter={change.letter} /><PathLabel path={change.path} />
       </button>

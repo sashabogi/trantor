@@ -6,6 +6,7 @@ import { AlertTriangle, GitBranch, PanelLeftOpen, Plus } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
+import { useEscape } from "../../ui/useEscape";
 import { Tabs, type TabSpec } from "../../ui/Tabs";
 import type { MainTab } from "./model";
 
@@ -30,6 +31,7 @@ export function TabBar({ tabs, activeId, sidebarFolded, dirty, confirmId, onActi
   onShowSidebar: () => void; onNew: () => void;
 }) {
   const confirming = tabs.find(t => t.id === confirmId && t.kind !== "source") ?? null;
+  useEscape(onCancelClose, !!confirming);
   const spec: TabSpec[] = tabs.map(t => ({
     id: t.id,
     label: t.label,

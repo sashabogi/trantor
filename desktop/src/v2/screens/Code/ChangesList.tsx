@@ -23,14 +23,15 @@ export type ChangesListProps = {
   onOpenConflict?: (path: string) => void;
 };
 
-function FileRow({ entry, letter, snap, selected, onSelect, action, conflict, onConflict }: {
+function FileRow({ entry, letter, snap, selected, onSelect, onToggle, action, conflict, onConflict }: {
   entry: Pick<GitStatusEntry, "path">; letter: Letter | "U"; snap: ScopeSnapshot; selected: boolean;
-  onSelect: () => void; action: ReactNode; conflict?: boolean; onConflict?: () => void;
+  onSelect: () => void; onToggle: () => void; action: ReactNode; conflict?: boolean; onConflict?: () => void;
 }) {
   const n = lineCountFor(snap.counts, entry.path);
   return (
     <div data-selected={selected || undefined} className={`group flex items-center gap-1.5 px-3 py-[3px] text-v2-body ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
-      <button type="button" onClick={onSelect} title={`Show the diff for ${entry.path}`} className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left">
+      <button type="button" onClick={onSelect} title={`Show the diff for ${entry.path}`}
+        onKeyDown={e => { if (e.key === " " && !conflict) { e.preventDefault(); onToggle(); } }} className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left">
         <StatusLetter letter={letter} /><PathLabel path={entry.path} />
       </button>
       {n && <Counts plus={n.plus} minus={n.minus} />}
@@ -124,7 +125,7 @@ export function ChangesList({ project, snap, selected, onSelect, onMutated, onOp
       <SectionLabel>Staged {buckets.staged.length}</SectionLabel>
       {buckets.staged.length === 0 && <div className="px-3 py-1 text-v2-body text-[var(--v2-muted)]">Nothing staged.</div>}
       {buckets.staged.map(e => <div key={`s-${e.path}`}>
-        <FileRow entry={e} letter={fileChipLabel(e.x)} snap={snap} selected={selected === e.path} onSelect={() => onSelect(e.path)}
+        <FileRow entry={e} letter={fileChipLabel(e.x)} snap={snap} selected={selected === e.path} onSelect={() => onSelect(e.path)} onToggle={() => stage([e.path], true)}
           conflict={blocked(e)} onConflict={() => onOpenConflict?.(e.path)}
           action={<>
             <IconButton label={`Discard ${e.path}`} title={refusal ?? (blocked(e) ? "Resolve this conflict before discarding" : "Copy to Trash, then discard")} size={22}
@@ -148,7 +149,7 @@ export function ChangesList({ project, snap, selected, onSelect, onMutated, onOp
         const reason = isConflict ? "Staging would erase git's conflict record. Resolve it first." : null;
         const discardReason = refusal ?? (isConflict ? "Resolve this conflict before discarding" : null);
         return <div key={`u-${entry.path}`}>
-          <FileRow entry={entry} letter={letter} snap={snap} selected={selected === entry.path} onSelect={() => onSelect(entry.path)}
+          <FileRow entry={entry} letter={letter} snap={snap} selected={selected === entry.path} onSelect={() => onSelect(entry.path)} onToggle={() => stage([entry.path], false)}
             conflict={isConflict} onConflict={() => onOpenConflict?.(entry.path)}
             action={<>
               <IconButton label={`Discard ${entry.path}`} title={discardReason ?? "Copy to Trash, then discard"} size={22} disabled={!!discardReason}

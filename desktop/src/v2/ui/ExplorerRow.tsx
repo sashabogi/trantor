@@ -59,8 +59,8 @@ export function ExplorerRow({ entry, depth, open, mark, selected, focusable, men
         data-path={entry.path} tabIndex={focusable ? 0 : -1} title={rowTitle(entry, mark)}
         onClick={onActivate} onFocus={onFocusRow} onContextMenu={e => { e.preventDefault(); onMenu(); }}
         draggable={!!drag} data-drop-over={drag?.over || undefined}
-        onDragStart={e => { if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; drag?.onStart(); }} onDragEnd={() => drag?.onEnd()}
-        onDragOver={e => { if (entry.dir && drag) { e.preventDefault(); drag.onOver(); } }}
+        onDragStart={e => { if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", entry.path); } drag?.onStart(); }} onDragEnd={() => drag?.onEnd()}
+        onDragOver={e => { if (entry.dir && drag) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "move"; drag.onOver(); } }}
         onDrop={e => { if (entry.dir && drag) { e.preventDefault(); e.stopPropagation(); drag.onDrop(); } }}
         className={`v2-hover flex cursor-pointer items-center gap-1.5 py-[3px] pr-2 text-v2-body ${selected || drag?.over ? "bg-[var(--v2-raised)]" : ""}`}
         style={{ paddingLeft: 6 + depth * 12 }}>

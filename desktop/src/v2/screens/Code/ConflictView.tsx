@@ -5,6 +5,7 @@ import { readFile, writePlain } from "../../../features/code/fileApi";
 import { conflictPaths } from "../../../features/code/gitApi";
 import { branchMutationRefusal, scopeOperation, scopeOperationAbort, scopeOperationContinue, scopeStage, type GitOperation } from "./scopeGitApi";
 import { Button } from "../../ui/Button";
+import { useEscape } from "../../ui/useEscape";
 import { countConflicts, parseConflicts, resolveChunks, type Chunk, type Choice } from "./conflicts";
 import { NotWiredBlock, PathLabel } from "./parts";
 import type { ScopeSnapshot } from "./useScopeGit";
@@ -90,6 +91,7 @@ export function ConflictView({ project, snap, path, onPick, onResolved }: { proj
   const [state, setState] = useState<GitOperation | null>(null);
   const [busy, setBusy] = useState<"continue" | "abort" | null>(null);
   const [confirmAbort, setConfirmAbort] = useState(false);
+  useEscape(() => setConfirmAbort(false), confirmAbort);
   const paths = conflictPaths(snap.status);
   const scope = snap.scope;
   const active = path && paths.includes(path) ? path : paths[0] ?? null;

@@ -109,6 +109,16 @@ fn deleting_a_folder_copies_it_to_the_trash_first() {
 }
 
 #[test]
+fn trashing_a_file_keeps_a_copy_under_its_path() {
+    let root = scratch("trashfile");
+    let trash = scratch("trashfilebin");
+    let kept = trash_file_in(&root, "src/b.txt", &trash).unwrap();
+    assert!(PathBuf::from(&kept).starts_with(&trash));
+    assert_eq!(std::fs::read_to_string(PathBuf::from(&kept).join("src/b.txt")).unwrap(), "beta");
+    assert!(root.join("src/b.txt").exists());
+}
+
+#[test]
 fn refuses_to_delete_a_file_a_missing_folder_or_an_escape() {
     let root = scratch("deletebad");
     let trash = scratch("deletebadtrash");

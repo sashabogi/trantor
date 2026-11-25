@@ -68,3 +68,21 @@ it("omits GitHub when origin is not GitHub", async () => {
   await mount();
   expect(host.querySelector('[aria-label="Open on GitHub"]')).toBeNull();
 });
+
+it("opens a file of the commit in the editor when the host wires it", async () => {
+  const patch = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n";
+  mockIPC(command => {
+    if (command === "git_commit_meta") return JSON.stringify(meta);
+    if (command === "git_show") return JSON.stringify({ sha, files: [{ path: "a.ts", status: "M", plus: 1, minus: 1 }], patch, truncated: false });
+    return null;
+  });
+  const opened: string[] = [];
+  await act(async () => {
+    root.render(<CommitDetail row={row} project="trantor" scope={null} cards={[]} onSelectCommit={onSelectCommit} onOpenFile={p => opened.push(p)}
+      acts={{ addToChat: () => undefined, copy: () => undefined, branchRefusal: null }}
+      onNavigate={() => undefined} onMutated={() => undefined} onError={() => undefined} openExternal={open} />);
+  });
+  await flush();
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Open file in editor"]')?.click(); });
+  expect(opened).toEqual(["a.ts"]);
+});

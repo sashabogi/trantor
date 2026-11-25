@@ -75,7 +75,7 @@ export function SourceDetail(p: {
   return p.view === "changes"
     ? <ChangesDetail project={p.project} snap={p.snap} chips={p.chips} selected={p.selected} onPick={p.onPick} acts={p.acts} onOpenFile={p.onOpenFile} onMutated={p.onMutated} />
     : <HistoryDetail project={p.project} snap={p.snap} cards={p.cards} historyRows={p.historyRows} selectedKey={p.selectedKey}
-      onSelectKey={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} />;
+      onSelectKey={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} onOpenFile={p.onOpenFile} />;
 }
 
 function ChangesDetail(p: { project: string; snap: ScopeSnapshot; chips: ChipFile[]; selected: string | null; onPick: (path: string) => void; acts: ChatActs; onOpenFile: (path: string) => void; onMutated: () => void }) {
@@ -91,7 +91,7 @@ function ChangesDetail(p: { project: string; snap: ScopeSnapshot; chips: ChipFil
   );
 }
 
-function HistoryDetail(p: { project: string; snap: ScopeSnapshot; cards: Card[]; historyRows: HistoryRow[]; selectedKey: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: Navigate; onMutated: () => void; onError: (message: string) => void }) {
+function HistoryDetail(p: { project: string; snap: ScopeSnapshot; cards: Card[]; historyRows: HistoryRow[]; selectedKey: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: Navigate; onMutated: () => void; onError: (message: string) => void; onOpenFile: (path: string) => void }) {
   const ahead = p.snap.seatBacked && p.snap.ahead ? p.snap.ahead : null;
   const key = p.selectedKey ?? (ahead ? UNLANDED_KEY : p.historyRows[0]?.sha ?? null);
   const diff = useSeatDiff(p.project, p.snap.scope, key === UNLANDED_KEY, statusSignature(p.snap));
@@ -99,8 +99,8 @@ function HistoryDetail(p: { project: string; snap: ScopeSnapshot; cards: Card[];
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       {key === UNLANDED_KEY && ahead
-        ? <UnlandedDetail branch={p.snap.branch} count={ahead} diff={diff} acts={p.acts} project={p.project} scope={p.snap.scope} />
-        : <CommitDetail row={row} selectedSha={key === UNLANDED_KEY ? null : key} project={p.project} scope={p.snap.scope} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} onSelectCommit={p.onSelectKey} />}
+        ? <UnlandedDetail branch={p.snap.branch} count={ahead} diff={diff} acts={p.acts} project={p.project} scope={p.snap.scope} onOpenFile={p.onOpenFile} />
+        : <CommitDetail row={row} selectedSha={key === UNLANDED_KEY ? null : key} project={p.project} scope={p.snap.scope} cards={p.cards} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} onSelectCommit={p.onSelectKey} onOpenFile={p.onOpenFile} />}
     </div>
   );
 }

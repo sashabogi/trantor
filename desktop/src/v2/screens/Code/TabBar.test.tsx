@@ -83,3 +83,11 @@ describe("TabBar close confirm row (#14072)", () => {
     expect(onCancelClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("TabBar unsaved question (#14268)", () => {
+  it("Escape keeps the tab open", async () => {
+    await render({ confirmId: FILE_TAB.id });
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+    expect(onCancelClose).toHaveBeenCalledTimes(1);
+  });
+});

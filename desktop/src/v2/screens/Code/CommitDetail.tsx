@@ -41,11 +41,11 @@ function showLetter(status: string): Letter {
   return status.startsWith("A") ? "A" : status.startsWith("D") ? "D" : status.startsWith("R") ? "R" : "M";
 }
 
-function CommitBody({ show, acts, project, scope }: { show: CommitPatch; acts: Acts; project: string; scope: string | null }) {
+function CommitBody({ show, acts, project, scope, onOpenFile }: { show: CommitPatch; acts: Acts; project: string; scope: string | null; onOpenFile?: (path: string) => void }) {
   const [selected, setSelected] = useState<string | null>(null);
   const chips: ChipFile[] = show.files.map(f => ({ path: f.path, letter: showLetter(f.status), plus: f.plus, minus: f.minus }));
   const current = selected && chips.some(c => c.path === selected) ? selected : chips[0]?.path ?? null;
-  return <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={show.state} onAddToChat={acts.addToChat} empty="This commit changes no file text." project={project} scope={scope} />;
+  return <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={show.state} onAddToChat={acts.addToChat} onOpenFile={onOpenFile} empty="This commit changes no file text." project={project} scope={scope} />;
 }
 
 function useMeta(project: string, scope: string | null, sha: string) {
@@ -63,9 +63,9 @@ function useMeta(project: string, scope: string | null, sha: string) {
   return { meta, error };
 }
 
-function SingleCommit({ row, project, scope, cards, acts, onNavigate, onMutated, onError, onSelectCommit, openExternal }: {
+function SingleCommit({ row, project, scope, cards, acts, onNavigate, onMutated, onError, onSelectCommit, openExternal, onOpenFile }: {
   row: HistoryRow; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate; onMutated: () => void; onError: (message: string) => void;
-  onSelectCommit: (sha: string) => void; openExternal: OpenExternal;
+  onSelectCommit: (sha: string) => void; openExternal: OpenExternal; onOpenFile?: (path: string) => void;
 }) {
   const who = row.seat ?? row.author;
   const card = row.card === null ? null : cards.find(c => c.id === row.card) ?? null;
@@ -99,12 +99,12 @@ function SingleCommit({ row, project, scope, cards, acts, onNavigate, onMutated,
           </div>
         )}
       </div>
-      <CommitBody key={row.sha} show={show} acts={acts} project={project} scope={scope} />
+      <CommitBody key={row.sha} show={show} acts={acts} project={project} scope={scope} onOpenFile={onOpenFile} />
     </div>
   );
 }
 
-export function UnlandedDetail({ branch, count, diff, acts, project, scope }: { branch: string | null; count: number; diff: SeatBranchDiff; acts: Acts; project: string; scope: string | null }) {
+export function UnlandedDetail({ branch, count, diff, acts, project, scope, onOpenFile }: { branch: string | null; count: number; diff: SeatBranchDiff; acts: Acts; project: string; scope: string | null; onOpenFile?: (path: string) => void }) {
   const [selected, setSelected] = useState<string | null>(null);
   const chips: ChipFile[] = diff.files.map(f => ({ path: f.path, letter: f.untracked ? "U" : "M", plus: f.plus, minus: f.minus }));
   const current = selected ?? chips[0]?.path ?? null;
@@ -114,27 +114,27 @@ export function UnlandedDetail({ branch, count, diff, acts, project, scope }: { 
         <h2 className="m-0 min-w-0 flex-[1_1_300px] text-v2-title font-[650]">{count} {count === 1 ? "commit" : "commits"} on {branch ?? "this branch"} not on main</h2>
         <Chip mono title="Merge base with main">{diff.base ? diff.base.slice(0, 7) : "base unknown"}</Chip>
       </div>
-      <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={diff.state} onAddToChat={acts.addToChat} empty="No file changes against main." project={project} scope={scope} />
+      <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={diff.state} onAddToChat={acts.addToChat} onOpenFile={onOpenFile} empty="No file changes against main." project={project} scope={scope} />
     </div>
   );
 }
 
-function CommitFromSha({ sha, project, scope, cards, acts, onNavigate, onMutated, onError, onSelectCommit, openExternal }: {
+function CommitFromSha({ sha, project, scope, cards, acts, onNavigate, onMutated, onError, onSelectCommit, openExternal, onOpenFile }: {
   sha: string; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate;
-  onMutated: () => void; onError: (message: string) => void; onSelectCommit: (sha: string) => void; openExternal: OpenExternal;
+  onMutated: () => void; onError: (message: string) => void; onSelectCommit: (sha: string) => void; openExternal: OpenExternal; onOpenFile?: (path: string) => void;
 }) {
   const { meta, error } = useMeta(project, scope, sha);
   if (error) return <div role="alert" className="px-4 py-6 text-v2-base text-[var(--v2-bad)]">{error}</div>;
   if (!meta) return <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">Reading {sha.slice(0, 8)}</div>;
   const row = toRow(meta, { seats: [], branch: null });
-  return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} />;
+  return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} onOpenFile={onOpenFile} />;
 }
 
-export function CommitDetail({ row, selectedSha, project, scope, cards, acts, onNavigate, onMutated, onError, onSelectCommit, openExternal = openUrl }: {
+export function CommitDetail({ row, selectedSha, project, scope, cards, acts, onNavigate, onMutated, onError, onSelectCommit, openExternal = openUrl, onOpenFile }: {
   row: HistoryRow | null; selectedSha?: string | null; project: string; scope: string | null; cards: Card[]; acts: Acts; onNavigate: Navigate;
-  onMutated: () => void; onError: (message: string) => void; onSelectCommit: (sha: string) => void; openExternal?: OpenExternal;
+  onMutated: () => void; onError: (message: string) => void; onSelectCommit: (sha: string) => void; openExternal?: OpenExternal; onOpenFile?: (path: string) => void;
 }) {
-  if (row) return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} />;
-  if (selectedSha) return <CommitFromSha sha={selectedSha} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} />;
+  if (row) return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} onOpenFile={onOpenFile} />;
+  if (selectedSha) return <CommitFromSha sha={selectedSha} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} onOpenFile={onOpenFile} />;
   return <div className="flex flex-1 items-center justify-center px-6 text-v2-base text-[var(--v2-muted)]">Pick a commit to read it.</div>;
 }

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "../../ui/Button";
+import { useEscape } from "../../ui/useEscape";
 import { scopeDiscard } from "./scopeGitApi";
 
 export type DiscardTarget = { path: string | null };
@@ -22,6 +23,7 @@ export function useDiscard(project: string, scope: string | null, onMutated: () 
 export function DiscardConfirmation({ target, busy, onConfirm, onCancel }: {
   target: DiscardTarget; busy: boolean; onConfirm: () => void; onCancel: () => void;
 }) {
+  useEscape(onCancel);
   const name = target.path ?? "all changes";
   return (
     <div role="alert" data-discard-confirm={target.path ?? "all"} className="flex flex-col gap-2 border-y border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-3 py-2 text-v2-body text-[var(--v2-text-2)]">

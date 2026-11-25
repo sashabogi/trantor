@@ -393,3 +393,82 @@ describe("headers always on screen (#14058)", () => {
     expect(collapsed?.title).toBe("Show Recent commits");
   });
 });
+
+describe("Controls a developer expects (#14268)", () => {
+  const stash = [{ name: "stash@{0}", sha: "abcdef123456", created_at: 1_700_000_000, message: "wip" }];
+  const dropButton = () => host.querySelector<HTMLButtonElement>('button[aria-label="Drop stash@{0}"]');
+  const confirmBox = () => host.querySelector("[data-stash-drop-confirm]");
+  const key = (el: Element | null, k: string) => act(async () => { el?.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+
+  it("asks before dropping a stash, and Cancel keeps it", async () => {
+    stashReply = JSON.stringify(stash);
+    await render();
+    await click(dropButton());
+    expect(confirmBox()?.textContent).toContain("stash@{0}");
+    expect(calls.find(c => c.command === "git_stash_change")).toBeUndefined();
+    await click([...confirmBox()?.querySelectorAll("button") ?? []].find(b => b.textContent === "Cancel") ?? null);
+    expect(confirmBox()).toBeNull();
+    expect(calls.find(c => c.command === "git_stash_change")).toBeUndefined();
+  });
+
+  it("drops only after the confirm click, and Escape closes the question", async () => {
+    stashReply = JSON.stringify(stash);
+    await render();
+    await click(dropButton());
+    await key(document.body, "Escape");
+    expect(confirmBox()).toBeNull();
+    await click(dropButton());
+    await click([...confirmBox()?.querySelectorAll("button") ?? []].find(b => b.textContent === "Drop stash@{0}") ?? null);
+    await flush();
+    expect(calls.find(c => c.command === "git_stash_change")?.args).toMatchObject({ reference: "stash@{0}", action: "drop" });
+  });
+
+  it("Enter in the stash message box stashes", async () => {
+    await render();
+    const input = host.querySelector<HTMLInputElement>("#v2-stash-message");
+    await act(async () => {
+      if (!input) return;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "from keyboard");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await key(input, "Enter");
+    await flush();
+    expect(calls.find(c => c.command === "git_stash_save")?.args).toMatchObject({ message: "from keyboard" });
+  });
+
+  it("Space on a change row stages it, and Space on a staged row unstages it", async () => {
+    await render();
+    await key(host.querySelector('[data-change="bin/a.mjs"] button'), " ");
+    await flush();
+    expect(calls.filter(c => c.command === "git_stage").pop()?.args).toMatchObject({ paths: ["bin/a.mjs"], unstage: false });
+    await key(host.querySelector('[data-change="src/staged.ts"] button'), " ");
+    await flush();
+    expect(calls.filter(c => c.command === "git_stage").pop()?.args).toMatchObject({ paths: ["src/staged.ts"], unstage: true });
+  });
+
+  it("Space on a conflicted row stages nothing", async () => {
+    await render();
+    await key(host.querySelector('[data-change="src/c.ts"] button'), " ");
+    await flush();
+    expect(calls.find(c => c.command === "git_stage")).toBeUndefined();
+  });
+
+  it("Escape closes the discard question without discarding", async () => {
+    await render();
+    await click(byLabel("Discard bin/a.mjs"));
+    expect(host.querySelector("[data-discard-confirm]")).not.toBeNull();
+    await key(document.body, "Escape");
+    expect(host.querySelector("[data-discard-confirm]")).toBeNull();
+    expect(calls.find(c => c.command === "git_discard")).toBeUndefined();
+  });
+
+  it("Cmd+Enter in the commit box commits the staged files", async () => {
+    await render();
+    await typeMessage("keyboard commit");
+    await key(host.querySelector("#v2-commit-msg"), "Enter");
+    expect(calls.find(c => c.command === "git_commit")).toBeUndefined();
+    await act(async () => { host.querySelector("#v2-commit-msg")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
+    await flush();
+    expect(calls.find(c => c.command === "git_commit")?.args).toMatchObject({ message: "keyboard commit" });
+  });
+});

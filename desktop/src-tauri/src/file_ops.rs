@@ -88,6 +88,13 @@ pub(crate) fn create_file(
     Ok(String::from_utf8_lossy(&sha.stdout).trim().to_string())
 }
 
+/// Copy one file into a "Trantor discard" folder under `trash`. Returns that folder's path.
+pub(crate) fn trash_file_in(root: &Path, rel: &str, trash: &Path) -> Result<String, String> {
+    let folder = crate::git_checkout::discard_folder(trash)?;
+    crate::git_checkout::copy_path(&root.join(rel), &folder.join(rel))?;
+    Ok(folder.to_string_lossy().to_string())
+}
+
 /// Delete the file at `path`. The path must stay inside the project root.
 #[tauri::command]
 pub(crate) fn delete_file(project: String, path: String, seat: Option<String>) -> Result<String, String> {
@@ -109,8 +116,10 @@ pub(crate) fn delete_file(project: String, path: String, seat: Option<String>) -
     if !full.is_file() {
         return Err("that file does not exist".into());
     }
+    // #14268: an untracked file has no git history, so it goes to the Trash before it is removed.
+    trash_file_in(&root, &path, &crate::git_checkout::trash_root()?)?;
     std::fs::remove_file(&full).map_err(|e| format!("cannot delete {path}: {e}"))?;
-    let add = std::process::Command::new("git")
+    let add =std::process::Command::new("git")
         .args(["add", "--", &path])
         .current_dir(&root)
         .output()

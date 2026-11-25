@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "../../ui/Button";
+import { useEscape } from "../../ui/useEscape";
 import { scopeBranchCreate, type GitBranch, type GitDirtySwitch, type GitScopeArg } from "./scopeGitApi";
 import { errorMessage, type BranchDialogState, type ErrorHandler } from "./useBranchOps";
 
 function Dialog({ label, children, onClose }: { label: string; children: ReactNode; onClose: () => void }) {
+  useEscape(onClose);
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[var(--v2-scrim)] p-5" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <div role="dialog" aria-label={label} className="flex w-[420px] max-w-full flex-col gap-3 rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] p-4 shadow-2xl">
@@ -50,6 +52,7 @@ function RenameDialog({ branch, busy, onClose, onRename }: { branch: GitBranch; 
   return <Dialog label={`Rename ${branch.name}`} onClose={onClose}>
     <h2 className="m-0 text-v2-title text-[var(--v2-text)]">Rename {branch.name}</h2>
     <input aria-label="New branch name" autoFocus value={name} onChange={event => setName(event.target.value)}
+      onKeyDown={event => { if (event.key === "Enter" && name.trim() && name !== branch.name && !busy) onRename(name.trim()); }}
       className="rounded-md border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-v2-base text-[var(--v2-text)] outline-none" />
     <div className="flex justify-end gap-2"><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabledReason={!name.trim() || name === branch.name ? "Enter a new branch name" : busy ? "Renaming" : null} onClick={() => onRename(name.trim())}>Rename branch</Button></div>
   </Dialog>;
