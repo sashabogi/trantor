@@ -1,11 +1,9 @@
 // The sidebar beside file tabs (#13988): Explorer, Search, the source control sidebar, Agents,
 // Cards and Problems. The "source" view is the same ScmSidebar the Workspace left column shows
 // (#14044): Changes, Files and Recent commits, one flat list with the commit box.
-import { useEffect, useState } from "react";
 import { Maximize2 } from "lucide-react";
 import type { Card, HubClient } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
-import { searchFiles } from "../../../features/code/fileApi";
 import { Avatar } from "../../ui/Avatar";
 import { ExplorerTree } from "../../ui/ExplorerTree";
 import { IconButton } from "../../ui/IconButton";
@@ -14,31 +12,10 @@ import { ScmSidebar } from "../../ui/ScmSidebar";
 import type { SideView } from "./IconBar";
 import type { SeatInfo } from "./model";
 import { NotWiredBlock } from "./parts";
+import { SearchPane, type OpenAt } from "./SearchPane";
 import type { ScopeState } from "./useScopeGit";
 
 const CLOSED = new Set(["done", "archived", "cancelled", "rejected"]);
-
-function SearchPane({ project, scope, onOpen }: { project: string; scope: string | null; onOpen: (p: string) => void }) {
-  const [q, setQ] = useState("");
-  const [hits, setHits] = useState<string[]>([]);
-  useEffect(() => {
-    if (!q.trim()) { setHits([]); return; }
-    let alive = true;
-    searchFiles(project, q, scope ?? undefined).then(h => { if (alive) setHits(h); }).catch(() => { if (alive) setHits([]); });
-    return () => { alive = false; };
-  }, [project, scope, q]);
-  return (
-    <div className="flex min-h-0 flex-col">
-      <label htmlFor="v2-file-search" className="sr-only">Search files</label>
-      <input id="v2-file-search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Find a file by name"
-        className="m-3 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {hits.map(h => <button key={h} type="button" onClick={() => onOpen(h)} className="v2-hover v2-mono block w-full truncate border-0 bg-transparent px-3 py-1 text-left text-[11.5px] text-[var(--v2-text-2)]">{h}</button>)}
-        {q.trim() && hits.length === 0 && <div className="px-3 text-[12px] text-[var(--v2-muted)]">No file matches.</div>}
-      </div>
-    </div>
-  );
-}
 
 function AgentsPane({ seats, scope, onPick }: { seats: SeatInfo[]; scope: string | null; onPick: (s: string) => void }) {
   if (seats.length === 0) return <div className="p-3 text-[12px] text-[var(--v2-muted)]">No seat sessions for this project.</div>;
@@ -75,7 +52,7 @@ function CardsPane({ cards }: { cards: Card[] }) {
 
 export type SidebarProps = {
   view: SideView; client: HubClient; project: string; scope: string | null; seats: SeatInfo[]; state: ScopeState;
-  selected: string | null; onOpenFile: (path: string) => void; onOpenChange: (path: string) => void; onOpenCommit: (sha: string) => void;
+  selected: string | null; onOpenFile: OpenAt; onOpenChange: (path: string) => void; onOpenCommit: (sha: string) => void;
   onMutated: () => void; onOpenSource: () => void; onPickSeat: (seat: string | null) => void; onOpenConflict: (path: string) => void;
 };
 

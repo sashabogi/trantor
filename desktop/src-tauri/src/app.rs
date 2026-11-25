@@ -183,6 +183,7 @@ pub fn run() {
             remote_file_body,
             project_files,
             search_files,
+            crate::text_search::search_text,
             read_file,
             file_stat,
             file_diff,

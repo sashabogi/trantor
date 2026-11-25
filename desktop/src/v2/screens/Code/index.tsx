@@ -48,7 +48,13 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
 
   const addToChat = useCallback((text: string) => { setDraft(d => (d.trim() ? `${d}\n${text}` : text)); setChatOpen(true); }, []);
   const acts = useMemo(() => ({ addToChat, copy }), [addToChat]);
-  const openFile = (path: string) => tabs.open({ id: `file:${scope ?? ""}:${path}`, kind: "file", label: base(path), scope, path });
+  const [reveal, setReveal] = useState<{ tab: string; line: number; column?: number; nonce: number } | null>(null);
+  const openFile = (path: string, line?: number, column?: number) => {
+    const id = `file:${scope ?? ""}:${path}`;
+    tabs.open({ id, kind: "file", label: base(path), scope, path });
+    // A fresh nonce lets a second click on the same line reveal it again (#14074).
+    if (line) setReveal({ tab: id, line, column, nonce: Date.now() });
+  };
   const openConflict = (path: string | null) => { setConflictPath(path); tabs.open({ id: "conflict", kind: "conflict", label: "Merge conflicts", scope }); };
   const pick = (seat: string | null) => { setScope(seat); setKey(null); tabs.activate("source"); };
   const openChange = (path: string) => { setChangeFocus(path); setViewPick("changes"); tabs.activate("source"); };
@@ -96,7 +102,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
         {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
         <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
           selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
-          onOpenConflict={openConflict} conflictPath={conflictPath} />
+          onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
     </div>
@@ -107,13 +113,14 @@ type MainProps = {
   tab: CodeTab; client: ScreenProps["client"]; project: string; snap: ScopeSnapshot | null; state: ScopeState; view: ScmView; cards: Card[];
   seats: string[]; selectedKey: string | null; focusChange: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: ScreenProps["onNavigate"];
   onMutated: () => void; onOpenFile: (p: string) => void; onOpenConflict: (p: string | null) => void; conflictPath: string | null;
+  reveal: { tab: string; line: number; column?: number; nonce: number } | null;
 };
 
 function Main(p: MainProps) {
   if (p.tab.kind === "file" && p.tab.path) {
     return (
       <Suspense fallback={<div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Opening the editor</div>}>
-        <FileEditor project={p.project} scope={p.tab.scope} path={p.tab.path} onOpenGraph={() => p.onNavigate("graph")} />
+        <FileEditor project={p.project} scope={p.tab.scope} path={p.tab.path} reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined} onOpenGraph={() => p.onNavigate("graph")} />
       </Suspense>
     );
   }

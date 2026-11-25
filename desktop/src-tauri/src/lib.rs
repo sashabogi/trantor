@@ -29,6 +29,7 @@ mod trantor_cli;
 mod hub;
 mod crew_controls;
 mod files;
+mod text_search;
 mod chat;
 mod watchers;
 mod panes;

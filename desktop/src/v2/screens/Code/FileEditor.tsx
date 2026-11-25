@@ -1,6 +1,7 @@
 // A file tab (#13988): the classic Monaco CodeView, imported not forked, with a save button, the
 // review chip and breadcrumbs. Loaded lazily so Monaco and its workers stay out of every other screen.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { editor as MonacoEditor } from "monaco-editor";
 import { CodeView } from "../../../features/code/CodeView";
 import { ReviewChip } from "../../../features/code/ReviewChip";
 import { readFile, writePlain } from "../../../features/code/fileApi";
@@ -8,10 +9,24 @@ import { Button } from "../../ui/Button";
 
 type Load = { kind: "loading" } | { kind: "error"; reason: string } | { kind: "ok"; disk: string; truncated: boolean };
 
-export default function FileEditor({ project, scope, path, onOpenGraph }: { project: string; scope: string | null; path: string; onOpenGraph: () => void }) {
+export type Reveal = { line: number; column?: number; nonce: number };
+
+function revealAt(ed: MonacoEditor.IStandaloneCodeEditor, r: Reveal) {
+  ed.revealLineInCenter(r.line);
+  ed.setPosition({ lineNumber: r.line, column: r.column ?? 1 });
+  ed.focus();
+}
+
+export default function FileEditor({ project, scope, path, reveal, onOpenGraph }: { project: string; scope: string | null; path: string; reveal?: Reveal; onOpenGraph: () => void }) {
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [draft, setDraft] = useState("");
   const [saveError, setSaveError] = useState<string | null>(null);
+  const editorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  // Reveal a search hit once the editor exists and whenever a new click arrives (#14074).
+  useEffect(() => {
+    if (load.kind !== "ok") { editorRef.current = null; return; }
+    if (reveal && editorRef.current) revealAt(editorRef.current, reveal);
+  }, [reveal, load.kind]);
   useEffect(() => {
     let alive = true;
     setLoad({ kind: "loading" });
@@ -38,7 +53,8 @@ export default function FileEditor({ project, scope, path, onOpenGraph }: { proj
         <Button variant="ghost" onClick={save} disabledReason={load.truncated ? "The file is truncated, so saving would lose the rest" : !dirty ? "No unsaved changes" : null}>Save</Button>
       </div>
       <div className="min-h-0 flex-1">
-        <CodeView value={draft} path={path} editable={!load.truncated} onChange={setDraft} onSave={save} project={project} seat={scope} />
+        <CodeView value={draft} path={path} editable={!load.truncated} onChange={setDraft} onSave={save} project={project} seat={scope}
+          onReady={ed => { editorRef.current = ed; if (reveal) revealAt(ed, reveal); }} />
       </div>
     </div>
   );
