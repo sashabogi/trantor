@@ -4,6 +4,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react
 import { takeOpenIntent } from "../../shell/openIntent";
 import type { Card } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
+import { BottomPanel } from "../../ui/BottomPanel";
 import { conflictPaths } from "../../../features/code/gitApi";
 import type { ScreenProps } from "../../routes";
 import { NotWiredBlock } from "./parts";
@@ -95,7 +96,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           onOpenFile={openFile} onOpenChange={openChange} onMutated={refresh} onOpenSource={() => { tabs.activate("source"); setOverride(false); }}
           onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} onActivate={tabs.activate} onClose={tabs.close}
           onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
         <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} />
@@ -103,6 +104,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
         <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
           selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
           onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} />
+        <BottomPanel />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
     </div>
