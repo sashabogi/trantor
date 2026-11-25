@@ -6,6 +6,7 @@ import { HubClient, hubForProject, knownProjects, localSessions, type Peer } fro
 import { countUnseen, onSeenChange } from "../../shared/seen";
 import { usePendingHolds } from "../../shared/FileHolds";
 import { usePendingProposals } from "../../shared/Proposals";
+import { useNotifications } from "./useNotifications";
 
 export const LOCAL_HUB = "http://127.0.0.1:4477";
 const PROJECT_KEY = "trantor.v2.project";
@@ -105,5 +106,6 @@ export function useShellData() {
   const unread = useUnread(client, me);
   const needsYou = usePendingProposals(client).length + usePendingHolds(client).length;
   const live = useLiveProjects(client);
+  useNotifications(client, me);
   return { projects, active, setActive, addProject, hub, me, client, unread, needsYou, live };
 }
