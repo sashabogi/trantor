@@ -17,9 +17,11 @@ import { scopeApplyPatch } from "./scopeGitApi";
 
 export type ChatActs = { addToChat: (text: string) => void; copy: (text: string) => void; branchRefusal: string | null };
 
-/** Changes when the working tree does; the diff readers refetch on it. */
+/** Changes when the working tree does; the diff readers refetch on it. The line counts are in it
+ *  because a hunk or line discard leaves the file "M" and only the counts move (#14101 drill). */
 export function statusSignature(snap: ScopeSnapshot): string {
-  return `${snap.status.map(s => `${s.x}${s.y}${s.path}`).join("|")}#${snap.ahead ?? ""}`;
+  const counts = snap.counts.map(c => `${c.path}:${c.plus ?? ""}:${c.minus ?? ""}`).join("|");
+  return `${snap.status.map(s => `${s.x}${s.y}${s.path}`).join("|")}#${snap.ahead ?? ""}#${counts}`;
 }
 
 function changeChips(snap: ScopeSnapshot): ChipFile[] {
