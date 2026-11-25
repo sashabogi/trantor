@@ -14,6 +14,7 @@ import { Composer, type Provenance } from "./Composer";
 import { dialModel, projectModelApi, type ConfiguredModel } from "./projectModel";
 import { MarkdownText } from "./MarkdownText";
 import { MultiAskCard } from "./MultiAskCard";
+import { hasSeveralQuestions } from "./askPicks";
 import { askLeadIn, CC_LEAD_IN, declaredFromQuestion, selectChips, trimAsk, type DeclaredAsk } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import { isPinned } from "./scrollPin";
@@ -975,7 +976,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // it counts as the turn having asked before the asking turn lands.
   const turnAsked = declared !== null || lastSpeechRole === "assistant";
   const chipsVisible =
-    !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
+    !hasSeveralQuestions(openAsk) && !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
     (turnAsked || ccChip !== null) && !composerDraft.trim() && !chipsDismissed;
   useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts, ccChip]);
   // #5993: whenever the chip row should show but is hidden, one line traces the first gate

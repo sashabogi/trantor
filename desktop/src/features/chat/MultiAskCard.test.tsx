@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { MultiAskCard } from "./MultiAskCard";
-import { choose, isComplete, startPicks, toAnswers, typeOther } from "./askPicks";
+import { choose, hasSeveralQuestions, isComplete, startPicks, toAnswers, typeOther } from "./askPicks";
 import type { AskQuestion } from "./streaming";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -38,6 +38,14 @@ describe("ask picks", () => {
     expect(toAnswers(s)[0]).toEqual({ picks: [], other: "Later" });
     s = choose(s, questions[0], 1);
     expect(toAnswers(s)[0]).toEqual({ picks: [1], other: null });
+  });
+});
+
+describe("hasSeveralQuestions", () => {
+  it("is true only for an ask with more than one question, so reply chips stay away from it", () => {
+    expect(hasSeveralQuestions(null)).toBe(false);
+    expect(hasSeveralQuestions({ questions: questions.slice(0, 1) })).toBe(false);
+    expect(hasSeveralQuestions({ questions })).toBe(true);
   });
 });
 

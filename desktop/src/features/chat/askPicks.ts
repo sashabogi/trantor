@@ -47,3 +47,8 @@ export function toAnswers(state: AskPicks): AskAnswerOut[] {
     other: a.other.trim() === "" ? null : a.other,
   }));
 }
+
+/** An ask with several questions is answered from its card alone: a reply chip could only answer the first. */
+export function hasSeveralQuestions(ask: { questions: readonly AskQuestion[] } | null): boolean {
+  return (ask?.questions.length ?? 0) > 1;
+}
