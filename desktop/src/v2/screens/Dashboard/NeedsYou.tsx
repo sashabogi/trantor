@@ -31,7 +31,6 @@ function Actions({ item, d, onNavigate }: { item: QueueItem; d: Decisions; onNav
       <>
         <Button variant="primary" disabledReason={off} onClick={() => void d.decideHold(hold, "go")}>{seatLabel(hold.session)} first</Button>
         <Button disabledReason={off} onClick={() => void d.decideHold(hold, "nogo")}>{seatLabel(hold.other)} first</Button>
-        <Button variant="quiet" disabledReason="Comparing both changes needs a diff API the hub does not have yet">Compare both changes</Button>
       </>
     );
   }
@@ -85,7 +84,7 @@ export function NeedsYou({ items, d, onNavigate }: { items: QueueItem[]; d: Deci
       {shownActionable.map(item => <QueueRow key={item.key} item={item} d={d} onNavigate={onNavigate} />)}
       {drills.length > 0 && (
         <div className="border-y border-[var(--v2-edge)] px-[14px] pb-1 pt-2">
-          <h3 className="m-0 text-v2-small font-semibold uppercase tracking-[0.08em] text-[var(--v2-muted)]">Waiting for a drill <span className="v2-mono">{drillCount}</span></h3>
+          <h3 title="Cards in testing that wait for a verification run on the built thing" className="m-0 text-v2-small font-semibold uppercase tracking-[0.08em] text-[var(--v2-muted)]">Waiting for a drill <span className="v2-mono">{drillCount}</span></h3>
         </div>
       )}
       {shownDrills.map(item => <QueueRow key={item.key} item={item} d={d} onNavigate={onNavigate} />)}

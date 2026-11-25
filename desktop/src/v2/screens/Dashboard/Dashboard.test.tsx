@@ -133,7 +133,7 @@ describe("Dashboard", () => {
     expect(prop && JSON.parse(prop.body ?? "{}")).toMatchObject({ id: 3, status: "approved" });
   });
 
-  it("gives every icon button a label and a title, and disables swap and stop with a reason", async () => {
+  it("gives every icon button a label and a title; swap and stop open the Agents screen instead of sitting dead (#14268)", async () => {
     await mount();
     const iconOnly = [...host.querySelectorAll("button")].filter(b => !b.textContent?.trim());
     expect(iconOnly.length).toBeGreaterThan(5);
@@ -141,10 +141,39 @@ describe("Dashboard", () => {
       expect(btn.getAttribute("aria-label")).toBeTruthy();
       expect(btn.getAttribute("title")).toBeTruthy();
     }
-    const stop = host.querySelector<HTMLButtonElement>('button[aria-label="Stop kimi-9"]');
-    expect(stop?.disabled).toBe(true);
-    expect(stop?.title).toMatch(/endpoint/);
+    for (const b of host.querySelectorAll<HTMLButtonElement>("button")) expect(b.title).not.toMatch(/does not exist yet|not wired/);
+    expect(host.querySelector('button[aria-label="Stop kimi-9"]')).toBeNull();
+    await click(host.querySelector('button[aria-label="Manage kimi-9"]'));
+    expect(navigate).toHaveBeenCalledWith("agents", "trantor");
     await click(host.querySelector('button[aria-label="Watch kimi-9 live"]'));
     expect(navigate).toHaveBeenCalledWith("workspace", "trantor");
+  });
+
+  it("keeps no placeholder buttons: no Compare both changes, no unwired grid text (#14268)", async () => {
+    await mount();
+    expect(byText("button", "Compare both changes")).toBeNull();
+    await click(byText('button[aria-pressed]', "Grid"));
+    expect(host.textContent).not.toMatch(/not wired/i);
+    expect(host.textContent).toContain("use Watch live");
+  });
+
+  it("arrow keys move between the project tabs and Escape clears the project filter (#14268)", async () => {
+    await mount();
+    const all = [...host.querySelectorAll('[role="tab"]')].find(e => e.textContent?.includes("All"));
+    if (!all) throw new Error("All tab not found");
+    await act(async () => { all.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+    const tabs = [...host.querySelectorAll('[role="tab"]')];
+    expect(tabs[1].getAttribute("aria-selected")).toBe("true");
+    expect(tabs[1].getAttribute("tabindex")).toBe("0");
+    expect(tabs[0].getAttribute("tabindex")).toBe("-1");
+    const input = host.querySelector<HTMLInputElement>("#v2-dash-filter");
+    if (!input) throw new Error("filter input not found");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "ibkr");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(input.value).toBe("ibkr");
+    await act(async () => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(input.value).toBe("");
   });
 });

@@ -9,6 +9,7 @@ import { Section } from "../../ui/Section";
 import { Select } from "../../ui/Select";
 import { Toggle } from "../../ui/Toggle";
 import { backToClassic } from "../../toggle";
+import { keptRows } from "./sections";
 
 export function Row({ title, body, children }: { title: string; body: ReactNode; children: ReactNode }) {
   return (
@@ -90,23 +91,44 @@ export function BackToClassicRow({ onBack = backToClassic }: { onBack?: () => vo
   );
 }
 
-export function GeneralPage({ onBackToClassic }: { onBackToClassic?: () => void }) {
-  return <Section title="General" sub="App behaviour on this machine." flush><OpenCodeIn /><UpdateRow /><OnboardingRow /><BackToClassicRow onBack={onBackToClassic} /></Section>;
+const GENERAL_WORDS = {
+  editor: "open code in editor app vs code cursor zed finder repos",
+  update: "updates check now release version install",
+  onboarding: "onboarding show again walk through providers identity",
+  classic: "back to classic switch interface trantor 2.0",
+} as const;
+
+export function GeneralPage({ onBackToClassic, query = "" }: { onBackToClassic?: () => void; query?: string }) {
+  const keep = keptRows(query, "General", GENERAL_WORDS);
+  return (
+    <Section title="General" sub="App behaviour on this machine." flush>
+      {keep.has("editor") && <OpenCodeIn />}
+      {keep.has("update") && <UpdateRow />}
+      {keep.has("onboarding") && <OnboardingRow />}
+      {keep.has("classic") && <BackToClassicRow onBack={onBackToClassic} />}
+    </Section>
+  );
 }
 
-export function NotificationsPage() {
+const NOTIFY_WORDS = {
+  needs: "notify needs a human direct messages verify gates seats offline alerts",
+  background: "only background window front skip notification",
+} as const;
+
+export function NotificationsPage({ query = "" }: { query?: string }) {
   const [on, setOn] = useState(notificationsEnabled());
   const [bg, setBg] = useState(backgroundOnly());
+  const keep = keptRows(query, "Notifications", NOTIFY_WORDS);
   return (
     <Section title="Notifications" flush sub="Native, and deliberately narrow: a notification for everything is a notification for nothing.">
-      <Row title="Notify me when something needs a human" body="Direct messages to you, verify gates opening, and crew seats going offline. Broadcasts, card moves and presence never interrupt.">
+      {keep.has("needs") && <Row title="Notify me when something needs a human" body="Direct messages to you, verify gates opening, and crew seats going offline. Broadcasts, card moves and presence never interrupt.">
         <Toggle label="Notify me when something needs a human" on={on}
           onToggle={() => { setOn(!on); setNotificationsEnabled(!on); }} />
-      </Row>
-      <Row title="Only when Trantor is in the background" body="Skip the notification while this window is open and in front of you.">
+      </Row>}
+      {keep.has("background") && <Row title="Only when Trantor is in the background" body="Skip the notification while this window is open and in front of you.">
         <Toggle label="Only when Trantor is in the background" on={bg}
           onToggle={() => { setBg(!bg); setBackgroundOnly(!bg); }} />
-      </Row>
+      </Row>}
     </Section>
   );
 }

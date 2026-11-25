@@ -129,14 +129,15 @@ function KeyAccountSection(props: ProviderAccountSectionProps) {
         <span className="tr-chip shrink-0">{status.auth.present ? "Saved" : "Not saved"}</span>
       </div>
       <div className="flex gap-2">
-        <input type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="off" spellCheck={false}
+        <input type="password" value={key} onChange={event => setKey(event.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (!busy) void submit(); } }}
+               autoComplete="off" spellCheck={false}
                aria-label={`${status.label} API key`} placeholder={`Paste ${status.label} API key`} className="tr-input min-w-0 flex-1" />
         <button type="button" onClick={() => void submit()} disabled={busy || !key.trim()}
                 className="rounded-lg bg-[var(--color-tr-doing)] px-3 text-[12px] font-medium text-white disabled:opacity-50">
           {phase === "verifying" ? "Verifying…" : phase === "saving" ? "Saving…" : "Verify and save"}
         </button>
       </div>
-      {error ? <p role="alert" className="text-[12px] text-[var(--color-tr-fail)]">Verification failed — {error}. Nothing was saved.</p> : null}
+      {error ? <p role="alert" className="text-[12px] text-[var(--color-tr-fail)]">Verification failed: {error}. Nothing was saved.</p> : null}
       <details className="rounded-lg border border-[var(--color-tr-edge)] bg-white/[0.015] px-3 py-2.5">
         <summary className="cursor-pointer text-[12px] font-medium">How to copy</summary>
         <p className="mt-2 text-[11.5px] text-[var(--color-tr-muted)]">Get the key from {presentation.source}.</p>

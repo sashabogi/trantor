@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
+import { useEscape } from "../../../v2/ui/useEscape";
 import type { ProviderAccountsApi, ProviderStatus } from "./providerStatus";
 
 export function RemoveProviderSheet({ provider, api, onClose, onRemoved, onError }: {
@@ -11,6 +12,8 @@ export function RemoveProviderSheet({ provider, api, onClose, onRemoved, onError
 }) {
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
+  // #14268: Escape cancels the confirm unless the removal is already running
+  useEscape(() => { if (!removing) onClose(); });
   const remove = async () => {
     setRemoving(true); setError("");
     try {
@@ -35,7 +38,7 @@ export function RemoveProviderSheet({ provider, api, onClose, onRemoved, onError
             </p>
           </div>
         </div>
-        {error ? <p role="alert" className="mt-3 text-[12px] text-[var(--color-tr-fail)]">Remove failed — {error}</p> : null}
+        {error ? <p role="alert" className="mt-3 text-[12px] text-[var(--color-tr-fail)]">Remove failed: {error}</p> : null}
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={onClose} disabled={removing} className="tr-input disabled:opacity-50">Cancel</button>
           <button type="button" onClick={() => void remove()} disabled={removing}

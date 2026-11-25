@@ -1,11 +1,12 @@
 // The Overseer column beside the roster: duty seat, autonomy ladder, open episodes, grants, project links (#13992).
-import { useState, type ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { dutyLogPath, openCode, policyLink, policyUnlink, type HubClient, type Peer } from "../../../shared/api/client";
 import { episodeCards, quietEvidence } from "../../../features/overseer/model";
 import { lasting } from "../../../shared/rollup";
 import { ago } from "../../../shared/presence";
 import { Avatar, Button, IconButton, seatLabel } from "../../index";
+import { StopConfirm } from "./StopConfirm";
 import { AutonomyLadder } from "./AutonomyLadder";
 import { SECTION_LABEL } from "./Machines";
 import { levelFor } from "./model";
@@ -24,6 +25,8 @@ const MUTED = "m-0 text-v2-body text-[var(--v2-muted)]";
 
 function DutyPanel({ ov, peers }: { ov: OverseerData; peers: Peer[] }) {
   const { status, duty } = ov;
+  // #14268: Stop duty asks inline first
+  const [asking, setAsking] = useState(false);
   if (!status) return <Panel title="Overseer · duty seat"><p className={MUTED}>{ov.error ? `Overseer unavailable: ${ov.error}` : "Reading the watcher..."}</p></Panel>;
   const alive = status.engine && status.lastTickTs > 0 && Date.now() - status.lastTickTs < status.tickMs * 2 + 5000;
   const peer = peers.find(p => p.session === status.dutySession);
@@ -44,8 +47,10 @@ function DutyPanel({ ov, peers }: { ov: OverseerData; peers: Peer[] }) {
       <div className="mt-2.5 flex gap-2">
         <Button disabledReason={ov.busy ? "Working..." : null} onClick={openLog}>Open duty log</Button>
         <Button disabledReason={ov.busy ? "Working..." : null} onClick={ov.startDuty}>Start duty</Button>
-        <Button variant="danger" disabledReason={ov.busy ? "Working..." : null} onClick={ov.stopDuty}>Stop duty</Button>
+        <Button variant="danger" disabledReason={ov.busy ? "Working..." : null} onClick={() => setAsking(true)}>Stop duty</Button>
       </div>
+      {asking && <StopConfirm name="the duty seat" detail="Its work stays on its branch" busy={ov.busy}
+        onStop={() => { setAsking(false); ov.stopDuty(); }} onCancel={() => setAsking(false)} />}
       {ov.notice && <p className={`${MUTED} mt-2`}>{ov.notice}</p>}
     </Panel>
   );
@@ -73,13 +78,15 @@ function LinkForm({ project, ov }: { project: string; ov: OverseerData }) {
   const [other, setOther] = useState("");
   const [reason, setReason] = useState("");
   const ready = !!project && !!other.trim() && !!reason.trim() && other.trim() !== project;
+  const submit = () => void ov.run(async () => { const out = await policyLink([project, other.trim()], reason.trim()); setOther(""); setReason(""); return out; });
+  const enter = (e: KeyboardEvent) => { if (e.key === "Enter" && ready && !ov.busy) { e.preventDefault(); submit(); } };
   const input = "min-w-0 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-bg)] px-2 py-1 text-v2-body text-[var(--v2-text)]";
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">
-      <input aria-label="Link this project to" className={`${input} w-28`} value={other} onChange={e => setOther(e.target.value)} placeholder="other project" />
-      <input aria-label="Reason for the link" className={`${input} flex-1`} value={reason} onChange={e => setReason(e.target.value)} placeholder="reason" />
+      <input aria-label="Link this project to" className={`${input} w-28`} value={other} onChange={e => setOther(e.target.value)} onKeyDown={enter} placeholder="other project" />
+      <input aria-label="Reason for the link" className={`${input} flex-1`} value={reason} onChange={e => setReason(e.target.value)} onKeyDown={enter} placeholder="reason" />
       <Button disabledReason={!ready ? "Name another project and a reason" : ov.busy ? "Working..." : null}
-        onClick={() => void ov.run(async () => { const out = await policyLink([project, other.trim()], reason.trim()); setOther(""); setReason(""); return out; })}>+ Link</Button>
+        onClick={submit}>+ Link</Button>
     </div>
   );
 }

@@ -143,6 +143,7 @@ describe("AgentsScreen", () => {
     await mount();
     crewResult = { ok: false, reason: "no runner for codex-8" };
     await act(async () => { button("Stop codex-8")?.click(); });
+    await act(async () => { textButton("Stop codex-8")?.click(); });
     await settle();
     const card = host.querySelector('article[aria-label="codex-8"]');
     expect(card?.querySelector('[role="status"]')?.textContent).toContain("codex-8 · no runner for codex-8");
@@ -165,5 +166,46 @@ describe("AgentsScreen", () => {
     expect(button("Swap deepseek-2")).toBeNull();
     expect(button("Stop deepseek-2")).toBeNull();
     expect(button("Restart deepseek-2")).toBeNull();
+  });
+
+  it("Stop asks inline first, Keep running and Escape back out, and nothing runs until Stop is confirmed (#14268)", async () => {
+    await mount();
+    await act(async () => { button("Stop codex-8")?.click(); });
+    expect(host.querySelector('[role="alertdialog"][aria-label="Stop codex-8?"]')).not.toBeNull();
+    expect(cliCalls.some(c => c.args[0] === "down")).toBe(false);
+    await act(async () => { textButton("Keep running")?.click(); });
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull();
+    await act(async () => { button("Stop codex-8")?.click(); });
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(cliCalls.some(c => c.args[0] === "down")).toBe(false);
+    await act(async () => { button("Stop codex-8")?.click(); });
+    await act(async () => { textButton("Stop codex-8")?.click(); });
+    await settle();
+    expect(cliCalls.some(c => c.args[0] === "down" && c.args[1] === "codex-8")).toBe(true);
+  });
+
+  it("Stop duty asks inline first (#14268)", async () => {
+    await mount();
+    await act(async () => { textButton("Stop duty")?.click(); });
+    expect(host.querySelector('[role="alertdialog"][aria-label="Stop the duty seat?"]')).not.toBeNull();
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it("a message to an offline seat is disabled with the reason as its title (#14268)", async () => {
+    await mount();
+    await act(async () => { textButton("All projects")?.click(); });
+    const offline = [...host.querySelectorAll<HTMLButtonElement>("button[disabled]")].find(b => /offline/.test(b.title));
+    expect(offline).toBeDefined();
+  });
+
+  it("arrow keys move between the section tabs (#14268)", async () => {
+    await mount();
+    const tabs = () => [...host.querySelectorAll<HTMLElement>('[role="tablist"] [role="tab"]')];
+    await act(async () => { tabs()[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+    expect(tabs()[1].getAttribute("aria-selected")).toBe("true");
+    await act(async () => { tabs()[1].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true })); });
+    expect(tabs()[0].getAttribute("aria-selected")).toBe("true");
   });
 });

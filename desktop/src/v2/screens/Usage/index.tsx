@@ -20,7 +20,7 @@ import { dataOf, useUsageData } from "./useUsageData";
 const FILTER_KEYS = ["project", "vendor", "agent"] as const;
 const EMPTY_SCOPE: Scope = { agents: [], models: [] };
 
-function FilterBar({ filters, onChange, onExport }: { filters: Filters; onChange: (f: Filters) => void; onExport: () => void }) {
+function FilterBar({ filters, onChange, onExport, canExport }: { filters: Filters; onChange: (f: Filters) => void; onExport: () => void; canExport: boolean }) {
   const active = FILTER_KEYS.map(k => [k, filters[k]] as const).filter(([, v]) => v);
   return (
     <div className="flex flex-wrap items-center gap-2 text-v2-body text-[var(--v2-muted)]">
@@ -34,7 +34,7 @@ function FilterBar({ filters, onChange, onExport }: { filters: Filters; onChange
       ))}
       {active.length === 0 && <span>none · click a project, agent or vendor to filter</span>}
       <span className="flex-1" />
-      <Button onClick={onExport}>Export all</Button>
+      <Button onClick={onExport} disabledReason={canExport ? null : "Nothing to export in this range"}>Export all</Button>
     </div>
   );
 }
@@ -89,7 +89,7 @@ export function UsageScreen({ client }: ScreenProps) {
   return (
     <div data-screen="usage" className="flex min-h-full flex-col gap-[14px] overflow-y-auto px-6 pb-6 pt-[18px]">
       <Header range={range} onRange={setRange} />
-      <FilterBar filters={filters} onChange={setFilters} onExport={exportAll} />
+      <FilterBar filters={filters} onChange={setFilters} onExport={exportAll} canExport={agents.length + cardList.length + projects.length > 0} />
       <PlansPanel cards={cards} failure={balances.failure} loading={!balances.report && !balances.failure} />
       {learning ? (
         <>

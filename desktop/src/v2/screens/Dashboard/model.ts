@@ -125,7 +125,7 @@ export function seatsFor(seats: Seat[], tab: string): Seat[] {
 
 /** "9m", "3h", "2d": how long ago, in the shortest unit that reads. */
 export function span(ts: number | undefined, now: number = Date.now()): string {
-  if (!ts) return "—";
+  if (!ts) return "n/a";
   const m = Math.max(0, Math.round((now - ts) / 60_000));
   if (m < 60) return `${m}m`;
   const h = Math.round(m / 60);

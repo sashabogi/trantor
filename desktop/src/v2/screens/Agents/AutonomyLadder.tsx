@@ -8,6 +8,10 @@ import type { Action } from "./useOverseer";
 import { SECTION_LABEL } from "./Machines";
 
 const RUNGS = [1, 2, 3, 4] as const;
+const RUNG_MEANS = {
+  1: "The overseer only watches and records", 2: "The overseer tells you when something looks wrong",
+  3: "The overseer holds risky steps until you approve", 4: "The overseer acts on its own within your dials",
+} as const satisfies Record<(typeof RUNGS)[number], string>;
 const MIN = RUNGS[0];
 const MAX = RUNGS[RUNGS.length - 1];
 
@@ -34,7 +38,7 @@ export function AutonomyLadder({ client, project, level, busy, run }: AutonomyLa
       </div>
       <ol className="m-0 flex list-none flex-col gap-1 p-0">
         {RUNGS.map(n => (
-          <li key={n} aria-current={n === level ? "step" : undefined}
+          <li key={n} title={RUNG_MEANS[n]} aria-current={n === level ? "step" : undefined}
             className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-v2-body ${n === level ? "bg-[var(--v2-accent-soft)]" : ""}`}>
             <span className="v2-mono w-4 text-[var(--v2-muted)]">{n}</span>
             <span className="flex-1 capitalize">{dictGet(LEVEL_LABEL, String(n))}</span>

@@ -52,7 +52,7 @@ function Tile({ seat, pending, autonomy, d, onNavigate }: { seat: Seat; pending?
         </IconButton>
       </header>
       <div className="v2-mono flex min-h-[96px] items-center justify-center gap-2 border-y border-[var(--v2-edge)] bg-[var(--v2-bg)] px-3 text-v2-body text-[var(--v2-muted)]">
-        <TerminalSquare size={14} aria-hidden />Live terminal is not wired here yet. Use Watch to open it in the workspace.
+        <TerminalSquare size={14} aria-hidden />Its terminal opens in the Workspace: use Watch live.
       </div>
       {pending && <PendingStrip item={pending} d={d} />}
       <footer className="flex items-center gap-2 px-3 py-2">

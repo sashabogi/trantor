@@ -75,7 +75,7 @@ export function ProjectTable({ rows, project, onProject }: { rows: ProjectRow[];
       <Grid data={data} empty="No project has turns in this range."
         cell={(i, c) => c !== 0 ? undefined : (
           <button type="button" aria-pressed={project === rows[i].project} onClick={() => onProject(project === rows[i].project ? null : rows[i].project)}
-            className="border-0 bg-transparent p-0 text-left text-[var(--v2-text)] hover:text-[var(--v2-accent-hi)]">{rows[i].project}</button>)} />
+            title="Filter everything to this project" className="border-0 bg-transparent p-0 text-left text-[var(--v2-text)] hover:text-[var(--v2-accent-hi)]">{rows[i].project}</button>)} />
     </Section>
   );
 }

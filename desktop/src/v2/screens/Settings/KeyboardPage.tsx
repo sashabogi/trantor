@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { GROUP_ORDER, useCommands, type Command } from "../../shell/commands";
 import { formatShortcut } from "../../shell/shortcuts";
 import { Kbd } from "../../ui/Kbd";
+import { rowMatches } from "./sections";
 
 function groupShortcuts(all: Command[]): [string, Command[]][] {
   const groups = new Map<string, Command[]>();
@@ -11,9 +12,15 @@ function groupShortcuts(all: Command[]): [string, Command[]][] {
   return [...groups].sort((a, b) => rank(a[0]) - rank(b[0]));
 }
 
-export function KeyboardPage() {
+export function KeyboardPage({ query = "" }: { query?: string }) {
   const all = useCommands();
-  const groups = useMemo(() => groupShortcuts(all), [all]);
+  const groups = useMemo(() => {
+    const every = groupShortcuts(all);
+    const hits = every.map(([group, commands]): [string, Command[]] => [group, commands.filter(c => rowMatches(query, group, c.title))])
+      .filter(([, commands]) => commands.length > 0);
+    // a search that only matched the page itself keeps every shortcut (#14268)
+    return hits.length ? hits : every;
+  }, [all, query]);
   if (!groups.length) return <p className="text-v2-base text-[var(--v2-muted)]">No shortcuts are registered.</p>;
   return (
     <div className="flex flex-col gap-4">

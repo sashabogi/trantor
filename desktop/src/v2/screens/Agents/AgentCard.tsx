@@ -11,6 +11,7 @@ import { Avatar, Chip, IconButton, modelHue, PRESENCE_LABEL, seatAgent, seatLabe
 import { PopMenu } from "../Workspace/PopMenu";
 import { isHostSession } from "../Workspace/seatModel";
 import type { Crew } from "../Workspace/useCrew";
+import { StopConfirm } from "./StopConfirm";
 import { noticeSeat, type SeatView } from "./model";
 
 const ORCH_NOTE = "This is your own session; manage it from its window";
@@ -65,7 +66,7 @@ function MessageBox({ client, view, onDone }: { client: HubClient; view: SeatVie
   return (
     <div className="mt-2 flex items-center gap-2">
       <input aria-label={`Message ${seatLabel(view.peer.session)}`} value={text} onChange={e => setText(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter" && text.trim()) void send(); }} placeholder="Write a message"
+        onKeyDown={e => { if (e.key === "Enter" && text.trim()) void send(); else if (e.key === "Escape") onDone(); }} placeholder="Write a message"
         className="min-w-0 flex-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-bg)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)]" />
       <button type="button" disabled={!text.trim()} onClick={() => void send()}
         className="rounded-lg border border-[var(--v2-edge-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)] disabled:opacity-45">Send</button>
@@ -90,27 +91,34 @@ function Actions({ view, onNavigate, duty, crew, onMessage }: Pick<AgentCardProp
   const offline = view.presence === "offline";
   const seat = seatName(view.peer.session);
   const host = isHostSession(view.peer.session);
+  // #14268: a stop asks inline first, and Escape or Keep running backs out
+  const [asking, setAsking] = useState(false);
+  const stopBusy = duty ? duty.busy : !!crew?.busy;
+  const doStop = () => { setAsking(false); if (duty) duty.stop(); else void crew?.stop(seat); };
   return (
+    <>
     <div className="mt-2.5 flex items-center gap-1 border-t border-[var(--v2-edge)] pt-2">
-      <IconButton label={`Message ${name}`} title={`Message ${name}`} onClick={onMessage} disabled={offline}><MessageSquare size={14} /></IconButton>
+      <IconButton label={`Message ${name}`} title={offline ? `${name} is offline, so it cannot get a message` : `Message ${name}`} onClick={onMessage} disabled={offline}><MessageSquare size={14} /></IconButton>
       <IconButton label="Open its terminal" title="Open its terminal in the Workspace" onClick={() => onNavigate("workspace", view.project || undefined)}><Terminal size={14} /></IconButton>
       {crew && (host
         ? <IconButton label={`Swap ${name}`} title={ORCH_NOTE} disabled><ArrowLeftRight size={14} /></IconButton>
         : <PopMenu heading={`Swap ${name} to`} empty="No other agent is installed, enabled and within quota"
             items={crew.available.filter(a => a.id !== seatAgent(view.peer.session)).map(a => ({ id: a.id, label: a.label, sub: "keeps the card", disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.swap(seat, a.id) }))}
             trigger={p => (
-              <IconButton {...p} label={`Swap ${name}`} title="Swap model, keep the card"><ArrowLeftRight size={14} /></IconButton>
+              <IconButton {...p} label={`Swap ${name}`} title="Swap model, keep the card" disabled={crew.busy}><ArrowLeftRight size={14} /></IconButton>
             )} />)}
       {/* No Restart on a crew seat: crew.start takes a catalog id, not the seat's instance name, so stop-then-start can fail and leave it stopped. */}
-      {duty && <IconButton label="Restart the runner" title="Start the duty seat (trantor duty up)" disabled={duty.busy} onClick={duty.start}><RotateCw size={14} /></IconButton>}
+      {duty && <IconButton label="Restart the duty seat" title={duty.busy ? "Another duty action is running" : "Start the duty seat again"} disabled={duty.busy} onClick={duty.start}><RotateCw size={14} /></IconButton>}
       <span className="flex-1" />
       {duty
-        ? <IconButton label={`Stop ${name}`} title={`Stop ${name}: ${STOP_TITLE}`} disabled={duty.busy} onClick={duty.stop}><Square size={13} /></IconButton>
+        ? <IconButton label={`Stop ${name}`} title={duty.busy ? "Another duty action is running" : `Stop ${name}: ${STOP_TITLE}`} disabled={duty.busy} onClick={() => setAsking(true)}><Square size={13} /></IconButton>
         : crew && (host
           ? <IconButton label={`Stop ${name}`} title={ORCH_NOTE} disabled><Square size={13} /></IconButton>
-          : <IconButton label={`Stop ${name}`} title={`Stop ${name}: ${STOP_TITLE}`} disabled={crew.busy} className="text-[var(--v2-bad)]"
-              onClick={() => void crew.stop(seat)}><Square size={13} /></IconButton>)}
+          : <IconButton label={`Stop ${name}`} title={crew.busy ? "Another seat action is running" : `Stop ${name}: ${STOP_TITLE}`} disabled={crew.busy} className="text-[var(--v2-bad)]"
+              onClick={() => setAsking(true)}><Square size={13} /></IconButton>)}
     </div>
+    {asking && <StopConfirm name={name} detail={STOP_TITLE} busy={stopBusy} onStop={doStop} onCancel={() => setAsking(false)} />}
+    </>
   );
 }
 

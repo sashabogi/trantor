@@ -42,7 +42,7 @@ function useHubRows(): HubRow[] {
 export function HubPage() {
   const rows = useHubRows();
   return (
-    <Section title="Hub and machines" sub="A project lives on exactly one hub. Pins are written by trantor hub set.">
+    <Section title="Hub and machines" sub="A project lives on exactly one hub. Pin a project to a hub from the terminal with trantor hub set.">
       <div className="flex flex-col gap-2.5">
         {rows.map(h => (
           <div key={h.url} className="rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
@@ -112,7 +112,7 @@ function AgentCliRow({ r }: { r: AgentCliCompatibility }) {
     <div key={r.cli} data-agent-cli={r.cli}
       className="flex items-center gap-2.5 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
       <span className="text-v2-base font-medium">{r.label}</span>
-      <span className="v2-mono text-v2-body text-[var(--v2-muted)]">{r.installed ?? "—"}</span>
+      <span className="v2-mono text-v2-body text-[var(--v2-muted)]">{r.installed ?? "not found"}</span>
       <span className="ml-auto text-v2-small text-[var(--v2-muted)]">{stateWords(r)}</span>
       {r.state === "below_minimum" && r.updateCommand && (
         <Button onClick={update.run} disabledReason={update.busy ? "the updater is running" : null} aria-busy={update.busy || undefined}
@@ -124,7 +124,7 @@ function AgentCliRow({ r }: { r: AgentCliCompatibility }) {
         title={update.result.output}>
         {update.result.ok
           ? `updated ${bareVersion(update.result.before) ?? "?"} to ${bareVersion(update.result.after) ?? "?"}`
-          : "the update did not succeed — see the banner for its output"}
+          : "the update did not succeed, see the banner for its output"}
       </span>}
     </div>
   );

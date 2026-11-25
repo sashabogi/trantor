@@ -1,9 +1,9 @@
 // One dial row of the Autonomy page: name, default/changed tag, help, provenance, Off/On (#13994).
 import { Chip } from "../../ui/Chip";
-import { IconButton } from "../../ui/IconButton";
+import { walkSiblings } from "../../ui/arrowKeys";
 import { Toggle } from "../../ui/Toggle";
 
-export type DialChoice = { value: string; label: string };
+export type DialChoice = { value: string; label: string; title?: string };
 
 export type DialRowProps = {
   label: string;
@@ -30,9 +30,6 @@ export function DialRow({ label, why, choices, value, changed, blockedNote, prov
         <div className="flex items-center gap-2">
           <span className="text-v2-base font-medium text-[var(--v2-text)]">{label}</span>
           <Chip tone={changed ? "info" : "neutral"}>{changed ? "changed" : "default"}</Chip>
-          <IconButton label={`Help for ${label}`} title={why} size={18}>
-            <span aria-hidden="true" className="text-v2-micro font-semibold">?</span>
-          </IconButton>
         </div>
         <div className="mt-0.5 text-v2-body text-[var(--v2-muted)]">{why}</div>
         {blockedNote && <div className="mt-1 text-v2-body text-[var(--v2-warn)]">{blockedNote}</div>}
@@ -45,10 +42,12 @@ export function DialRow({ label, why, choices, value, changed, blockedNote, prov
         : (
       <div role="radiogroup" aria-label={label} title={blockedNote ?? undefined}
         className="flex shrink-0 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-[2px]">
-        {choices.map(c => {
+        {choices.map((c, i) => {
           const on = c.value === value;
           return (
-            <button key={c.value} type="button" role="radio" aria-checked={on} disabled={locked || busy}
+            <button key={c.value} type="button" role="radio" aria-checked={on} disabled={locked || busy} title={c.title}
+              tabIndex={on ? 0 : -1}
+              onKeyDown={e => walkSiblings(e, i, to => { const next = choices[to]; if (next) onPick(next.value); })}
               onClick={() => { if (!on) onPick(c.value); }}
               className={`rounded-md border-0 px-[11px] py-[5px] text-v2-body font-medium disabled:opacity-45 ${
                 on ? "bg-[var(--v2-hover)] text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>

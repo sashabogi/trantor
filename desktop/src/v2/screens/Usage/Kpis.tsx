@@ -26,7 +26,7 @@ export function buildKpis({ stats, turnsDaily, failDaily, savedDaily, econ, proj
   const naSub = "the hub serves 24h, 7d, 30d and all-time windows";
   const out: Kpi[] = [
     { key: "turns", label: "TURNS", value: fmtInt(turns), sub: `across ${stats.length} agent${stats.length === 1 ? "" : "s"}`, spark: turnsDaily.map(d => d.total) },
-    { key: "wasted", label: "WASTED TURNS", value: fmtInt(failed), sub: `${fmtPct(failed, turns)} of turns exited non-zero`, spark: failDaily.map(d => d.total), warn: turns > 0 && failed / turns >= 0.15 },
+    { key: "wasted", label: "WASTED TURNS", value: fmtInt(failed), sub: `${fmtPct(failed, turns)} of turns ended in an error`, spark: failDaily.map(d => d.total), warn: turns > 0 && failed / turns >= 0.15 },
     econ.available
       ? { key: "tokens", label: "SCROOGE TOKENS", value: fmtTokens(econ.tokens), sub: `metered one-shots only · ${econ.label}${scope}`, spark: null }
       : { key: "tokens", label: "SCROOGE TOKENS", value: na, sub: naSub, spark: null },

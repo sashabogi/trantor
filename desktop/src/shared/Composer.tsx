@@ -21,7 +21,7 @@ export function Composer({ value, onChange, onSend, placeholder, busy, disabled,
         <button
           onClick={onSend}
           disabled={disabled || busy}
-          title="Send"
+          title="Send" aria-label="Send message"
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-tr-doing)] text-white transition-opacity disabled:opacity-30">
           {busy ? "…" : "↑"}
         </button>

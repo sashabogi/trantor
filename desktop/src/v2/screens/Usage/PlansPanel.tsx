@@ -21,7 +21,7 @@ function PlanTile({ card }: { card: PlanCard }) {
       )}
       <div className="text-v2-small text-[var(--v2-muted)]">{card.detail}</div>
       {card.forecast && <div data-forecast className="text-v2-small" style={{ color: card.forecast.startsWith("lasts") ? "var(--v2-ok)" : "var(--v2-warn)" }}>{card.forecast}</div>}
-      {card.noMeter && <div className="text-v2-small text-[var(--v2-muted)]">unknown, shown as unknown</div>}
+      {card.noMeter && <div className="text-v2-small text-[var(--v2-muted)]">this provider reports no usage meter</div>}
     </div>
   );
 }

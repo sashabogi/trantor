@@ -21,7 +21,10 @@ type Scope = "me" | "project";
 const ONOFF = [{ value: "off", label: "Off" }, { value: "on", label: "On" }] as const;
 const HARNESS = [{ value: "prompt", label: "Ask me" }, { value: "bypass", label: "Skip prompts" }] as const;
 const LADDER = [
-  { value: "1", label: "1 observe" }, { value: "2", label: "2 warn" }, { value: "3", label: "3 gate" }, { value: "4", label: "4 auto" },
+  { value: "1", label: "1 observe", title: "The overseer only watches and records" },
+  { value: "2", label: "2 warn", title: "The overseer tells you when something looks wrong" },
+  { value: "3", label: "3 gate", title: "The overseer holds risky steps until you approve" },
+  { value: "4", label: "4 auto", title: "The overseer acts on its own within your dials" },
 ] as const;
 
 export function AutonomyPage({ client, project, query, api = autonomyApi }: AutonomyPageProps) {

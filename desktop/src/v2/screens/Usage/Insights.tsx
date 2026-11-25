@@ -30,7 +30,7 @@ export function CachePanel({ rows }: { rows: BalanceRow[] }) {
 export function WastedPanel({ stats }: { stats: AgentStat[] }) {
   const rows = stats.filter(a => a.failures > 0);
   return (
-    <Section title="WASTED TURNS" sub="turns that exited non-zero, per agent">
+    <Section title="WASTED TURNS" sub="turns that ended in an error, per agent">
       {rows.length === 0 && <p className="m-0 text-v2-body text-[var(--v2-muted)]">{stats.length ? "No failed turns in this range." : "No turns in this range."}</p>}
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {rows.map(a => (

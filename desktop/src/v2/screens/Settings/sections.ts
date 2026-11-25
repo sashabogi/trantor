@@ -17,7 +17,7 @@ export const GROUPS = ["You", "Crew", "Code and git", "System"] as const;
 
 export const SECTIONS: readonly SectionDef[] = [
   { id: "general", group: "You", label: "General", desc: "app to open code in, updates", rows: ["open code in", "editor", "updates", "check now", "trantor 2.0", "onboarding"] },
-  { id: "notifications", group: "You", label: "Notifications", desc: "when, how, spoken alerts", rows: ["notify", "alerts", "spoken"] },
+  { id: "notifications", group: "You", label: "Notifications", desc: "when Trantor interrupts you", rows: ["notify", "alerts", "background"] },
   { id: "keyboard", group: "You", label: "Keyboard", desc: "every shortcut, grouped", rows: ["shortcuts", "keys", "chord", "command palette", "go to file", "quick open"] },
   { id: "accounts", group: "You", label: "Accounts and providers", desc: "logins, keys, plan status", rows: ["api key", "login", "keychain", "provider", "plan"] },
   { id: "phone", group: "You", label: "Phone", desc: "pairing, what it may do", rows: ["pair", "qr", "iphone", "relay chat"] },
@@ -41,4 +41,11 @@ export function rowMatches(query: string, ...texts: string[]): boolean {
 /** Sections whose label, description, group or inner rows match the query. */
 export function filterSections(query: string): SectionDef[] {
   return SECTIONS.filter(s => rowMatches(query, s.label, s.desc, s.group, s.rows.join(" ")));
+}
+
+/** The rows of one page that the search keeps; a search that only matched the page keeps every row (#14268). */
+export function keptRows(query: string, section: string, words: Readonly<Record<string, string>>): ReadonlySet<string> {
+  const keys = Object.keys(words);
+  const hits = keys.filter(k => rowMatches(query, section, words[k] ?? ""));
+  return new Set(hits.length ? hits : keys);
 }

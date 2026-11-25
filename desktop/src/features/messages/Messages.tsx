@@ -7,6 +7,7 @@ import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { Avatar, BrandGlyph, displayName } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 import { clock, when } from "../../shared/time";
+import { useEscape } from "../../v2/ui/useEscape";
 
 type Msg = { id: number; ts: number; from: string; to: string; project: string; text: string };
 
@@ -124,6 +125,8 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
   const [peers, setPeers] = useState<Peer[]>([]);
   const [openRuns, setOpenRuns] = useState<Record<string, boolean>>({});
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  // #14268: Escape closes the recipient list
+  useEscape(() => setCompose(c => ({ ...c, picking: false })), compose.picking);
 
   useEffect(() => {
     let alive = true;
@@ -217,29 +220,34 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
     .filter(p => p.session !== me && !isSynthetic(p.session))
     .sort((a, b) => (a.session.startsWith("claude:trantor-duty") || a.session === "claude:fleet" ? -1 : 0) - (b.session.startsWith("claude:trantor-duty") || b.session === "claude:fleet" ? -1 : 0) || a.session.localeCompare(b.session));
 
+  const pickList = startable.filter(p => !pickQ.trim() || p.session.toLowerCase().includes(pickQ.trim().toLowerCase()));
+  const startWith = (session: string) => { setCompose({ picking: false, to: session }); setSel(null); setDraft(""); };
+
   return (
     <div className="tr-pane flex h-full flex-col">
       <header className="px-10 pt-8 pb-5">
         <h1 className="tr-page-title">Messages</h1>
-        <p className="tr-page-sub">Every conversation on the bus — and you can step into any of them.</p>
+        <p className="tr-page-sub">Every conversation on the bus, and you can step into any of them.</p>
       </header>
 
       <div className="flex min-h-0 flex-1">
         {/* conversation list */}
         <aside className="w-[300px] shrink-0 overflow-y-auto border-r border-[var(--color-tr-edge)] px-4 pb-6">
-          <button onClick={() => setCompose(c => ({ picking: !c.picking, to: null }))}
+          <button onClick={() => setCompose(c => ({ picking: !c.picking, to: null }))} aria-expanded={compose.picking}
             className="tr-card-ghost mb-2 flex w-full items-center justify-center gap-2 p-2.5 text-[13px]">
             + New message
           </button>
           {compose.picking && (
             <div className="tr-card mb-3 max-h-72 overflow-y-auto p-1.5">
               <div className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.13em] text-[var(--color-tr-muted)]/60">To</div>
-              <input autoFocus value={pickQ} onChange={e => setPickQ(e.target.value)}
+              <input autoFocus value={pickQ} onChange={e => setPickQ(e.target.value)} aria-label="Filter sessions"
+                     onKeyDown={e => { if (e.key === "Enter" && pickList[0]) { e.preventDefault(); startWith(pickList[0].session); } }}
                      placeholder="Filter sessions…" className="tr-input mb-1.5 w-full" />
               {startable.length === 0 && <div className="p-3 text-[12px] text-[var(--color-tr-muted)]">No live sessions on this hub.</div>}
-              {startable.filter(p => !pickQ.trim() || p.session.toLowerCase().includes(pickQ.trim().toLowerCase())).map(p => (
+              {startable.length > 0 && pickList.length === 0 && <div className="p-3 text-[12px] text-[var(--color-tr-muted)]">No session matches that filter.</div>}
+              {pickList.map(p => (
                 <button key={p.session}
-                  onClick={() => { setCompose({ picking: false, to: p.session }); setSel(null); setDraft(""); }}
+                  onClick={() => startWith(p.session)}
                   className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.04]">
                   <Avatar name={p.session} llm={p.llm} size={22} />
                   <span className="min-w-0 flex-1">
@@ -258,7 +266,7 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
             const last = t.msgs[t.msgs.length - 1];
             const on = t.key === (open?.key ?? "");
             return (
-              <button key={t.key} onClick={() => { setSel(t.key); setCompose({ picking: false, to: null }); }}
+              <button key={t.key} aria-current={on ? "true" : undefined} onClick={() => { setSel(t.key); setCompose({ picking: false, to: null }); }}
                 className={`flex w-full items-center gap-3 rounded-xl p-2.5 text-left ${
                   on ? "bg-white/[0.06]" : "hover:bg-white/[0.03]"}`}>
                 {t.kind === "dm"
@@ -289,7 +297,7 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
           })}
           {threads.length > 0 && (
             <div className="px-2 pt-3 text-[11px] leading-relaxed text-[var(--color-tr-muted)]/60">
-              Overseer and system notices aren't conversations — they live in the Overseer view.
+              Overseer and system notices aren't conversations, they live in the Overseer view.
             </div>
           )}
         </aside>
@@ -428,7 +436,7 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
                 </div>
               ) : open.kind === "dm" ? (
                 <div className="border-t border-[var(--color-tr-edge)] px-6 py-3 text-[12px] text-[var(--color-tr-muted)]">
-                  These are the hub's own announcements — it doesn't read replies. To act on one, message the duty seat.
+                  These are the hub's own announcements and it doesn't read replies. To act on one, message the duty seat.
                 </div>
               ) : (
                 <div className="border-t border-[var(--color-tr-edge)] px-6 py-3 text-[12px] text-[var(--color-tr-muted)]">

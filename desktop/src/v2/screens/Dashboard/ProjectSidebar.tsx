@@ -66,7 +66,7 @@ export function ProjectSidebar({ projects, cards, open, peers, interrupted, onNa
       <label htmlFor="v2-dash-filter" className="sr-only">Filter projects</label>
       <div className="flex items-center gap-1.5 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2 py-1.5">
         <Search size={13} aria-hidden className="text-[var(--v2-muted)]" />
-        <input id="v2-dash-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder={`Filter ${projects.length} projects`}
+        <input id="v2-dash-filter" value={filter} onChange={e => setFilter(e.target.value)} onKeyDown={e => { if (e.key === "Escape" && filter) { e.preventDefault(); setFilter(""); } }} placeholder={`Filter ${projects.length} projects`}
           className="min-w-0 flex-1 bg-transparent text-v2-body text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
       </div>
       {error && <p role="alert" className="m-0 px-2 pt-2 text-v2-small text-[var(--v2-bad)]">{error}</p>}

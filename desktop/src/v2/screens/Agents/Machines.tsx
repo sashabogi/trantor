@@ -38,7 +38,7 @@ export function Machines({ report, views }: { report: MachinesHealthReport | nul
               <Gauge label="CPU" pct={m.cpuPct} />
               <Gauge label="memory" pct={m.memTotal ? (m.memUsed / m.memTotal) * 100 : 0} />
             </div>
-            <div className="mt-1.5 text-v2-small text-[var(--v2-muted)]">{machineHealthLine(m)} · beat {ago(m.ts)} ago</div>
+            <div className="mt-1.5 text-v2-small text-[var(--v2-muted)]">{machineHealthLine(m)} · last report {ago(m.ts)} ago</div>
           </div>
         );
       })}

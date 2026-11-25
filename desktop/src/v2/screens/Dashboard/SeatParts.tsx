@@ -1,13 +1,10 @@
 // Pieces both Working views share: the card chip, the may-do chip, and the seat's icon actions (#13986).
-import { Eye, MessageSquare, Repeat, Square } from "lucide-react";
+import { Eye, MessageSquare, SlidersHorizontal } from "lucide-react";
 import type { Navigate } from "../../routes";
 import { Chip } from "../../ui/Chip";
 import { IconButton } from "../../ui/IconButton";
 import { seatLabel } from "../../ui/identity";
 import type { Seat } from "./model";
-
-export const NO_STOP = "Stopping a seat from the app needs a hub stop endpoint that does not exist yet";
-export const NO_SWAP = "Swapping a seat's model needs a hub swap endpoint that does not exist yet";
 
 export function CardChip({ seat }: { seat: Seat }) {
   if (!seat.card) return <span className="text-v2-body text-[var(--v2-muted)]">{seat.status || "no card"}</span>;
@@ -34,8 +31,10 @@ export function SeatActions({ seat, onNavigate }: { seat: Seat; onNavigate: Navi
       <IconButton label={`Message ${name}`} title="Send it a message" onClick={() => onNavigate("bus", seat.project)}>
         <MessageSquare size={14} aria-hidden />
       </IconButton>
-      <IconButton label={`Swap ${name} for another model`} title={NO_SWAP} disabled><Repeat size={14} aria-hidden /></IconButton>
-      <IconButton label={`Stop ${name}`} title={NO_STOP} disabled><Square size={14} aria-hidden /></IconButton>
+      {/* #14268: swap and stop live on the Agents screen, so this opens it instead of a dead pair of buttons */}
+      <IconButton label={`Manage ${name}`} title="Swap or stop this seat on the Agents screen" onClick={() => onNavigate("agents", seat.project)}>
+        <SlidersHorizontal size={14} aria-hidden />
+      </IconButton>
     </span>
   );
 }

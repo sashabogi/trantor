@@ -116,4 +116,19 @@ describe("UsageScreen", () => {
     expect(created).toHaveLength(1);
     expect(await created[0].text()).toContain("AGENT,VENDOR,MODELS,MACHINES,TURNS");
   });
+
+  it("Export all says why it is off when nothing is recorded, and the plain-words copy has no jargon (#14268)", async () => {
+    const empty: Learning = { ...learning(), agents: [], lessons: { global: [], byAgent: {}, byProject: {}, projects: [] } };
+    await mount("", null, empty);
+    const all = [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "Export all");
+    expect(all?.disabled).toBe(true);
+    expect(all?.title).toBe("Nothing to export in this range");
+    expect(host.textContent).not.toMatch(/non-zero|shown as unknown/);
+  });
+
+  it("the by-project name carries a title saying it filters (#14268)", async () => {
+    await mount();
+    const names = [...host.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")].filter(b => b.title === "Filter everything to this project");
+    for (const b of names) expect(b.title).toBeTruthy();
+  });
 });

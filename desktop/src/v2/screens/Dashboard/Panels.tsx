@@ -28,9 +28,9 @@ export function StatTiles({ econ, projects, cards, live }: { econ: Economics | n
   const notional = (kinds["subagent-notional"]?.usd ?? 0) + (kinds["orchestrator-notional"]?.usd ?? 0);
   return (
     <div className="flex gap-3">
-      <Tile label="Saved vs frontier" value={life ? `$${life.saved_usd.toFixed(0)}` : "—"}
+      <Tile label="Saved vs frontier" value={life ? `$${life.saved_usd.toFixed(0)}` : "n/a"}
         sub={life ? `$${life.cost_usd.toFixed(2)} spent · ${life.calls.toLocaleString()} calls` : "no ledger on this machine"} />
-      <Tile label="Claude, notional" value={notional ? `$${Math.round(notional).toLocaleString()}` : "—"} sub="plan-covered, never billed" />
+      <Tile label="Claude, notional" value={notional ? `$${Math.round(notional).toLocaleString()}` : "n/a"} sub="plan-covered, never billed" />
       <Tile label="Fleet" value={`${projects} projects`} sub={`${live} live seat${live === 1 ? "" : "s"} · ${cards.toLocaleString()} cards`} />
     </div>
   );
@@ -80,7 +80,6 @@ function HoldCard({ hold, d }: { hold: FileHold; d: Decisions }) {
       <div className="mt-2.5 flex flex-wrap gap-1.5">
         <Button disabledReason={off} onClick={() => void d.decideHold(hold, "go")}>{seatLabel(hold.session)} goes first</Button>
         <Button disabledReason={off} onClick={() => void d.decideHold(hold, "nogo")}>{seatLabel(hold.other)} goes first</Button>
-        <Button variant="quiet" disabledReason="Comparing both changes needs a diff API the hub does not have yet">Compare both changes</Button>
       </div>
     </div>
   );

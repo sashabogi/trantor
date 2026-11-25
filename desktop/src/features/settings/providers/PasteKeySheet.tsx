@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ExternalLink, KeyRound, Loader2, X } from "lucide-react";
 import { dictGet } from "../../../shared/dict";
+import { useEscape } from "../../../v2/ui/useEscape";
 import type { ProviderAccountsApi, ProviderStatus } from "./providerStatus";
 
 type KeyGuide = { where: string; url: string; steps: string[] };
@@ -30,6 +31,8 @@ export function PasteKeySheet({ provider, api, onClose, onSaved }: {
   const [key, setKey] = useState("");
   const [phase, setPhase] = useState<"idle" | "verifying" | "saving">("idle");
   const [error, setError] = useState("");
+  // #14268: Escape closes the sheet unless a key is being verified or saved
+  useEscape(() => { if (phase === "idle") onClose(); });
   const guide = dictGet(KEY_GUIDES, provider.provider) ?? fallbackGuide(provider);
 
   const submit = async () => {
@@ -58,7 +61,7 @@ export function PasteKeySheet({ provider, api, onClose, onSaved }: {
             <h2 id="paste-key-title" className="text-[15px] font-semibold">Connect {provider.label} with an API key</h2>
             <p className="mt-0.5 text-[12px] text-[var(--color-tr-muted)]">The key is verified live before Trantor saves it to <code>~/.agent-bus/.env</code>.</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close paste key sheet" className="p-1.5 text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]"><X size={15} /></button>
+          <button type="button" onClick={onClose} aria-label="Close paste key sheet" title="Close" className="p-1.5 text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]"><X size={15} /></button>
         </div>
 
         <div className="mt-5 rounded-xl border border-[var(--color-tr-edge)] bg-white/[0.02] p-4">
@@ -73,10 +76,11 @@ export function PasteKeySheet({ provider, api, onClose, onSaved }: {
 
         <label className="mt-4 block text-[12px] text-[var(--color-tr-muted)]">
           API key
-          <input type="password" value={key} onChange={e => setKey(e.target.value)} autoComplete="off" spellCheck={false}
+          <input type="password" value={key} onChange={e => setKey(e.target.value)} onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (phase === "idle") void submit(); } }}
+               autoComplete="off" spellCheck={false}
                  placeholder={`Paste ${provider.label} key`} className="tr-input mt-1.5 w-full" />
         </label>
-        {error ? <p role="alert" className="mt-2 text-[12px] text-[var(--color-tr-fail)]">Verification failed — {error}. Nothing was saved.</p> : null}
+        {error ? <p role="alert" className="mt-2 text-[12px] text-[var(--color-tr-fail)]">Verification failed: {error}. Nothing was saved.</p> : null}
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={onClose} disabled={phase !== "idle"} className="tr-input disabled:opacity-50">Cancel</button>
           <button type="button" onClick={() => void submit()} disabled={!key.trim() || phase !== "idle"}

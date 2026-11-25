@@ -5,6 +5,7 @@ import { Overseer } from "../../../features/overseer/Overseer";
 import { AgentsPane } from "../../../features/settings/agents/AgentsPane";
 import { seatName } from "../../../features/workspace/paneTargets";
 import { Button, IconButton, type ScreenProps } from "../../index";
+import { walkSiblings } from "../../ui/arrowKeys";
 import { useCrew } from "../Workspace/useCrew";
 import { RosterTab } from "./RosterTab";
 import { OverseerColumn } from "./OverseerColumn";
@@ -51,8 +52,9 @@ export function AgentsScreen({ client, project, onNavigate }: ScreenProps) {
     <div className="flex h-full flex-col gap-3 overflow-y-auto px-5 py-4">
       <Header project={project} data={data} crew={crew} />
       <div role="tablist" aria-label="Agents sections" className="flex gap-1 border-b border-[var(--v2-edge)]">
-        {TABS.map(t => (
-          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
+        {TABS.map((t, i) => (
+          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1} onClick={() => setTab(t.id)}
+            onKeyDown={e => walkSiblings(e, i, to => { const next = TABS[to]; if (next) setTab(next.id); })}
             className={`border-0 border-b-2 bg-transparent px-3 py-2 text-v2-base ${tab === t.id ? "border-[var(--v2-accent)] text-[var(--v2-text)]" : "border-transparent text-[var(--v2-muted)]"}`}>{t.label}</button>
         ))}
       </div>

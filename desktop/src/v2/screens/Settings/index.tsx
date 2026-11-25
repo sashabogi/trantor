@@ -55,9 +55,9 @@ type PageProps = {
 
 function Page({ id, props, data, query, onNavigate }: PageProps) {
   switch (id) {
-    case "general": return <GeneralPage />;
-    case "notifications": return <NotificationsPage />;
-    case "keyboard": return <KeyboardPage />;
+    case "general": return <GeneralPage query={query} />;
+    case "notifications": return <NotificationsPage query={query} />;
+    case "keyboard": return <KeyboardPage query={query} />;
     case "accounts": return <AccountsPage project={props.project || data.projects[0] || ""} />;
     case "phone": return <PhoneCard hubBase={data.hubBase} />;
     case "agents": return <AgentsPage />;

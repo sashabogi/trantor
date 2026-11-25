@@ -1,7 +1,6 @@
 // Static policy copy under the dials, from the artboard (#13994).
-import { Lock } from "lucide-react";
+import { Check, Lock } from "lucide-react";
 import { Chip } from "../../ui/Chip";
-import { Checkbox } from "../../ui/Checkbox";
 import { Section } from "../../ui/Section";
 
 const NEVER_AUTO = [
@@ -32,19 +31,19 @@ export function AlwaysAsks() {
 
 export function WorkingAgreements() {
   return (
-    <Section title="Working agreements" sub="Written into every seat's contract. Code that breaks one is the bug."
+    <Section title="Working agreements" sub="Written into every seat's contract. Code that breaks one is the bug. They are read only here."
       actions={<Chip mono>from docs/BUILD-DOCTRINE.md</Chip>}>
-      <div className="flex flex-col gap-2.5">
+      <ul className="m-0 flex list-none flex-col gap-2.5 p-0" title="Edited in BUILD-DOCTRINE.md, not here">
         {AGREEMENTS.map(a => (
-          <label key={a.title} className="flex items-start gap-2.5" title="Edited in BUILD-DOCTRINE.md, not here">
-            <Checkbox checked disabled readOnly aria-label={`${a.title}, edited in BUILD-DOCTRINE.md`} className="mt-[3px]" />
+          <li key={a.title} className="flex items-start gap-2.5">
+            <Check size={14} aria-hidden="true" className="mt-[3px] shrink-0 text-[var(--v2-ok)]" />
             <span className="flex flex-col">
               <span className="text-v2-base text-[var(--v2-text)]">{a.title}</span>
               <span className="text-v2-body text-[var(--v2-muted)]">{a.body}</span>
             </span>
-          </label>
+          </li>
         ))}
-      </div>
+      </ul>
     </Section>
   );
 }

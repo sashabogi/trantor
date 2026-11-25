@@ -6,6 +6,7 @@ import { Avatar } from "../../ui/Avatar";
 import { seatLabel } from "../../ui/identity";
 import { ProjectTile } from "../../ui/ProjectTile";
 import { Section } from "../../ui/Section";
+import { walkSiblings } from "../../ui/arrowKeys";
 import { Seg } from "../../ui/Seg";
 import { seatsFor, seatTabs, seatTime, type QueueItem, type Seat } from "./model";
 import { CardChip, MayDo, SeatActions } from "./SeatParts";
@@ -18,14 +19,17 @@ type Props = {
 };
 
 function Tabs({ seats, tab, setTab }: { seats: Seat[]; tab: string; setTab: (t: string) => void }) {
+  const ids = ["", ...seatTabs(seats).map(t => t.project)];
   const cls = (on: boolean) => `inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-v2-body ${on ? "bg-[var(--v2-hover)] text-[var(--v2-text)]" : "text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`;
   return (
     <div role="tablist" aria-label="Projects with seats" className="flex flex-wrap gap-1 border-b border-[var(--v2-edge)] px-3 py-2">
-      <button type="button" role="tab" aria-selected={tab === ""} onClick={() => setTab("")} className={cls(tab === "")}>
+      <button type="button" role="tab" aria-selected={tab === ""} tabIndex={tab === "" ? 0 : -1} onClick={() => setTab("")} className={cls(tab === "")}
+        onKeyDown={e => walkSiblings(e, 0, to => setTab(ids[to] ?? ""))}>
         All <span className="v2-mono">{seats.length}</span>
       </button>
-      {seatTabs(seats).map(t => (
-        <button key={t.project} type="button" role="tab" aria-selected={tab === t.project} onClick={() => setTab(t.project)} className={cls(tab === t.project)}>
+      {seatTabs(seats).map((t, i) => (
+        <button key={t.project} type="button" role="tab" aria-selected={tab === t.project} tabIndex={tab === t.project ? 0 : -1} onClick={() => setTab(t.project)} className={cls(tab === t.project)}
+          onKeyDown={e => walkSiblings(e, i + 1, to => setTab(ids[to] ?? ""))}>
           <ProjectTile name={t.project} size={14} />{t.project} <span className="v2-mono">{t.count}</span>
         </button>
       ))}
