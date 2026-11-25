@@ -1,7 +1,7 @@
 // Trantor 2.0 Code and Git (#13988): icon bar, tabs, source control with history and changes, branch
 // picker, PR and merge-conflict tabs. Real data from the classic git and file commands only.
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { takeOpenIntent } from "../../shell/openIntent";
+import { takeOpenIntent, watchOpenIntent } from "../../shell/openIntent";
 import type { Card } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
 import { BottomPanel } from "../../ui/BottomPanel";
@@ -23,6 +23,7 @@ import { Toolbar, type ScmView } from "./Toolbar";
 import { sidebarVisible } from "./model";
 import { useScopeGit, type ScopeSnapshot, type ScopeState } from "./useScopeGit";
 import { useSeats } from "./useSeats";
+import { useCodeCommands } from "./useCodeCommands";
 import { useTabs } from "./useTabs";
 
 const FileEditor = lazy(() => import("./FileEditor"));
@@ -66,15 +67,19 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   // #13987/#14044 drill: the Workspace source control sidebar leaves a note here; take it once per project.
   const { open: openTab, activate: activateTab } = tabs;
   useEffect(() => {
-    const intent = takeOpenIntent(project);
-    if (!intent) return;
-    const seat = intent.seat ?? null;
-    setScope(seat);
-    setKey(null);
-    if (intent.kind === "file") openTab({ id: `file:${seat ?? ""}:${intent.path}`, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
-    else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
-    else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
-    else activateTab("source");
+    const apply = () => {
+      const intent = takeOpenIntent(project);
+      if (!intent) return;
+      const seat = intent.seat ?? null;
+      setScope(seat);
+      setKey(null);
+      if (intent.kind === "file") openTab({ id: `file:${seat ?? ""}:${intent.path}`, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
+      else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
+      else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
+      else activateTab("source");
+    };
+    apply();
+    return watchOpenIntent(project, apply);
   }, [project, openTab, activateTab]);
   // #14084 drill: a file with no uncommitted change has no diff to land on, so its tab opens instead of an unrelated change.
   const [wantChange, setWantChange] = useState<string | null>(null);
@@ -98,6 +103,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     setSide(v);
     setOverride(true);
   };
+  useCodeCommands({ project, scope, refresh, onError: setNotice, showSearch: () => { setSide("search"); setOverride(true); } });
   const changeCount = snap ? new Set(snap.status.map(s => s.path)).size : 0;
 
   return (

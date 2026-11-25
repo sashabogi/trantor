@@ -41,7 +41,7 @@ describe("nav search", () => {
 
   it("lists only sections with real content", () => {
     expect(SECTIONS.map(s => s.id)).toEqual([
-      "general", "notifications", "accounts", "phone", "agents", "autonomy", "agreements", "extensions", "hub", "identity", "about",
+      "general", "notifications", "keyboard", "accounts", "phone", "agents", "autonomy", "agreements", "extensions", "hub", "identity", "about",
     ]);
   });
 

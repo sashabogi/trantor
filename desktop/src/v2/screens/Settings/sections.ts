@@ -1,6 +1,6 @@
 // The Settings nav model and its search, straight from the artboard's groups (#13994).
 export type SectionId =
-  | "general" | "notifications" | "accounts" | "phone"
+  | "general" | "notifications" | "keyboard" | "accounts" | "phone"
   | "agents" | "autonomy" | "agreements"
   | "extensions" | "hub" | "identity" | "about";
 
@@ -18,6 +18,7 @@ export const GROUPS = ["You", "Crew", "Code and git", "System"] as const;
 export const SECTIONS: readonly SectionDef[] = [
   { id: "general", group: "You", label: "General", desc: "app to open code in, updates", rows: ["open code in", "editor", "updates", "check now", "trantor 2.0", "onboarding"] },
   { id: "notifications", group: "You", label: "Notifications", desc: "when, how, spoken alerts", rows: ["notify", "alerts", "spoken"] },
+  { id: "keyboard", group: "You", label: "Keyboard", desc: "every shortcut, grouped", rows: ["shortcuts", "keys", "chord", "command palette", "go to file", "quick open"] },
   { id: "accounts", group: "You", label: "Accounts and providers", desc: "logins, keys, plan status", rows: ["api key", "login", "keychain", "provider", "plan"] },
   { id: "phone", group: "You", label: "Phone", desc: "pairing, what it may do", rows: ["pair", "qr", "iphone", "relay chat"] },
   { id: "agents", group: "Crew", label: "Agents and harnesses", desc: "installed CLIs, launch commands", rows: ["installed", "default agent", "launch command", "codex", "claude"] },

@@ -2,7 +2,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { Maximize2, Minimize2, PanelBottomOpen, X } from "lucide-react";
 import { useShellMode } from "../../shell/shellMode";
-import { clampHeight, useBottomPanelState, type BottomPanelTab } from "./state";
+import { BOTTOM_PANEL_EVENT, clampHeight, useBottomPanelState, type BottomPanelTab } from "./state";
 import { ResizeHandle } from "./ResizeHandle";
 
 type PanelTab = { id: BottomPanelTab; label: string; body: ReactNode };
@@ -30,6 +30,17 @@ export function BottomPanel({ terminal, output, problems }: { terminal?: ReactNo
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [tabs.length, state.toggleOpen]);
+
+  useEffect(() => {
+    if (!tabs.length) return;
+    const onAction = (event: Event) => {
+      if (!(event instanceof CustomEvent)) return;
+      if (event.detail === "toggle") state.toggleOpen();
+      else if (event.detail === "show-terminal") { state.setOpen(true); state.setActiveTab("terminal"); }
+    };
+    window.addEventListener(BOTTOM_PANEL_EVENT, onAction);
+    return () => window.removeEventListener(BOTTOM_PANEL_EVENT, onAction);
+  }, [tabs.length, state.toggleOpen, state.setOpen, state.setActiveTab]);
 
   if (!tabs.length) return null;
   if (!state.open) return <OpenToggle onOpen={() => state.setOpen(true)} />;

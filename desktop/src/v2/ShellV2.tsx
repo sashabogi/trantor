@@ -7,6 +7,7 @@ import { isLensScreen, type Navigate, type Screen, type ScreenProps } from "./ro
 import { MODE_CONFIG, saveMode, useShellMode, type Mode } from "./shell/shellMode";
 import { useShellData } from "./shell/useShellData";
 import { TopBar } from "./shell/TopBar";
+import { ShortcutLayer } from "./shell/ShortcutLayer";
 import { AgentCliBanner } from "./shell/AgentCliBanner";
 import { Rail } from "./shell/Rail";
 import { BottomBar } from "./shell/BottomBar";
@@ -115,6 +116,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
           onJumpProject={p => { setPalette(null); onNavigate(landing, p); }}
           onOpenCard={p => { setPalette(null); onNavigate("board", p); }} />
       )}
+      <ShortcutLayer project={data.active} screen={screen} mode={mode} onMode={onMode} onNavigate={onNavigate} onSearch={togglePalette} />
     </div>
   );
 }

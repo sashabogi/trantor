@@ -4,6 +4,7 @@ import { Blocks, Bot, ChevronsLeft, ChevronsRight, FolderOpen, Gauge, Inbox, Lay
 import { ProjectTile } from "../ui/ProjectTile";
 import { PRESENCE_COLOR } from "../ui/identity";
 import { isLensScreen, type Navigate, type Screen } from "../routes";
+import { useRegisterCommands } from "./commands";
 import { MODE_CONFIG, useShellMode } from "./shellMode";
 
 function readExpanded(key: string) {
@@ -62,6 +63,7 @@ export function Rail({ screen, project, live, unread, needsYou, onNavigate }: Ra
     setPicked(current => ({ ...current, [railKey]: next }));
   };
   const action = expanded ? "Collapse the sidebar" : "Expand the sidebar";
+  useRegisterCommands([{ id: "view.rail", title: expanded ? "Collapse main rail" : "Expand main rail", group: "View", run: toggle }]);
   return (
     <nav aria-label="Primary" data-expanded={expanded} className={`flex ${expanded ? "w-[200px] items-stretch px-2" : "w-[58px] items-center"} shrink-0 flex-col gap-1 overflow-y-auto overflow-x-hidden border-r border-[var(--v2-edge)] bg-[var(--v2-chrome)] pt-2.5`}>
       {FLEET.map(f => {

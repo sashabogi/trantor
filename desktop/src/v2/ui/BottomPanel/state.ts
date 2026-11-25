@@ -12,6 +12,13 @@ export const DEFAULT_HEIGHT = 240;
 export const MAX_FRACTION = 0.7;
 export const KEY_STEP = 16;
 
+export const BOTTOM_PANEL_EVENT = "v2-bottom-panel";
+export type BottomPanelAction = "toggle" | "show-terminal";
+/** Asks the mounted bottom panel to act; nothing happens when no panel is mounted. */
+export function sendBottomPanel(action: BottomPanelAction) {
+  window.dispatchEvent(new CustomEvent<BottomPanelAction>(BOTTOM_PANEL_EVENT, { detail: action }));
+}
+
 export const maxHeight = (column: number): number => Math.max(MIN_HEIGHT, Math.floor(column * MAX_FRACTION));
 export const clampHeight = (height: number, column: number): number =>
   Math.min(maxHeight(column), Math.max(MIN_HEIGHT, Math.round(height)));

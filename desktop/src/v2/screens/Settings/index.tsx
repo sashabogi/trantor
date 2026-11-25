@@ -4,6 +4,7 @@ import type { ScreenProps } from "../../routes";
 import { Button } from "../../ui/Button";
 import { AutonomyPage } from "./AutonomyPage";
 import { AboutPage, GeneralPage, NotificationsPage } from "./GeneralPages";
+import { KeyboardPage } from "./KeyboardPage";
 import { WorkingAgreements } from "./PolicyCards";
 import { AccountsPage, AgentClisCard, AgentsPage, HubPage, IdentityPage, PhoneCard } from "./SystemPages";
 import { SettingsNav } from "./SettingsNav";
@@ -50,6 +51,7 @@ function Page({ id, props, data, query, onNavigate }: PageProps) {
   switch (id) {
     case "general": return <GeneralPage />;
     case "notifications": return <NotificationsPage />;
+    case "keyboard": return <KeyboardPage />;
     case "accounts": return <AccountsPage project={props.project || data.projects[0] || ""} />;
     case "phone": return <PhoneCard hubBase={data.hubBase} />;
     case "agents": return <AgentsPage />;
