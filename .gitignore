@@ -14,7 +14,7 @@ id_rsa*
 .scratch/
 # per-seat artefacts that must leave the repo but never ~/.agent-bus (#6154)
 .agent-bus-out/
-graft/
+/graft/
 .ignore
 
 # Per-checkout stamp written by `trantor connect` — local, never shared (#6448 swept it in by accident)
