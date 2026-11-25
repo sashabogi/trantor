@@ -15,4 +15,17 @@ describe("ChatNoTray", () => {
     expect(loadTrayOpen()).toBe(false);
     expect(host.querySelector("[data-v2-chat]")?.textContent).toBe("chat");
   });
+
+  it("rides the chat's left edge once two prompts exist (#14241)", () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const host = document.createElement("div");
+    act(() => {
+      createRoot(host).render(<ChatNoTray onOpenChange={() => {}}>
+        <div data-prompt-id="0">one</div><div data-prompt-id="2">two</div>
+      </ChatNoTray>);
+    });
+    const row = host.firstElementChild;
+    expect(row?.firstElementChild?.tagName).toBe("NAV");
+    expect(row?.children[1]?.getAttribute("data-v2-chat")).not.toBeNull();
+  });
 });

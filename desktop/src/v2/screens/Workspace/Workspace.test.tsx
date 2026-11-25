@@ -97,12 +97,14 @@ const typeInto = (el: HTMLInputElement | HTMLTextAreaElement | null, text: strin
   Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, text);
   el.dispatchEvent(new Event("input", { bubbles: true }));
 });
-const chipFor = (name: string) => [...host.querySelectorAll("button[aria-pressed]")].find(b => b.textContent?.includes(name)) ?? null;
+// #14241: seats render as role=tab joined to the pane below, so the strip's queries find tabs.
+const chipFor = (name: string) => [...host.querySelectorAll('[role="tab"]')].find(b => b.textContent?.includes(name)) ?? null;
 const terminalAgents = () => [...host.querySelectorAll("[data-testid=terminal]")].map(t => t.getAttribute("data-agent"));
 
 describe("seat strip", () => {
-  it("shows a chip per live seat of this project, the offline count and the add button", async () => {
+  it("shows a tab per live seat of this project, the offline count and the add button (#14241)", async () => {
     await mountScreen(fakeClient([]));
+    expect(host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')).toHaveLength(2);
     expect(chipFor("codex-8")?.textContent).toContain("working");
     expect(chipFor("glm-5")?.textContent).toContain("ready");
     expect(chipFor("kimi-9")).toBeNull();

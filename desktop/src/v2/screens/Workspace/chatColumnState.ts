@@ -1,5 +1,5 @@
 // Width and open state of the Workspace side columns (chat on the right, files on the left), persisted per user (#13987 drill).
-import { useCallback, useState } from "react";
+import { useCallback, useState, type RefObject } from "react";
 import { readMode } from "../../shell/shellMode";
 
 export const WIDTH_KEY = "trantor.v2.workspace.chatWidth";
@@ -26,6 +26,10 @@ export type ColumnConfig = {
 
 /** The widest a column may be: its fraction of the workspace, never below its minimum. */
 export const maxFor = (cfg: ColumnConfig, workspace: number): number => Math.max(cfg.min, Math.floor(workspace * cfg.maxFraction));
+
+// #13987 drill: the workspace is the flex parent; happy-dom and first paint report 0, so fall back to the window.
+export const workspaceWidth = (ref: RefObject<HTMLElement | null>): number =>
+  ref.current?.getBoundingClientRect().width || window.innerWidth;
 export const clampFor = (cfg: ColumnConfig, w: number, workspace: number): number =>
   Math.min(maxFor(cfg, workspace), Math.max(cfg.min, Math.round(w)));
 

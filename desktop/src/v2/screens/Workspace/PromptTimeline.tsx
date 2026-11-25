@@ -1,10 +1,10 @@
 // A thin column of ticks beside the chat: one per message the operator sent, read from the chat's DOM (#14075).
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type RefObject } from "react";
+// #14241: it rides the chat's left edge, centred mid-height, 20px hit rows.
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { when } from "../../../shared/time";
 import { activeIndex, readPrompts, samePrompts, showsTimeline, tickLabel, type PromptItem } from "./promptTicks";
 
 const SELECTOR = "[data-prompt-id]";
-const MAX_GAP = 28;
 
 function scrollerOf(el: HTMLElement, root: HTMLElement): HTMLElement | null {
   for (let n = el.parentElement; n && root.contains(n); n = n.parentElement) {
@@ -14,13 +14,10 @@ function scrollerOf(el: HTMLElement, root: HTMLElement): HTMLElement | null {
   return null;
 }
 
-type Frame = { top: number; height: number };
-
-/** Follows the chat DOM: the prompts in order, which one is on screen, and where the scroll area sits. */
+/** Follows the chat DOM: the prompts in order and which one is on screen. */
 function useTimeline(root: RefObject<HTMLElement | null>) {
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [active, setActive] = useState(0);
-  const [frame, setFrame] = useState<Frame | null>(null);
   const scroller = useRef<HTMLElement | null>(null);
   const sync = useCallback(() => {
     const host = root.current;
@@ -37,8 +34,6 @@ function useTimeline(root: RefObject<HTMLElement | null>) {
     if (!sc) return;
     const base = sc.getBoundingClientRect();
     setActive(activeIndex(els.map(e => e.getBoundingClientRect().top - base.top)));
-    const top = base.top - host.getBoundingClientRect().top;
-    setFrame(f => (f && f.top === top && f.height === base.height ? f : { top, height: base.height }));
   }, [root]);
   useEffect(() => {
     const host = root.current;
@@ -60,7 +55,7 @@ function useTimeline(root: RefObject<HTMLElement | null>) {
     const els = Array.from(root.current?.querySelectorAll<HTMLElement>(SELECTOR) ?? []);
     els.find(e => e.getAttribute("data-prompt-id") === id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [root]);
-  return { prompts, active, frame, jump };
+  return { prompts, active, jump };
 }
 
 const baseName = (p: string) => p.slice(p.lastIndexOf("/") + 1);
@@ -70,7 +65,7 @@ function Card({ prompt, onOpenChange }: { prompt: PromptItem; onOpenChange: (pat
   return (
     // No gap and real pointer events (#14084): the card must be reachable from its tick so a
     // file name can be clicked, and hover crossing from tick to card must not close it.
-    <div role="tooltip" className="absolute right-full top-1/2 z-30 w-60 -translate-y-1/2 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-left shadow-lg">
+    <div role="tooltip" className="absolute left-full top-1/2 z-30 w-60 -translate-y-1/2 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-left shadow-lg">
       <div className="text-[12px] leading-snug text-[var(--v2-text)]" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{prompt.text}</div>
       {prompt.ts !== undefined && <div className="mt-1 text-[10.5px] text-[var(--v2-muted)]">{when(prompt.ts)}</div>}
       {files.length > 0 && (
@@ -92,7 +87,7 @@ function Card({ prompt, onOpenChange }: { prompt: PromptItem; onOpenChange: (pat
 }
 
 export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLElement | null>; onOpenChange: (path: string) => void }) {
-  const { prompts, active, frame, jump } = useTimeline(root);
+  const { prompts, active, jump } = useTimeline(root);
   const [shown, setShown] = useState<number | null>(null);
   const [rove, setRove] = useState<number | null>(null);
   const ticks = useRef<Array<HTMLButtonElement | null>>([]);
@@ -105,12 +100,10 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
   };
   if (!showsTimeline(prompts.length)) return null;
   const tabbable = Math.min(rove ?? active, prompts.length - 1);
-  const style: CSSProperties = { maxHeight: prompts.length * MAX_GAP + 16 };
-  if (frame) { style.marginTop = frame.top; style.height = frame.height; }
   return (
-    <nav aria-label="Prompt timeline" style={style} className="flex w-4 shrink-0 flex-col items-center self-start py-2">
+    <nav aria-label="Prompt timeline" className="flex w-5 shrink-0 flex-col items-center justify-center self-stretch overflow-y-auto py-2">
       {prompts.map((p, i) => (
-        <div key={p.id} className="relative flex min-h-0 w-full flex-1 items-center justify-center"
+        <div key={p.id} className="relative flex h-5 w-full shrink-0 items-center justify-center"
           onMouseEnter={() => setShown(i)} onMouseLeave={() => setShown(null)}
           onFocus={() => { setShown(i); setRove(i); }}
           onBlur={e => {
@@ -120,9 +113,8 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
           <button type="button" ref={el => { ticks.current[i] = el; }} aria-label={tickLabel(i, prompts.length, p.text)}
             aria-current={i === active ? "true" : undefined} tabIndex={i === tabbable ? 0 : -1}
             onClick={() => jump(p.id)} onKeyDown={e => onKey(e, i)}
-            className="flex h-full min-h-3 w-full items-center justify-center">
-            <span aria-hidden className="block h-[2px] w-2.5 rounded-full"
-              style={{ background: i === active ? "var(--v2-accent)" : "var(--v2-edge-2)" }} />
+            className="flex h-full min-h-5 w-full items-center justify-center">
+            <span aria-hidden className={`block h-[2px] rounded-full ${i === active ? "w-[18px] bg-[var(--v2-accent)]" : "w-3.5 bg-[var(--v2-muted)]"}`} />
           </button>
           {shown === i && <Card prompt={p} onOpenChange={onOpenChange} />}
         </div>

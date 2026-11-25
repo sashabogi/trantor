@@ -7,8 +7,8 @@ import type { SeatInfo } from "../Code/model";
 import { useScopeGit } from "../Code/useScopeGit";
 import { IconButton } from "../../ui/IconButton";
 import { ScmSidebar } from "../../ui/ScmSidebar";
-import { FILES_COLUMN, FILES_MIN_WIDTH, FILES_RAIL_WIDTH, type useFilesColumn } from "./chatColumnState";
-import { ResizeHandle } from "./ResizeHandle";
+import { Splitter } from "../../ui/Splitter";
+import { FILES_COLUMN, FILES_MIN_WIDTH, FILES_RAIL_WIDTH, maxFor, workspaceWidth, type useFilesColumn } from "./chatColumnState";
 
 type Column = ReturnType<typeof useFilesColumn>;
 
@@ -49,7 +49,9 @@ export function FilesColumn(p: FilesColumnProps) {
   return (
     <aside aria-label="Source control" style={{ width: p.col.width, minWidth: FILES_MIN_WIDTH, maxWidth: "40%" }}
       className="relative flex min-h-0 shrink-0 flex-col border-r border-[var(--v2-edge)] bg-[var(--v2-side)]">
-      <ResizeHandle cfg={FILES_COLUMN} col={p.col} workspace={p.workspace} edge="right" label="Resize files" />
+      <Splitter orientation="columns" edge="right" label="Resize files" title="Drag to resize, double-click to reset"
+        value={p.col.width} min={FILES_COLUMN.min} max={maxFor(FILES_COLUMN, workspaceWidth(p.workspace))}
+        onChange={p.col.setWidth} onCommit={p.col.commitWidth} onReset={() => p.col.commitWidth(FILES_COLUMN.fallbackWidth)} />
       <ScmColumn {...p} />
     </aside>
   );

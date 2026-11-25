@@ -1,5 +1,7 @@
 // Trantor 2.0 Code and Git (#13988): icon bar, tabs, source control with history and changes, branch
 // picker, PR and merge-conflict tabs. Real data from the classic git and file commands only.
+// #14241: the source tab's list runs full height beside the panel column, so its shared state
+// (the picked file, the chips, the history rows) lives here instead of inside SourceControlTab.
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { takeOpenIntent, watchOpenIntent } from "../../shell/openIntent";
 import type { Card } from "../../../shared/api/client";
@@ -16,10 +18,11 @@ import { ChatRail } from "./ChatRail";
 import { ConflictView } from "./ConflictView";
 import { IconBar, type SideView } from "./IconBar";
 import { Sidebar } from "./Sidebar";
-import { SourceControlTab, type ChatActs } from "./SourceControlTab";
+import { SourceDetail, SourceListColumn, changeChips, type ChatActs } from "./SourceControlTab";
+import type { ChipFile } from "./DiffPane";
 import { TabBar, type CodeTab } from "./TabBar";
 import { Toolbar, type ScmView } from "./Toolbar";
-import { sidebarVisible } from "./model";
+import { pickChange, sidebarVisible, toRow, type HistoryRow } from "./model";
 import { useScopeGit, type ScopeSnapshot, type ScopeState } from "./useScopeGit";
 import { useSeats } from "./useSeats";
 import { useCodeCommands } from "./useCodeCommands";
@@ -48,9 +51,17 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const [conflictPath, setConflictPath] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [changeFocus, setChangeFocus] = useState<string | null>(null);
+  // #14241: the picked change lifts here so the list column and the diff column share it.
+  const [picked, setPicked] = useState<string | null>(null);
   const snap = state.kind === "ok" ? state.snap : null;
   const view: ScmView = viewPick ?? (snap?.seatBacked ? "history" : "changes");
   const visible = sidebarVisible(tabs.active.kind, override);
+  const chips = useMemo(() => (snap ? changeChips(snap) : []), [snap]);
+  const selectedChange = useMemo(() => pickChange(chips.map(c => c.path), picked, changeFocus), [chips, picked, changeFocus]);
+  const seatNames = useMemo(() => seats.map(s => s.seat), [seats]);
+  const rowCtx = useMemo(() => ({ seats: seatNames, branch: snap?.branch ?? null }), [seatNames, snap]);
+  const rows = useMemo(() => (snap?.log ?? []).map(c => toRow(c, rowCtx)), [snap, rowCtx]);
+  const [historyRows, setHistoryRows] = useState<HistoryRow[]>(rows);
 
   const addToChat = useCallback((text: string) => { setDraft(d => (d.trim() ? `${d}\n${text}` : text)); setChatOpen(true); }, []);
   const mode = useShellMode();
@@ -122,16 +133,28 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
         <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />
         {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
-        {/* #14071: the tab's body always fills the column, so the panel stays at the bottom under short content. */}
-        <div data-testid="code-main" className="flex min-h-0 flex-1 flex-col overflow-auto">
-          <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards} seats={seats.map(s => s.seat)}
-            selectedKey={key} focusChange={changeFocus} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
-            onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty} onError={setNotice}
-            liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
+        {/* #14241: the source tab's list runs full height on the left; every tab's body and the
+            bottom panel share the right column, so the panel sits under the diff only. */}
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {tabs.active.kind === "source" && snap && (
+            <SourceListColumn project={project} snap={snap} view={view} seats={seatNames} rows={rows} onRows={setHistoryRows}
+              selected={selectedChange} onSelect={setPicked} selectedKey={key} onSelectKey={setKey}
+              onMutated={refresh} onOpenConflict={openConflict} />
+          )}
+          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            {/* #14071: the tab's body always fills the column, so the panel stays at the bottom under short content. */}
+            <div data-testid="code-main" className="flex min-h-0 flex-1 flex-col overflow-auto">
+              <Main tab={tabs.active} client={client} project={project} snap={snap} state={state} view={view} cards={cards}
+                chips={chips} selectedChange={selectedChange} onPickChange={setPicked} historyRows={historyRows}
+                selectedKey={key} onSelectKey={setKey} acts={acts} onNavigate={onNavigate} onMutated={refresh} onOpenFile={openFile}
+                onOpenConflict={openConflict} conflictPath={conflictPath} reveal={reveal} markDirty={tabs.markDirty} onError={setNotice}
+                liveSeats={liveSeats} onAsk={addToChat} onSendToSeat={(seat, text) => { picker.onMessage(seat); addToChat(text); }} />
+            </div>
+            {/* #14080: keyed by project so one project never shows another project's shell. */}
+            <BottomPanel terminal={<Terminals key={project} project={project} />} output={<Output />}
+              problems={<Problems project={project} seat={scope} onOpen={openFile} />} />
+          </div>
         </div>
-        {/* #14080: keyed by project so one project never shows another project's shell. */}
-        <BottomPanel terminal={<Terminals key={project} project={project} />} output={<Output />}
-          problems={<Problems project={project} seat={scope} onOpen={openFile} />} />
       </div>
       <ChatRail client={client} project={project} peers={peers} open={chatOpen} onToggle={() => setChatOpen(o => !o)} draft={draft} onDraft={setDraft} want={chatWant} />
     </div>
@@ -140,7 +163,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
 
 type MainProps = {
   tab: CodeTab; client: ScreenProps["client"]; project: string; snap: ScopeSnapshot | null; state: ScopeState; view: ScmView; cards: Card[];
-  seats: string[]; selectedKey: string | null; focusChange: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: ScreenProps["onNavigate"];
+  chips: ChipFile[]; selectedChange: string | null; onPickChange: (path: string | null) => void; historyRows: HistoryRow[];
+  selectedKey: string | null; onSelectKey: (k: string) => void; acts: ChatActs; onNavigate: ScreenProps["onNavigate"];
   onMutated: () => void; onOpenFile: (p: string) => void; onOpenConflict: (p: string | null) => void; conflictPath: string | null;
   reveal: { tab: string; line: number; column?: number; nonce: number } | null;
   markDirty: (id: string, dirty: boolean) => void;
@@ -164,6 +188,8 @@ function Main(p: MainProps) {
   if (p.tab.kind === "conflict") {
     return <ConflictView project={p.project} snap={p.snap} path={p.conflictPath ?? conflictPaths(p.snap.status)[0] ?? null} onPick={path => p.onOpenConflict(path)} onResolved={p.onMutated} />;
   }
-  return <SourceControlTab project={p.project} snap={p.snap} view={p.view} cards={p.cards} seats={p.seats} selectedKey={p.selectedKey} focusChange={p.focusChange}
-    onSelectKey={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate} onMutated={p.onMutated} onError={p.onError} onOpenFile={p.onOpenFile} onOpenConflict={p.onOpenConflict} />;
+  return <SourceDetail project={p.project} snap={p.snap} view={p.view} cards={p.cards}
+    chips={p.chips} selected={p.selectedChange} onPick={p.onPickChange} historyRows={p.historyRows}
+    selectedKey={p.selectedKey} onSelectKey={p.onSelectKey} acts={p.acts} onNavigate={p.onNavigate}
+    onMutated={p.onMutated} onError={p.onError} onOpenFile={p.onOpenFile} />;
 }

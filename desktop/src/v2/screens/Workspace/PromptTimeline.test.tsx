@@ -169,4 +169,16 @@ describe("PromptTimeline", () => {
     await act(async () => { scroller.dispatchEvent(new Event("scroll")); });
     expect(buttons().map(b => b.getAttribute("aria-current"))).toEqual([null, null, "true"]);
   });
+
+  it("sits centred mid-height with 14x2 ticks in muted, the active one wider in accent (#14241)", async () => {
+    await mount([["0.0", "a"], ["2.0", "b"], ["4.0", "c"]]);
+    const nav = host.querySelector('nav[aria-label="Prompt timeline"]');
+    expect(nav?.className).toContain("justify-center");
+    const spans = buttons().map(b => b.querySelector("span"));
+    expect(spans[0]?.className).toContain("w-3.5");
+    expect(spans[0]?.className).toContain("bg-[var(--v2-muted)]");
+    expect(spans[2]?.className).toContain("w-[18px]");
+    expect(spans[2]?.className).toContain("bg-[var(--v2-accent)]");
+    expect(buttons()[0]?.parentElement?.className).toContain("h-5");
+  });
 });

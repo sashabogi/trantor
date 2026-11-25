@@ -68,11 +68,11 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
 export function ChatNoTray({ children, onOpenChange }: { children: ReactNode; onOpenChange: (path: string) => void }) {
   useState(() => { saveTrayOpen(false); return null; });
   const chat = useRef<HTMLDivElement | null>(null);
-  // The timeline sits beside the chat, so it never covers the scrollbar or the composer (#14075).
+  // #14241: the timeline rides the chat's left edge, so it never covers the scrollbar or the composer (#14075).
   return (
     <div className="flex min-h-0 flex-1">
-      <div ref={chat} data-v2-chat className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
       <PromptTimeline root={chat} onOpenChange={onOpenChange} />
+      <div ref={chat} data-v2-chat className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
     </div>
   );
 }

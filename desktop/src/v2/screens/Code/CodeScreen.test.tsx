@@ -85,6 +85,19 @@ describe("CodeScreen", () => {
     expect(panel?.matches('section[aria-label="Bottom panel"]') || panel?.querySelector('button[aria-label="Open bottom panel"]') != null).toBe(true);
   });
 
+  // #14241: the source tab's changes list runs full height, outside the column that holds the bottom panel.
+  it("the changes list is not inside the column that holds the bottom panel", async () => {
+    await mount();
+    const list = host.querySelector('[data-testid="source-list"]');
+    const main = host.querySelector('[data-testid="code-main"]');
+    const panelColumn = main?.parentElement ?? null;
+    expect(list).not.toBeNull();
+    expect(panelColumn?.contains(list)).toBe(false);
+    expect(panelColumn?.previousElementSibling).toBe(list);
+    expect(list?.textContent).toContain("Staged 1");
+    expect(main?.querySelector("[data-diff-scroll]")).not.toBeNull();
+  });
+
   it("folds the source control sidebar into the icon bar while the Source control tab is open", async () => {
     await mount();
     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain("Source control");
