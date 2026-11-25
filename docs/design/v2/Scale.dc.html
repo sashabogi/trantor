@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Type and radius scale, proposal</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0F12}
+a{color:#8AA8FF}a:hover{color:#B3C6FF}
+</style>
+</helmet>
+<div style="min-height: 1700px; background: #0E0F12; color: #E7E9EC; font-family: Inter, system-ui, sans-serif; font-size: 13px; padding: 44px 52px; box-sizing: border-box; display: flex; flex-direction: column; gap: 30px;">
+  <div style="max-width: 920px;">
+    <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #9AA0A8;">PROPOSAL · CARD #14208 · NOTHING HERE IS BUILT YET</div>
+    <h1 style="margin: 8px 0 0; font-size: 34px; font-weight: 650; letter-spacing: -0.02em;">One short list of text sizes and corners for 2.0</h1>
+    <p style="margin: 10px 0 0; color: #9AA0A8; font-size: 15px; line-height: 1.55;">Today every screen picks its own sizes: 18 text sizes and 12 corner roundings are in use. The proposal is 7 sizes and 5 corners, each with a name and a job. Half sizes round up, so the common text never gets smaller. The last row shows two real pieces of the app before and after.</p>
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;">
+    <section style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 6px;">
+      <h2 style="margin: 0 0 6px; font-size: 15px; font-weight: 600;">Text today: 18 sizes</h2>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">9px</span>
+        <span style="flex: 1; min-width: 0; font-size: 9px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">3 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">9.5px</span>
+        <span style="flex: 1; min-width: 0; font-size: 9.5px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">2 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">10px</span>
+        <span style="flex: 1; min-width: 0; font-size: 10px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">16 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">10.5px</span>
+        <span style="flex: 1; min-width: 0; font-size: 10.5px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">69 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">11px</span>
+        <span style="flex: 1; min-width: 0; font-size: 11px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">105 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">11.5px</span>
+        <span style="flex: 1; min-width: 0; font-size: 11.5px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">117 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">12px</span>
+        <span style="flex: 1; min-width: 0; font-size: 12px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">150 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">12.5px</span>
+        <span style="flex: 1; min-width: 0; font-size: 12.5px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">91 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">13px</span>
+        <span style="flex: 1; min-width: 0; font-size: 13px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">32 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">13.5px</span>
+        <span style="flex: 1; min-width: 0; font-size: 13.5px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">1 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">14px</span>
+        <span style="flex: 1; min-width: 0; font-size: 14px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">2 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">15px</span>
+        <span style="flex: 1; min-width: 0; font-size: 15px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">8 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">16px</span>
+        <span style="flex: 1; min-width: 0; font-size: 16px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">5 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">17px</span>
+        <span style="flex: 1; min-width: 0; font-size: 17px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">1 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">18px</span>
+        <span style="flex: 1; min-width: 0; font-size: 18px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">2 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">20px</span>
+        <span style="flex: 1; min-width: 0; font-size: 20px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">7 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">22px</span>
+        <span style="flex: 1; min-width: 0; font-size: 22px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">3 uses</span>
+      </div>
+      <div style="display: flex; align-items: baseline; gap: 12px; border-top: 1px solid #22252B; padding-top: 6px;">
+        <span style="width: 54px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">26px</span>
+        <span style="flex: 1; min-width: 0; font-size: 26px; color: #C4C8CE; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">1 uses</span>
+      </div>
+    </section>
+    <section style="background: #15171B; border: 1px solid #2E3A5A; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 6px;">
+      <h2 style="margin: 0 0 6px; font-size: 15px; font-weight: 600;">Proposed: 7 sizes</h2>
+      <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #22252B; padding: 10px 0 8px;">
+        <div style="display: flex; align-items: baseline; gap: 12px;">
+          <span style="width: 74px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #8AA8FF;">micro</span>
+          <span style="width: 44px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">10px</span>
+          <span style="flex: 1; min-width: 0; font-size: 10px; color: #E7E9EC; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 12px; color: #9AA0A8;">
+          <span style="width: 74px; flex-shrink: 0;"></span>
+          <span style="flex: 1; min-width: 0;">Capital labels, counts, line metadata</span>
+          <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px;">replaces 9, 9.5, 10 · 21 uses</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #22252B; padding: 10px 0 8px;">
+        <div style="display: flex; align-items: baseline; gap: 12px;">
+          <span style="width: 74px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #8AA8FF;">small</span>
+          <span style="width: 44px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">11px</span>
+          <span style="flex: 1; min-width: 0; font-size: 11px; color: #E7E9EC; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 12px; color: #9AA0A8;">
+          <span style="width: 74px; flex-shrink: 0;"></span>
+          <span style="flex: 1; min-width: 0;">Secondary text, chips, quiet buttons</span>
+          <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px;">replaces 10.5, 11 · 174 uses</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #22252B; padding: 10px 0 8px;">
+        <div style="display: flex; align-items: baseline; gap: 12px;">
+          <span style="width: 74px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #8AA8FF;">body</span>
+          <span style="width: 44px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">12px</span>
+          <span style="flex: 1; min-width: 0; font-size: 12px; color: #E7E9EC; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 12px; color: #9AA0A8;">
+          <span style="width: 74px; flex-shrink: 0;"></span>
+          <span style="flex: 1; min-width: 0;">Rows, buttons, inputs, descriptions</span>
+          <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px;">replaces 11.5, 12 · 267 uses</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #22252B; padding: 10px 0 8px;">
+        <div style="display: flex; align-items: baseline; gap: 12px;">
+          <span style="width: 74px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #8AA8FF;">base</span>
+          <span style="width: 44px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">13px</span>
+          <span style="flex: 1; min-width: 0; font-size: 13px; color: #E7E9EC; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 12px; color: #9AA0A8;">
+          <span style="width: 74px; flex-shrink: 0;"></span>
+          <span style="flex: 1; min-width: 0;">Primary text, navigation, row titles</span>
+          <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px;">replaces 12.5, 13, 13.5, 14 · 126 uses</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #22252B; padding: 10px 0 8px;">
+        <div style="display: flex; align-items: baseline; gap: 12px;">
+          <span style="width: 74px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #8AA8FF;">title</span>
+          <span style="width: 44px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">15px</span>
+          <span style="flex: 1; min-width: 0; font-size: 15px; color: #E7E9EC; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 12px; color: #9AA0A8;">
+          <span style="width: 74px; flex-shrink: 0;"></span>
+          <span style="flex: 1; min-width: 0;">Card and section titles</span>
+          <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px;">replaces 15, 16, 17 · 14 uses</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #22252B; padding: 10px 0 8px;">
+        <div style="display: flex; align-items: baseline; gap: 12px;">
+          <span style="width: 74px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #8AA8FF;">heading</span>
+          <span style="width: 44px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">20px</span>
+          <span style="flex: 1; min-width: 0; font-size: 20px; color: #E7E9EC; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 12px; color: #9AA0A8;">
+          <span style="width: 74px; flex-shrink: 0;"></span>
+          <span style="flex: 1; min-width: 0;">Page titles</span>
+          <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px;">replaces 18, 20, 22 · 12 uses</span>
+        </div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px; border-top: 1px solid #22252B; padding: 10px 0 8px;">
+        <div style="display: flex; align-items: baseline; gap: 12px;">
+          <span style="width: 74px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #8AA8FF;">display</span>
+          <span style="width: 44px; flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">26px</span>
+          <span style="flex: 1; min-width: 0; font-size: 26px; color: #E7E9EC; white-space: nowrap; overflow: hidden;">Notify me when something needs a human</span>
+        </div>
+        <div style="display: flex; gap: 12px; font-size: 12px; color: #9AA0A8;">
+          <span style="width: 74px; flex-shrink: 0;"></span>
+          <span style="flex: 1; min-width: 0;">One big number on a page</span>
+          <span style="flex-shrink: 0; font-family: 'JetBrains Mono', monospace; font-size: 11px;">replaces 26 · 1 uses</span>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;">
+    <section style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px;">
+      <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Corners today: 12 roundings</h2>
+      <div style="display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px;">
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 2px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">2px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">5 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 3px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">3px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">3 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 4px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">4px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">18 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 5px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">5px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">2 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 6px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">6px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">37 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 7px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">7px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">9 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 8px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">8px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">57 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 9px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">9px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">6 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 10px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">10px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">19 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 12px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">12px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">21 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 14px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">14px</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">2 uses</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 999px;"></div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C4C8CE;">full</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">49 uses</div>
+        </div>
+      </div>
+    </section>
+    <section style="background: #15171B; border: 1px solid #2E3A5A; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px;">
+      <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Proposed: 5 corners</h2>
+      <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px;">
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: rgba(138,168,255,0.16); border: 1px solid #2E3A5A; border-radius: 4px;"></div>
+          <div style="font-size: 12px; font-weight: 600; color: #8AA8FF;">xs <span style="font-family: 'JetBrains Mono', monospace; font-weight: 400; color: #9AA0A8;">4px</span></div>
+          <div style="font-size: 12px; color: #C4C8CE; line-height: 1.4;">Check boxes, key caps</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">replaces 2, 3, 4, 5</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: rgba(138,168,255,0.16); border: 1px solid #2E3A5A; border-radius: 6px;"></div>
+          <div style="font-size: 12px; font-weight: 600; color: #8AA8FF;">sm <span style="font-family: 'JetBrains Mono', monospace; font-weight: 400; color: #9AA0A8;">6px</span></div>
+          <div style="font-size: 12px; color: #C4C8CE; line-height: 1.4;">Chips, tags, inner segments</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">replaces 6, 7</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: rgba(138,168,255,0.16); border: 1px solid #2E3A5A; border-radius: 8px;"></div>
+          <div style="font-size: 12px; font-weight: 600; color: #8AA8FF;">md <span style="font-family: 'JetBrains Mono', monospace; font-weight: 400; color: #9AA0A8;">8px</span></div>
+          <div style="font-size: 12px; color: #C4C8CE; line-height: 1.4;">Buttons, inputs, dropdowns, rows, rail items</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">replaces 8, 9, 10 on rail items</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: rgba(138,168,255,0.16); border: 1px solid #2E3A5A; border-radius: 12px;"></div>
+          <div style="font-size: 12px; font-weight: 600; color: #8AA8FF;">lg <span style="font-family: 'JetBrains Mono', monospace; font-weight: 400; color: #9AA0A8;">12px</span></div>
+          <div style="font-size: 12px; color: #C4C8CE; line-height: 1.4;">Cards, menus, dialogs, sheets</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">replaces 10 on menus, 12, 14</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start;">
+          <div style="width: 72px; height: 44px; background: rgba(138,168,255,0.16); border: 1px solid #2E3A5A; border-radius: 999px;"></div>
+          <div style="font-size: 12px; font-weight: 600; color: #8AA8FF;">full <span style="font-family: 'JetBrains Mono', monospace; font-weight: 400; color: #9AA0A8;">full</span></div>
+          <div style="font-size: 12px; color: #C4C8CE; line-height: 1.4;">Pills, avatars, switches</div>
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">replaces full</div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 12px;">
+    <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #9AA0A8;">BEFORE AND AFTER · TWO REAL PIECES OF THE APP</div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;">
+      <section style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 18px;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600;">Today</h2>
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div>
+          <div style="font-size: 11px; color: #9AA0A8;">You</div>
+          <div style="margin-top: 2px; font-size: 20px; font-weight: 650;">Notifications</div>
+          <div style="margin-top: 4px; font-size: 12.5px; color: #9AA0A8;">when, how, spoken alerts</div>
+        </div>
+        <div style="background: #121317; border: 1px solid #22252B; border-radius: 12px;">
+          <div style="padding: 12px 14px; border-bottom: 1px solid #22252B;">
+            <div style="font-size: 13px; font-weight: 600;">Notifications</div>
+            <div style="margin-top: 2px; font-size: 11.5px; color: #9AA0A8;">Native, and deliberately narrow.</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 14px; border-bottom: 1px solid #22252B;">
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 13px; font-weight: 500;">Notify me when something needs a human</div>
+              <div style="margin-top: 2px; font-size: 12px; color: #9AA0A8;">Direct messages to you, verify gates opening, and crew seats going offline.</div>
+            </div>
+            <span style="font-size: 12px; font-weight: 500;">On</span>
+            <span style="position: relative; width: 36px; height: 20px; border-radius: 999px; background: #8AA8FF; flex-shrink: 0;"><span style="position: absolute; top: 2px; left: 18px; width: 16px; height: 16px; border-radius: 999px; background: #FFFFFF;"></span></span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 14px;">
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 13px; font-weight: 500;">Open code in</div>
+              <div style="margin-top: 2px; font-size: 12px; color: #9AA0A8;">Repos are found under your development folder.</div>
+            </div>
+            <span style="border: 1px solid #2A2E36; background: #16181C; border-radius: 8px; padding: 5px 10px; font-size: 12px;">System default</span>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8;">Page description 12.5, card subtitle 11.5.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="background: #121317; border: 1px solid #22252B; border-radius: 12px; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #22252B;">
+            <span style="font-size: 12.5px; font-weight: 500;">useNotifications.ts</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #7CC49A;">+12</span>
+            <span style="flex: 1;"></span>
+            <span style="display: inline-flex; background: #16181C; border: 1px solid #22252B; border-radius: 9px; padding: 2px;"><span style="padding: 3px 9px; border-radius: 7px; background: #2A2E36; font-size: 12px; font-weight: 500;">Combined</span><span style="padding: 3px 9px; border-radius: 7px; font-size: 12px; font-weight: 500; color: #9AA0A8;">Side by side</span></span>
+            <span style="border: 1px solid #2A2E36; border-radius: 5px; padding: 1px 5px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">⌘P</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16181C; border-bottom: 1px solid #22252B;">
+            <span style="flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">@@ -26,6 +26,8 @@</span>
+            <span style="font-size: 11px; color: #C4C8CE;">Add to chat</span>
+            <span style="border: 1px solid #2A2E36; border-radius: 8px; padding: 2px 8px; font-size: 11px;">Stage hunk</span>
+          </div>
+          <div style="display: flex;">
+            <div style="flex: 1; min-width: 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 19px; padding: 6px 12px; color: #C4C8CE;">
+              <div>const isOffline = (session: string) =&gt; {</div>
+              <div style="background: rgba(124,196,154,0.10); color: #E7E9EC;">+ invoke("app_log", { line });</div>
+              <div>const off = client.streamEvents(ev =&gt; {</div>
+            </div>
+            <div style="width: 210px; flex-shrink: 0; border-left: 1px solid #22252B; background: #16181C;">
+              <div style="padding: 4px 8px; border-bottom: 1px solid #22252B; font-size: 10.5px; font-weight: 600; color: #9AA0A8;">Author · age · commit</div>
+              <div style="padding: 0 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 19px; color: #9AA0A8;">kimi-9 · 3h · <span style="color: #8AA8FF;">b8ca9a4</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="align-self: flex-start; width: 240px; background: #16181C; border: 1px solid #2A2E36; border-radius: 10px; padding: 4px; box-shadow: 0 12px 32px rgba(0,0,0,0.45);">
+          <div style="padding: 6px 8px; border-radius: 6px; background: #2A2E36; font-size: 12px;">Rename branch</div>
+          <div style="padding: 6px 8px; font-size: 12px; color: #C4C8CE;">Merge into main</div>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8;">File name 12.5, column heading 10.5, switcher corners 9 and 7, key cap 5, menu 10.</div>
+      </div>
+      </section>
+      <section style="background: #15171B; border: 1px solid #2E3A5A; border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 18px;">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600;">With the scale</h2>
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div>
+          <div style="font-size: 11px; color: #9AA0A8;">You</div>
+          <div style="margin-top: 2px; font-size: 20px; font-weight: 650;">Notifications</div>
+          <div style="margin-top: 4px; font-size: 13px; color: #9AA0A8;">when, how, spoken alerts</div>
+        </div>
+        <div style="background: #121317; border: 1px solid #22252B; border-radius: 12px;">
+          <div style="padding: 12px 14px; border-bottom: 1px solid #22252B;">
+            <div style="font-size: 13px; font-weight: 600;">Notifications</div>
+            <div style="margin-top: 2px; font-size: 12px; color: #9AA0A8;">Native, and deliberately narrow.</div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 14px; border-bottom: 1px solid #22252B;">
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 13px; font-weight: 500;">Notify me when something needs a human</div>
+              <div style="margin-top: 2px; font-size: 12px; color: #9AA0A8;">Direct messages to you, verify gates opening, and crew seats going offline.</div>
+            </div>
+            <span style="font-size: 12px; font-weight: 500;">On</span>
+            <span style="position: relative; width: 36px; height: 20px; border-radius: 999px; background: #8AA8FF; flex-shrink: 0;"><span style="position: absolute; top: 2px; left: 18px; width: 16px; height: 16px; border-radius: 999px; background: #FFFFFF;"></span></span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px; padding: 12px 14px;">
+            <div style="flex: 1; min-width: 0;">
+              <div style="font-size: 13px; font-weight: 500;">Open code in</div>
+              <div style="margin-top: 2px; font-size: 12px; color: #9AA0A8;">Repos are found under your development folder.</div>
+            </div>
+            <span style="border: 1px solid #2A2E36; background: #16181C; border-radius: 8px; padding: 5px 10px; font-size: 12px;">System default</span>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8;">Page description base 13, card subtitle body 12. Everything else already fits.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="background: #121317; border: 1px solid #22252B; border-radius: 12px; overflow: hidden;">
+          <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #22252B;">
+            <span style="font-size: 13px; font-weight: 500;">useNotifications.ts</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #7CC49A;">+12</span>
+            <span style="flex: 1;"></span>
+            <span style="display: inline-flex; background: #16181C; border: 1px solid #22252B; border-radius: 8px; padding: 2px;"><span style="padding: 3px 9px; border-radius: 6px; background: #2A2E36; font-size: 12px; font-weight: 500;">Combined</span><span style="padding: 3px 9px; border-radius: 6px; font-size: 12px; font-weight: 500; color: #9AA0A8;">Side by side</span></span>
+            <span style="border: 1px solid #2A2E36; border-radius: 4px; padding: 1px 5px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">⌘P</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #16181C; border-bottom: 1px solid #22252B;">
+            <span style="flex: 1; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">@@ -26,6 +26,8 @@</span>
+            <span style="font-size: 11px; color: #C4C8CE;">Add to chat</span>
+            <span style="border: 1px solid #2A2E36; border-radius: 8px; padding: 2px 8px; font-size: 11px;">Stage hunk</span>
+          </div>
+          <div style="display: flex;">
+            <div style="flex: 1; min-width: 0; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 19px; padding: 6px 12px; color: #C4C8CE;">
+              <div>const isOffline = (session: string) =&gt; {</div>
+              <div style="background: rgba(124,196,154,0.10); color: #E7E9EC;">+ invoke("app_log", { line });</div>
+              <div>const off = client.streamEvents(ev =&gt; {</div>
+            </div>
+            <div style="width: 210px; flex-shrink: 0; border-left: 1px solid #22252B; background: #16181C;">
+              <div style="padding: 4px 8px; border-bottom: 1px solid #22252B; font-size: 11px; font-weight: 600; color: #9AA0A8;">Author · age · commit</div>
+              <div style="padding: 0 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; line-height: 19px; color: #9AA0A8;">kimi-9 · 3h · <span style="color: #8AA8FF;">b8ca9a4</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="align-self: flex-start; width: 240px; background: #16181C; border: 1px solid #2A2E36; border-radius: 12px; padding: 4px; box-shadow: 0 12px 32px rgba(0,0,0,0.45);">
+          <div style="padding: 6px 8px; border-radius: 6px; background: #2A2E36; font-size: 12px;">Rename branch</div>
+          <div style="padding: 6px 8px; font-size: 12px; color: #C4C8CE;">Merge into main</div>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8;">File name base 13, column heading small 11, switcher corners md and sm, key cap xs, menu lg.</div>
+      </div>
+      </section>
+    </div>
+    <p style="margin: 0; max-width: 920px; font-size: 13px; color: #9AA0A8; line-height: 1.55;">The difference is meant to be hard to see. What changes is that a new screen cannot pick 11.5 or a 7 pixel corner any more: the sizes become named tokens and the lint gate refuses anything outside the list, the same way it now refuses raw colours and browser check boxes.</p>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1700}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
