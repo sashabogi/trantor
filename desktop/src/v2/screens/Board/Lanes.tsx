@@ -1,6 +1,7 @@
 // The lanes: todo, doing, testing (split in three groups), done, plus failed/blocked/stale strips (#13989).
 import { useState, type ReactNode } from "react";
 import type { Card } from "../../../shared/api/client";
+import { arrowNav } from "../../ui/arrowNav";
 import { SubagentRollup } from "./CardFace";
 import { EXCEPTION_LANES, type BoardModel, type ExceptionLane, type Lane } from "./model";
 
@@ -39,7 +40,7 @@ function LaneColumn({ lane, data, width = 262, filtering, renderCard, onOpen, ca
   const cards = cap && !all ? data.cards.slice(0, cap) : data.cards;
   const hidden = data.cards.length - cards.length;
   return (
-    <section aria-label={LANE_LABEL[lane]} className="flex shrink-0 flex-col gap-2" style={{ width }}>
+    <section aria-label={LANE_LABEL[lane]} data-nav-group="" className="flex shrink-0 flex-col gap-2" style={{ width }}>
       <LaneHead lane={lane} count={data.cards.length + data.subagents.length} />
       <SubagentRollup items={data.subagents} forceOpen={filtering} onOpen={onOpen} />
       {cards.map(renderCard)}
@@ -78,7 +79,7 @@ function TestingColumn({ model, filtering, renderCard, onOpen }: LanesProps) {
   const { needs, gate, older } = model.split;
   const total = model.testing.cards.length + model.testing.subagents.length;
   return (
-    <section aria-label="Testing" className="flex w-[290px] shrink-0 flex-col gap-2">
+    <section aria-label="Testing" data-nav-group="" className="flex w-[290px] shrink-0 flex-col gap-2">
       <LaneHead lane="testing" count={total} />
       <SubagentRollup items={model.testing.subagents} forceOpen={filtering} onOpen={onOpen} />
       <GroupHead label="NEEDS YOUR DRILL" count={needs.length} note="the seat is done; done waits for you" />
@@ -108,7 +109,7 @@ function ExceptionStrip({ lane, cards, open, onToggle }: { lane: ExceptionLane; 
 
 function ExceptionColumn({ lane, cards, onClose, renderCard }: { lane: ExceptionLane; cards: Card[]; onClose: () => void; renderCard: LanesProps["renderCard"] }) {
   return (
-    <section aria-label={LANE_LABEL[lane]} className="flex w-[240px] shrink-0 flex-col gap-2">
+    <section aria-label={LANE_LABEL[lane]} data-nav-group="" className="flex w-[240px] shrink-0 flex-col gap-2">
       <div className="flex items-center gap-[7px] px-0.5">
         <span className="h-2 w-2 rounded-full" style={{ background: LANE_DOT[lane] }} />
         <h3 className="m-0 flex-1 text-v2-body font-semibold">{LANE_LABEL[lane]}</h3>
@@ -126,7 +127,7 @@ export function Lanes(props: LanesProps) {
   const toggle = (l: ExceptionLane) => setExpanded(e => e.includes(l) ? e.filter(x => x !== l) : [...e, l]);
   const exceptions = EXCEPTION_LANES.map((l): [ExceptionLane, Card[]] => [l, [...model[l].cards, ...model[l].subagents]]).filter(([, c]) => c.length > 0);
   return (
-    <div className="flex min-h-0 flex-1 items-start gap-3 overflow-auto px-5 pb-5 pt-1">
+    <div onKeyDown={arrowNav} className="flex min-h-0 flex-1 items-start gap-3 overflow-auto px-5 pb-5 pt-1">
       <LaneColumn lane="todo" data={model.todo} filtering={filtering} renderCard={renderCard} onOpen={onOpen} />
       <LaneColumn lane="doing" data={model.doing} filtering={filtering} renderCard={renderCard} onOpen={onOpen} />
       <TestingColumn {...props} />

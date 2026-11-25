@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import { Seg } from "../../ui/Seg";
-import { SEAT_FILTER_MAX, type Filters, type SeatGroup } from "./model";
+import { isFiltering, NO_FILTERS, SEAT_FILTER_MAX, type Filters, type SeatGroup } from "./model";
 
 export type View = "lanes" | "list" | "dependencies" | "seat";
 const VIEWS = [
@@ -47,6 +47,7 @@ export function Toolbar({ view, onView, filters, onFilters, seats, counts, onNew
       <Seg label="View" options={VIEWS} value={view} onChange={onView} />
       <label htmlFor="v2-board-search" className="sr-only">Search cards</label>
       <input id="v2-board-search" type="text" value={filters.query} onChange={e => set({ query: e.target.value })}
+        onKeyDown={e => { if (e.key === "Escape" && filters.query) { e.stopPropagation(); set({ query: "" }); } }}
         placeholder="Search: text, #id, @seat"
         className="w-[230px] rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2.5 py-[5px] text-v2-body text-[var(--v2-text)] placeholder:text-[var(--v2-muted)]" />
       {seats.length > 0 && (
@@ -73,6 +74,7 @@ export function Toolbar({ view, onView, filters, onFilters, seats, counts, onNew
         title="Every card in testing: done is refused until its drill has run" />
       <QuickChip label="Sub-agents nested" on={filters.nested} onClick={() => set({ nested: !filters.nested })}
         title="Sub-agent cards roll up under the card that spawned them" />
+      {isFiltering(filters) && <Button variant="quiet" title="Show every card again" onClick={() => onFilters(NO_FILTERS)}>Clear filters</Button>}
       <span className="flex-1" />
       <Button variant="primary" onClick={onNewCard}>New card</Button>
     </div>

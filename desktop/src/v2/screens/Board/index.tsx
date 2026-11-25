@@ -63,7 +63,7 @@ export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
 
   const nextStep = (c: Card): NextStep | undefined => {
     const watch: NextStep = { label: "Watch", title: "Open the workspace to watch the seat work", run: () => onNavigate("workspace") };
-    if (c.status === "todo") return { label: "Assign", title: "Open the card to see who it is filed for", run: () => setOpen(c.id) };
+    if (c.status === "todo") return { label: "Open", title: "Open the card to see who it is filed for", run: () => setOpen(c.id) };
     if (c.status === "doing") return watch;
     if (c.status === "testing") return isBusy(c, presence) ? watch : { label: "Run drill", title: "Open the card: its drill line and acceptance items", run: () => setOpen(c.id) };
     return undefined;
@@ -89,7 +89,7 @@ export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
           {view === "dependencies" && <DependenciesView cards={flat} onOpen={setOpen} />}
           {view === "seat" && <SeatView cards={flat} renderCard={renderCard} />}
         </div>
-        {open !== null && <Drawer client={client} id={open} onClose={() => setOpen(null)} onOpen={setOpen} onMoved={reload} />}
+        {open !== null && <Drawer client={client} id={open} onClose={() => setOpen(null)} onOpen={setOpen} onMoved={reload} escapeCloses={!newCard} />}
       </div>
       {newCard && <NewCardSheet client={client} project={project} peers={projectPeers} onClose={() => setNewCard(false)}
         onCreated={card => { created(card); setNewCard(false); setView("lanes"); }} />}

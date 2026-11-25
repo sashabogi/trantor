@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { Avatar, Button, Chip, Composer2, IconButton, ProjectTile, seatLabel } from "../../index";
+import { useEscape } from "../../ui/useEscape";
 import { markSeen } from "../../../shared/seen";
 import { ago } from "../../../shared/time";
 import type { Card, HubClient, Peer } from "../../../shared/api/client";
@@ -91,6 +92,8 @@ function ProposalDetail({ client, item, onSettled }: { client: HubClient; item: 
   const [denying, setDenying] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
+  // #14268: Escape backs out of the deny note without deciding.
+  useEscape(() => { setDenying(false); setNote(""); }, denying);
   const decide = async (status: "approved" | "denied") => {
     if (busy || (status === "denied" && !note.trim())) return;
     setBusy(true); setError("");
@@ -112,7 +115,10 @@ function ProposalDetail({ client, item, onSettled }: { client: HubClient; item: 
           <label htmlFor="v2-deny-note" className="text-v2-small text-[var(--v2-muted)]">Why not? The agent remembers this…</label>
           <textarea id="v2-deny-note" autoFocus value={note} onChange={event => setNote(event.target.value)} rows={2}
             className="resize-none rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-2 text-v2-body text-[var(--v2-text)]" />
-          <div><Button variant="danger" disabledReason={busy || !note.trim() ? "A denial needs a note" : null} onClick={() => void decide("denied")}>Deny</Button></div>
+          <div className="flex gap-2">
+            <Button variant="danger" disabledReason={busy ? "Saving…" : !note.trim() ? "A denial needs a note" : null} onClick={() => void decide("denied")}>Deny</Button>
+            <Button onClick={() => { setDenying(false); setNote(""); }}>Cancel</Button>
+          </div>
         </div>
       ) : (
         <div className="flex gap-2"><Button disabledReason={busy ? "Saving…" : null} onClick={() => void decide("approved")}>Approve</Button><Button disabledReason={busy ? "Saving…" : null} onClick={() => setDenying(true)}>Deny…</Button></div>

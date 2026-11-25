@@ -101,4 +101,52 @@ describe("InboxScreen", () => {
     expect(host.querySelector('[data-inbox-key="message-7001"]')).toBeNull();
     expect(host.textContent).toContain("Nothing waiting on you.");
   });
+  const keyOn = (el: Element | null, k: string) => act(async () => { (el ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+  const stub = (client: HubClient, over: { messages?: Message[]; proposals?: Parameters<typeof makeInboxItems>[0]["proposals"] }) => {
+    vi.spyOn(client, "inbox").mockResolvedValue({ messages: over.messages ?? [], cursor: 1 });
+    vi.spyOn(client, "tasks").mockResolvedValue([]);
+    vi.spyOn(client, "peers").mockResolvedValue([]);
+    vi.spyOn(client, "proposals").mockResolvedValue({ proposals: over.proposals ?? [], pendingCount: 0 });
+    vi.spyOn(client, "holds").mockResolvedValue({ holds: [] });
+    vi.spyOn(client, "streamEvents").mockReturnValue(() => {});
+    vi.spyOn(client, "delivered").mockResolvedValue();
+  };
+
+  it("Deny has a Cancel and Escape backs out of the note without deciding (#14268)", async () => {
+    const client = new HubClient("http://test");
+    stub(client, { proposals: [{ id: 3, session: "kimi-9", project: "trantor", scope: "restart", condition: "dead", exclusions: "live", status: "pending", ts: 300 }] });
+    const decide = vi.spyOn(client, "decideProposal");
+    await act(async () => { root.render(<InboxScreen client={client} project="" onNavigate={vi.fn()} />); });
+    const byText = (t: string) => [...host.querySelectorAll("button")].find(b => b.textContent === t);
+    await act(async () => { byText("Deny…")?.click(); });
+    expect(host.querySelector("#v2-deny-note")).not.toBeNull();
+    expect(byText("Cancel")).toBeDefined();
+    await keyOn(document.body, "Escape");
+    expect(host.querySelector("#v2-deny-note")).toBeNull();
+    expect(byText("Approve")).toBeDefined();
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it("arrow keys move focus between rows and Escape clears the search (#14268)", async () => {
+    const client = new HubClient("http://test");
+    const now = Date.now();
+    stub(client, { messages: [{ ...message(1, "codex-8:trantor", [], now), text: "First?" }, { ...message(2, "glm-5:trantor", [], now - 5000), text: "Second?" }] });
+    await act(async () => { root.render(<InboxScreen client={client} project="" onNavigate={vi.fn()} />); });
+    const rows = [...host.querySelectorAll<HTMLElement>("[data-inbox-key]")];
+    expect(rows.length).toBe(2);
+    rows[0]?.focus();
+    await keyOn(rows[0] ?? null, "ArrowDown");
+    expect(document.activeElement).toBe(rows[1]);
+    await keyOn(rows[1] ?? null, "ArrowUp");
+    expect(document.activeElement).toBe(rows[0]);
+    const box = host.querySelector<HTMLInputElement>("#v2-inbox-search")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(box, "zzz");
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(host.querySelectorAll("[data-inbox-key]").length).toBe(0);
+    await keyOn(box, "Escape");
+    expect(box.value).toBe("");
+    expect(host.querySelectorAll("[data-inbox-key]").length).toBe(2);
+  });
 });

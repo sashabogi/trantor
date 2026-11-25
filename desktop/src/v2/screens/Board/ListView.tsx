@@ -3,6 +3,7 @@ import type { Card } from "../../../shared/api/client";
 import type { PresenceState } from "../../../shared/presence";
 import { cleanTitle } from "../../../shared/Avatar";
 import { dictGet } from "../../../shared/dict";
+import { arrowNav } from "../../ui/arrowNav";
 import { Avatar } from "../../ui/Avatar";
 import { Chip, type ChipTone } from "../../ui/Chip";
 import { toPresence } from "./CardFace";
@@ -16,7 +17,7 @@ export function ListView({ cards, presence, selected, onOpen }: {
   const rows = [...cards].sort((a, b) => touchedAt(b) - touchedAt(a));
   if (!rows.length) return <div className="px-5 py-6 text-v2-base text-[var(--v2-muted)]">No cards match.</div>;
   return (
-    <div className="min-h-0 flex-1 overflow-auto px-5 pb-5">
+    <div onKeyDown={arrowNav} className="min-h-0 flex-1 overflow-auto px-5 pb-5">
       <table className="w-full border-collapse text-left text-v2-body">
         <thead>
           <tr className="text-v2-small uppercase tracking-[0.06em] text-[var(--v2-muted)]">
@@ -32,7 +33,7 @@ export function ListView({ cards, presence, selected, onOpen }: {
             return (
               <tr key={c.id} data-row={c.id} className={`border-t border-[var(--v2-edge)] ${selected === c.id ? "bg-[var(--v2-panel-2)]" : ""}`}>
                 <td className="max-w-[420px] py-1.5 pr-3">
-                  <button type="button" onClick={() => onOpen(c.id)} className="v2-hover flex w-full items-baseline gap-2 rounded border-0 bg-transparent p-0 text-left text-[var(--v2-text)]">
+                  <button type="button" data-nav="" aria-label={`Open card #${c.id}`} onClick={() => onOpen(c.id)} className="v2-hover flex w-full items-baseline gap-2 rounded border-0 bg-transparent p-0 text-left text-[var(--v2-text)]">
                     <span className="v2-mono shrink-0 text-v2-small text-[var(--v2-faint)]">#{c.id}</span>
                     <span className="min-w-0 flex-1 truncate">{c.summary || cleanTitle(c.title)}</span>
                   </button>

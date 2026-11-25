@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Card, HubClient, Peer } from "../../../shared/api/client";
 import { Button } from "../../ui/Button";
 import { Select } from "../../ui/Select";
+import { useEscape } from "../../ui/useEscape";
 import { seatLabel } from "../../ui/identity";
 
 const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled])';
@@ -32,8 +33,9 @@ export function NewCardSheet({ client, project, peers, onClose, onCreated }: {
       setBusy(false);
     }
   };
+  // #14268: Escape closes the sheet even when focus sits outside it.
+  useEscape(onClose, !busy);
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape" && !busy) { e.stopPropagation(); onClose(); return; }
     if (e.key !== "Tab") return;
     const items = [...(ref.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])];
     const first = items[0], last = items[items.length - 1];

@@ -1,5 +1,6 @@
 import { CircleHelp, ListOrdered, Search, Shield, TriangleAlert } from "lucide-react";
 import type { Peer } from "../../../shared/api/client";
+import { arrowNav } from "../../ui/arrowNav";
 import { Avatar, Button, ProjectTile, seatLabel } from "../../index";
 import { hasSeen } from "../../../shared/seen";
 import { ago } from "../../../shared/time";
@@ -20,7 +21,7 @@ function KindLabel({ kind }: { kind: InboxItem["kind"] }) {
 function InboxRow({ item, selected, onSelect }: { item: InboxItem; selected: boolean; onSelect: (key: string) => void }) {
   const unread = item.kind === "question" && !hasSeen(item.message.id);
   return (
-    <button type="button" data-inbox-key={item.key} aria-pressed={selected} onClick={() => onSelect(item.key)}
+    <button type="button" data-nav="" data-inbox-key={item.key} aria-pressed={selected} onClick={() => onSelect(item.key)}
       className={`flex w-full gap-2.5 border-0 border-b border-[var(--v2-edge)] px-3.5 py-[11px] text-left ${
         selected ? "bg-[var(--v2-raised)] shadow-[inset_2px_0_0_var(--v2-accent)]" : "bg-transparent"}`}>
       <span className="relative shrink-0">
@@ -43,7 +44,7 @@ function InboxRow({ item, selected, onSelect }: { item: InboxItem; selected: boo
 
 function StaleRow({ item, selected, onSelect }: { item: MessageItem; selected: boolean; onSelect: (key: string) => void }) {
   return (
-    <button type="button" data-inbox-key={item.key} onClick={() => onSelect(item.key)}
+    <button type="button" data-nav="" data-inbox-key={item.key} aria-pressed={selected} onClick={() => onSelect(item.key)}
       className={`flex w-full items-center gap-2.5 border-0 border-b border-[var(--v2-edge)] px-3.5 py-2 text-left opacity-70 ${selected ? "bg-[var(--v2-raised)]" : "bg-transparent"}`}>
       <Avatar name={item.from} size={22} />
       <span className="min-w-0 flex-1">
@@ -79,11 +80,12 @@ export function InboxList({ items, filter, selected, search, sort, peers, onSear
         <div className="flex flex-1 items-center gap-1.5 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2.5 text-[var(--v2-muted)]">
           <Search size={12} aria-hidden />
           <input id="v2-inbox-search" value={search} onChange={event => onSearch(event.target.value)}
+            onKeyDown={event => { if (event.key === "Escape" && search) { event.stopPropagation(); onSearch(""); } }}
             placeholder="Search: text, @seat, #card, project:" className="min-w-0 flex-1 border-0 bg-transparent py-1.5 text-v2-body text-[var(--v2-text)] outline-none" />
         </div>
         <Button icon={<ListOrdered size={12} aria-hidden />} title="Ranked by what each one unblocks; or Newest, or By project" onClick={onSort}>{sortLabel}</Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div onKeyDown={arrowNav} className="min-h-0 flex-1 overflow-y-auto">
         {sort === "ranked" && live.length > 0 && <div className="px-3.5 pt-2 pb-1.5 text-v2-small text-[var(--v2-muted)]">Ranked by what an answer unblocks</div>}
         {live.map(item => <InboxRow key={item.key} item={item} selected={selected === item.key} onSelect={onSelect} />)}
         {stale.length > 0 && (

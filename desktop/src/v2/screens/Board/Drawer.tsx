@@ -8,6 +8,7 @@ import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import { Chip, type ChipTone } from "../../ui/Chip";
 import { IconButton } from "../../ui/IconButton";
+import { useEscape } from "../../ui/useEscape";
 import { seatLabel } from "../../ui/identity";
 import { allowedMoves, drillLine, fileCandidates, nextOf, type BoardCard } from "./model";
 import { CodeTab, OverviewTab, StoryTab, TimelineTab } from "./DrawerTabs";
@@ -36,7 +37,9 @@ function useDetail(client: HubClient, id: number) {
   return { data, error, code, load };
 }
 
-function Moves({ task, busy, error, onMove }: { task: BoardCard; busy: boolean; error: string | null; onMove: (s: string) => void }) {
+function Moves({ task, busy, error, onMove, confirming, onConfirming }: {
+  task: BoardCard; busy: boolean; error: string | null; onMove: (s: string) => void; confirming: boolean; onConfirming: (on: boolean) => void;
+}) {
   const next = nextOf(task.status);
   const back = allowedMoves(task.status).filter(s => s !== next);
   const noDrill = next === "done" && !drillLine(task);
@@ -55,8 +58,15 @@ function Moves({ task, busy, error, onMove }: { task: BoardCard; busy: boolean; 
             {s === "doing" && task.status === "testing" ? "Bounce to doing" : `Back to ${s}`}
           </Button>
         ))}
-        {task.status !== "failed" && task.status !== "done" && (
-          <Button variant="danger" onClick={() => onMove("failed")} disabledReason={busy ? "Moving the card" : null} title="Mark the card failed">Failed</Button>
+        {task.status !== "failed" && task.status !== "done" && !confirming && (
+          <Button variant="danger" onClick={() => onConfirming(true)} disabledReason={busy ? "Moving the card" : null} title="Mark the card failed">Failed</Button>
+        )}
+        {confirming && (
+          <span role="group" aria-label="Confirm failed" className="inline-flex items-center gap-1.5 text-v2-body text-[var(--v2-text-2)]">
+            Mark this card failed?
+            <Button variant="danger" onClick={() => { onConfirming(false); onMove("failed"); }} disabledReason={busy ? "Moving the card" : null}>Yes, failed</Button>
+            <Button onClick={() => onConfirming(false)}>Keep it</Button>
+          </span>
         )}
       </div>
       {error && <div role="alert" className="text-v2-body text-[var(--v2-bad)]">{error}</div>}
@@ -90,14 +100,31 @@ function Header({ task, id, error, onClose }: { task: BoardCard | null; id: numb
   );
 }
 
-export type DrawerProps = { client: HubClient; id: number; onClose: () => void; onMoved: () => void; onOpen: (id: number) => void };
+function tabKey(e: React.KeyboardEvent<HTMLButtonElement>, t: Tab, setTab: (t: Tab) => void) {
+  const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+  if (!step) return;
+  e.preventDefault();
+  const to = TABS[(TABS.indexOf(t) + step + TABS.length) % TABS.length];
+  if (!to) return;
+  setTab(to);
+  (e.currentTarget.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')[TABS.indexOf(to)])?.focus();
+}
 
-export function Drawer({ client, id, onClose, onMoved, onOpen }: DrawerProps) {
+export type DrawerProps = {
+  client: HubClient; id: number; onClose: () => void; onMoved: () => void; onOpen: (id: number) => void;
+  /** False while a sheet sits on top: Escape then belongs to the sheet. */
+  escapeCloses?: boolean;
+};
+
+export function Drawer({ client, id, onClose, onMoved, onOpen, escapeCloses = true }: DrawerProps) {
   const { data, error, code, load } = useDetail(client, id);
   const [tab, setTab] = useState<Tab>("overview");
   const [busy, setBusy] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
-  useEffect(() => { setTab("overview"); setMoveError(null); }, [id]);
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => { setTab("overview"); setMoveError(null); setConfirming(false); }, [id]);
+  // #14268: Escape first cancels the inline confirm, then closes the drawer.
+  useEscape(() => { if (confirming) setConfirming(false); else onClose(); }, escapeCloses);
   const task = data?.task ?? null;
   const move = (status: string) => {
     if (!task) return;
@@ -117,11 +144,11 @@ export function Drawer({ client, id, onClose, onMoved, onOpen }: DrawerProps) {
     <aside aria-label={`Card #${id}`} className="flex w-[430px] shrink-0 flex-col border-l border-[var(--v2-edge)] bg-[var(--v2-side)]">
       <div className="flex flex-col gap-[9px] border-b border-[var(--v2-edge)] px-4 py-3">
         <Header task={task} id={id} error={error} onClose={onClose} />
-        {task && <Moves task={task} busy={busy} error={moveError} onMove={move} />}
+        {task && <Moves task={task} busy={busy} error={moveError} onMove={move} confirming={confirming} onConfirming={setConfirming} />}
       </div>
       <div role="tablist" aria-label="Card sections" className="flex gap-1 border-b border-[var(--v2-edge)] px-3">
         {TABS.map(t => (
-          <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+          <button key={t} type="button" role="tab" aria-selected={tab === t} tabIndex={tab === t ? 0 : -1} onClick={() => setTab(t)} onKeyDown={e => tabKey(e, t, setTab)}
             className={`border-0 border-b-2 bg-transparent px-2.5 py-2 text-v2-body font-medium ${tab === t ? "border-[var(--v2-accent)] text-[var(--v2-text)]" : "border-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
             {TAB_LABEL[t]}{badge[t]}
           </button>

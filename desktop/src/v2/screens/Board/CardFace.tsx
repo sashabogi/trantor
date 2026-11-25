@@ -89,7 +89,7 @@ export function CardFace({ card, presence, selected, next, subagents, forceOpenS
   return (
     <article data-card={card.id} data-selected={selected || undefined}
       className={`flex flex-col gap-[7px] rounded-lg border p-[9px_10px] ${selected ? "border-[var(--v2-accent)] bg-[var(--v2-card-selected)]" : "border-[var(--v2-edge)] bg-[var(--v2-card)]"}`}>
-      <button type="button" onClick={() => onOpen(card.id)} aria-label={`Open card #${card.id}`}
+      <button type="button" onClick={() => onOpen(card.id)} aria-label={`Open card #${card.id}`} data-nav=""
         className="flex cursor-pointer items-start gap-[7px] border-0 bg-transparent p-0 text-left text-[var(--v2-text)]">
         <DifficultyDot difficulty={card.difficulty} />
         <span className="min-w-0 flex-1 break-words text-v2-base leading-[1.35] [overflow-wrap:anywhere]">{card.summary || cleanTitle(card.title)}</span>

@@ -96,7 +96,7 @@ describe("BoardScreen lanes", () => {
 
   it("puts the one next-step button on the card face", async () => {
     await mount(fakeClient().client);
-    expect(q('[data-card="1"]')?.textContent).toContain("Assign");
+    expect(q('[data-card="1"]')?.textContent).toContain("Open");
     expect(q('[data-card="2"]')?.textContent).toContain("Watch");
     expect(q('[data-card="3"]')?.textContent).toContain("Run drill");
     expect(q('[data-card="3"]')?.textContent).toContain("drill");
@@ -239,5 +239,81 @@ describe("BoardScreen drawer", () => {
     await flush();
     await click(q('button[aria-label="Close card"]'));
     expect(q('aside[aria-label="Card #1"]')).toBeNull();
+  });
+});
+
+const key = (el: Element | null | undefined, k: string) => act(async () => { (el ?? document.body).dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+const openCard = async (id: number) => { await click(q(`[data-card="${id}"] button[aria-label="Open card #${id}"]`)); await flush(); };
+
+describe("BoardScreen keyboard and confirms (#14268)", () => {
+  it("Escape closes the drawer", async () => {
+    await mount(fakeClient().client);
+    await openCard(1);
+    expect(q('aside[aria-label="Card #1"]')).not.toBeNull();
+    await key(document.body, "Escape");
+    expect(q('aside[aria-label="Card #1"]')).toBeNull();
+  });
+
+  it("Escape closes the New card sheet and leaves the open drawer alone", async () => {
+    await mount(fakeClient().client);
+    await openCard(1);
+    await click(buttonByText("New card"));
+    await key(document.body, "Escape");
+    expect(q('[role="dialog"][aria-label="New card"]')).toBeNull();
+    expect(q('aside[aria-label="Card #1"]')).not.toBeNull();
+  });
+
+  it("Failed asks inline first; Escape cancels it without a move, Yes moves", async () => {
+    const { client, posted } = fakeClient();
+    await mount(client);
+    await openCard(3);
+    const drawer = () => q('aside[aria-label="Card #3"]')!;
+    await click([...drawer().querySelectorAll("button")].find(b => b.textContent === "Failed"));
+    expect(drawer().textContent).toContain("Mark this card failed?");
+    expect(posted("/task/update")).toEqual([]);
+    await key(document.body, "Escape");
+    expect(drawer().textContent).not.toContain("Mark this card failed?");
+    expect(q('aside[aria-label="Card #3"]')).not.toBeNull();
+    await click([...drawer().querySelectorAll("button")].find(b => b.textContent === "Failed"));
+    await click([...drawer().querySelectorAll("button")].find(b => b.textContent === "Yes, failed"));
+    expect(posted("/task/update")).toEqual([{ id: 3, status: "failed" }]);
+  });
+
+  it("arrow keys walk the cards of a lane and hop between lanes", async () => {
+    await mount(fakeClient().client);
+    const todo = q('[data-card="1"] button[aria-label="Open card #1"]')!;
+    todo.focus();
+    await key(todo, "ArrowRight");
+    expect(document.activeElement).toBe(q('[data-card="2"] button[aria-label="Open card #2"]'));
+    const t3 = q('[data-card="3"] button[aria-label="Open card #3"]')!;
+    t3.focus();
+    await key(t3, "ArrowDown");
+    expect(document.activeElement).toBe(q('[data-card="4"] button[aria-label="Open card #4"]'));
+    await key(document.activeElement, "ArrowUp");
+    expect(document.activeElement).toBe(t3);
+  });
+
+  it("Clear filters and Escape in the search box both reset the filter", async () => {
+    await mount(fakeClient().client);
+    expect(buttonByText("Clear filters")).toBeUndefined();
+    const box = host.querySelector<HTMLInputElement>("#v2-board-search")!;
+    await type(box, "#4");
+    expect(q('[data-card="2"]')).toBeNull();
+    await click(buttonByText("Clear filters"));
+    expect(q('[data-card="2"]')).not.toBeNull();
+    await type(box, "#4");
+    await key(box, "Escape");
+    expect(box.value).toBe("");
+    expect(q('[data-card="2"]')).not.toBeNull();
+  });
+
+  it("arrow keys move between drawer tabs", async () => {
+    await mount(fakeClient().client);
+    await openCard(1);
+    const tabs = [...host.querySelectorAll<HTMLElement>('aside [role="tab"]')];
+    tabs[0]?.focus();
+    await key(tabs[0], "ArrowRight");
+    expect(tabs[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(tabs[1]);
   });
 });
