@@ -52,7 +52,7 @@ export function Terminals({ project, store }: { project: string; store?: ShellSt
       </div>
       <aside aria-label="Terminals" className="flex w-[180px] shrink-0 flex-col border-l border-[var(--v2-edge)] bg-[var(--v2-panel)]">
         <div className="flex h-8 shrink-0 items-center justify-between border-b border-[var(--v2-edge)] pl-2.5 pr-1">
-          <span className="text-[11px] text-[var(--v2-muted)]">Terminals</span>
+          <span className="text-v2-small text-[var(--v2-muted)]">Terminals</span>
           <button type="button" aria-label="New terminal" title="New terminal" onClick={openNew}
             className="v2-hover inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--v2-muted)]">
             <Plus size={14} aria-hidden />
@@ -62,7 +62,7 @@ export function Terminals({ project, store }: { project: string; store?: ShellSt
           {shells.shells.map(shell => (
             <li key={shell.sub} className={`group flex items-center pr-1 ${shell.sub === shells.active ? "bg-[var(--v2-track)]" : ""}`}>
               <button type="button" aria-current={shell.sub === shells.active} onClick={() => pick(shell.sub)}
-                className={`v2-hover min-w-0 flex-1 truncate px-2.5 py-1 text-left text-[12px] ${shell.sub === shells.active ? "text-[var(--v2-text)]" : "text-[var(--v2-muted)]"}`}>
+                className={`v2-hover min-w-0 flex-1 truncate px-2.5 py-1 text-left text-v2-body ${shell.sub === shells.active ? "text-[var(--v2-text)]" : "text-[var(--v2-muted)]"}`}>
                 {shell.name}
               </button>
               <button type="button" aria-label={`Kill terminal ${shell.name}`} title={`Kill terminal ${shell.name}`}
@@ -80,7 +80,7 @@ export function Terminals({ project, store }: { project: string; store?: ShellSt
 
 function Empty({ starting, error, onNew }: { starting: boolean; error: string | null; onNew: () => void }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--v2-panel)] text-[12px] text-[var(--v2-muted)]">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--v2-panel)] text-v2-body text-[var(--v2-muted)]">
       {error && <p role="alert" className="max-w-[360px] text-center">{error}</p>}
       {starting ? <p>Starting a terminal</p> : (
         <button type="button" onClick={onNew}

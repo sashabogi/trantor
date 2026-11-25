@@ -25,8 +25,8 @@ function Header({ project, data, crew }: { project: string; data: ReturnType<typ
   return (
     <div className="flex flex-wrap items-center gap-3">
       <div className="min-w-0 flex-1">
-        <h1 className="m-0 text-[20px] font-[650]">Agents</h1>
-        <div className="text-[12px] text-[var(--v2-muted)]">
+        <h1 className="m-0 text-v2-heading font-[650]">Agents</h1>
+        <div className="text-v2-body text-[var(--v2-muted)]">
           {project || "no project"} · {c.live} live · {c.working} working
           {c.needsYou > 0 && <> · <span className="text-[var(--v2-warn)]">{c.needsYou} needs you</span></>}
           {c.offline > 0 && <> · {c.offline} offline ({c.offlineNames.join(", ")})</>}
@@ -53,17 +53,17 @@ export function AgentsScreen({ client, project, onNavigate }: ScreenProps) {
       <div role="tablist" aria-label="Agents sections" className="flex gap-1 border-b border-[var(--v2-edge)]">
         {TABS.map(t => (
           <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
-            className={`border-0 border-b-2 bg-transparent px-3 py-2 text-[12.5px] ${tab === t.id ? "border-[var(--v2-accent)] text-[var(--v2-text)]" : "border-transparent text-[var(--v2-muted)]"}`}>{t.label}</button>
+            className={`border-0 border-b-2 bg-transparent px-3 py-2 text-v2-base ${tab === t.id ? "border-[var(--v2-accent)] text-[var(--v2-text)]" : "border-transparent text-[var(--v2-muted)]"}`}>{t.label}</button>
         ))}
       </div>
       {crew.notice && !claimed && (
-        <div role="status" className={`flex items-center gap-2 text-[11.5px] ${crew.notice.failed ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
+        <div role="status" className={`flex items-center gap-2 text-v2-body ${crew.notice.failed ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
           <span className="min-w-0 flex-1">{crew.notice.text}</span>
           <IconButton label="Dismiss the seat notice" title="Dismiss" size={20} onClick={crew.dismiss}><X size={11} /></IconButton>
         </div>
       )}
-      {data.error && !data.peers && <p className="m-0 text-[12.5px] text-[var(--v2-bad)]">Agents unavailable: {data.error}</p>}
-      {data.peers === null && !data.error && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">Loading roster...</p>}
+      {data.error && !data.peers && <p className="m-0 text-v2-base text-[var(--v2-bad)]">Agents unavailable: {data.error}</p>}
+      {data.peers === null && !data.error && <p className="m-0 text-v2-base text-[var(--v2-muted)]">Loading roster...</p>}
       {tab === "roster" && (
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
           <RosterTab client={client} project={project} data={data} ov={ov} crew={crew} onNavigate={onNavigate} />

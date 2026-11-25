@@ -23,7 +23,7 @@ export function Chip({ tone = "neutral", icon, mono, title, children }: ChipProp
   const t = TONE[tone];
   return (
     <span data-tone={tone} title={title}
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-[7px] py-[2px] text-[11px] font-medium ${mono ? "v2-mono" : ""}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-[7px] py-[2px] text-v2-small font-medium ${mono ? "v2-mono" : ""}`}
       style={{ background: t.bg, border: `1px solid ${t.border}`, color: t.fg }}>
       {icon}{children}
     </span>

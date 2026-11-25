@@ -55,7 +55,7 @@ export function InboxScreen({ client, onNavigate }: ScreenProps) {
 
   return (
     <div className="flex h-full min-h-[620px] flex-col">
-      {data.error && <p role="alert" className="m-0 border-b border-[var(--v2-edge)] px-3 py-1.5 text-[12px] text-[var(--v2-bad)]">{data.error}</p>}
+      {data.error && <p role="alert" className="m-0 border-b border-[var(--v2-edge)] px-3 py-1.5 text-v2-body text-[var(--v2-bad)]">{data.error}</p>}
       <div className="flex min-h-0 flex-1">
         <InboxFilters items={items} settled={settled} filter={filter} project={project}
           onFilter={next => { setFilter(next); setProject(""); }} onProject={setProject}
@@ -68,7 +68,7 @@ export function InboxScreen({ client, onNavigate }: ScreenProps) {
             onOpenCard={() => onNavigate("board", selected.project || undefined)} />
         ) : <EmptyInboxDetail />}
       </div>
-      {!data.loaded && <span role="status" className="absolute top-2 right-2 text-[11px] text-[var(--v2-muted)]">Reading your inbox…</span>}
+      {!data.loaded && <span role="status" className="absolute top-2 right-2 text-v2-small text-[var(--v2-muted)]">Reading your inbox…</span>}
     </div>
   );
 }

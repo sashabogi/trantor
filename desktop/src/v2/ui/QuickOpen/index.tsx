@@ -46,7 +46,7 @@ export function QuickOpen({ project, onOpen, onClose, search = searchFiles }: {
             className={`${ROW} ${rowTone(i === keys.sel)}`}>
             <FileText size={13} aria-hidden className="shrink-0 text-[var(--v2-muted)]" />
             <span className="shrink-0">{base(path)}</span>
-            <span className="v2-mono min-w-0 flex-1 truncate text-[11px] text-[var(--v2-muted)]">{dir(path)}</span>
+            <span className="v2-mono min-w-0 flex-1 truncate text-v2-small text-[var(--v2-muted)]">{dir(path)}</span>
           </button>
         ))}
         {!query.trim() && <div className={NOTE}>Type part of a file name.</div>}

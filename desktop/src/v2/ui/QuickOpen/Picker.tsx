@@ -29,7 +29,7 @@ export function Picker({ label, placeholder, query, onQuery, onKeyDown, onClose,
         <div className="flex items-center gap-2.5 border-b border-[var(--v2-edge)] px-4 py-3">
           <Search size={14} aria-hidden className="shrink-0 text-[var(--v2-muted)]" />
           <input ref={input} aria-label={label} value={query} onChange={e => onQuery(e.target.value)} onKeyDown={onKeyDown} autoCorrect="off" autoCapitalize="off" spellCheck={false}
-            placeholder={placeholder} className="w-full border-0 bg-transparent text-[13.5px] text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
+            placeholder={placeholder} className="w-full border-0 bg-transparent text-v2-base text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
           <Kbd>esc</Kbd>
         </div>
         {children}
@@ -38,6 +38,6 @@ export function Picker({ label, placeholder, query, onQuery, onKeyDown, onClose,
   );
 }
 
-export const ROW = "flex w-full items-center gap-2.5 border-0 px-4 py-2 text-left text-[12.5px] text-[var(--v2-text)]";
+export const ROW = "flex w-full items-center gap-2.5 border-0 px-4 py-2 text-left text-v2-base text-[var(--v2-text)]";
 export const rowTone = (selected: boolean) => (selected ? "bg-[var(--v2-raised)]" : "bg-transparent");
-export const NOTE = "px-4 py-3 text-[12.5px] text-[var(--v2-muted)]";
+export const NOTE = "px-4 py-3 text-v2-base text-[var(--v2-muted)]";

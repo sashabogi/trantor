@@ -67,7 +67,7 @@ export function Tabs<T extends string>(p: TabsProps<T>) {
               <button type="button" role="tab" id={t.buttonId} aria-selected={on} aria-controls={t.controls} title={t.title}
                 tabIndex={i === tabbable ? 0 : -1} ref={el => { buttons.current[i] = el; }}
                 onClick={() => p.onSelect(t.id)} onKeyDown={e => key(e, i)}
-                className={`flex h-full min-w-0 items-center gap-1.5 border-0 px-3 py-1.5 text-[12px] font-medium ${on ? "text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
+                className={`flex h-full min-w-0 items-center gap-1.5 border-0 px-3 py-1.5 text-v2-body font-medium ${on ? "text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
                 {t.leading}
                 <span className="max-w-[160px] truncate">{t.label}</span>
                 {t.sub}

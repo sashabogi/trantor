@@ -62,7 +62,7 @@ function SyncMenu({ project, snap, scope, onDone, onError }: {
         <Button variant="quiet" className="justify-start" disabledReason={!snap ? "Reading git" : busy ? "Sync in progress" : null} onClick={() => pull("ff")}>Pull</Button>
         <Button variant="quiet" icon={<ArrowUp size={12} aria-hidden />} className="justify-start" disabledReason={pushReason} onClick={push}
           title={`Push ${snap?.branch ?? ""} to origin`}>Push ↑{ahead}</Button>
-        {diverged && <div role="alert" className="border-t border-[var(--v2-edge)] px-2 pt-2 text-[11.5px] text-[var(--v2-warn)]">
+        {diverged && <div role="alert" className="border-t border-[var(--v2-edge)] px-2 pt-2 text-v2-body text-[var(--v2-warn)]">
           <p>{diverged}</p><div className="mt-2 flex gap-2"><Button onClick={() => pull("merge")}>Merge</Button><Button onClick={() => pull("rebase")}>Rebase</Button></div>
         </div>}
       </div>}
@@ -84,20 +84,20 @@ export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMut
     <div className="flex flex-wrap items-center gap-2.5 border-b border-[var(--v2-edge)] px-3 py-2">
       <div ref={ref} className="relative">
         <button type="button" aria-haspopup="dialog" aria-expanded={open} title="Switch branch" onClick={() => setOpen(o => !o)}
-          className="v2-hover inline-flex items-center gap-1.5 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-[5px] text-[12px] text-[var(--v2-text)]">
+          className="v2-hover inline-flex items-center gap-1.5 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-[5px] text-v2-body text-[var(--v2-text)]">
           <span className="h-[7px] w-[7px] rounded-full" style={{ background: tone }} /><GitBranch size={12} aria-hidden />
           <span className="v2-mono">{name}</span><ChevronDown size={12} aria-hidden />
         </button>
         {open && <BranchPicker project={project} seats={seats} snap={snap} scope={scope} acts={acts} onClose={() => setOpen(false)} onMutated={onMutated} onError={onError} onOpenConflict={onOpenConflict} />}
       </div>
       {snap && !snap.seatBacked && (
-        <span className="inline-flex items-center text-[11.5px] text-[var(--v2-muted)]" data-testid="checkout-ahead"
+        <span className="inline-flex items-center text-v2-body text-[var(--v2-muted)]" data-testid="checkout-ahead"
           title={snap.upstream ? `Against ${snap.upstream}` : "No upstream: ahead counts commits not on main"}>
           {aheadLabel(snap)}<MainCheckoutMark />
         </span>
       )}
       <SyncMenu project={project} snap={snap} scope={scope} onDone={onMutated} onError={onError} />
-      {snap && <span className="text-[11.5px] text-[var(--v2-muted)]" title="When git was last read for this view">read {readAgo(snap.readAt, now)}</span>}
+      {snap && <span className="text-v2-body text-[var(--v2-muted)]" title="When git was last read for this view">read {readAgo(snap.readAt, now)}</span>}
       <span className="flex-1" />
       <Seg label="View" value={view} onChange={onView} options={[{ value: "changes", label: "Changes" }, { value: "history", label: "History" }]} />
     </div>

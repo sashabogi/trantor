@@ -81,17 +81,17 @@ function Card({ prompt, index, total, at, onOpenChange }: { prompt: PromptItem; 
     // file name can be clicked, and hover crossing from tick to card must not close it.
     // #14254: fixed to the window, because the tick column scrolls and would clip a card positioned inside it.
     <div role="tooltip" style={{ top: at.y, right: at.right }} className="v2-fade-in fixed z-30 w-60 -translate-y-1/2 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-left shadow-lg">
-      <div className="v2-mono text-[10.5px] text-[var(--v2-muted)]">{index + 1} / {total}</div>
-      <div className="mt-0.5 text-[12px] font-medium leading-snug text-[var(--v2-text)]" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{prompt.text}</div>
-      {prompt.reply !== undefined && <div className="mt-0.5 truncate text-[12px] text-[var(--v2-text-2)]">{prompt.reply}</div>}
-      {timing && <div className="mt-1 text-[10.5px] text-[var(--v2-muted)]">{timing}</div>}
+      <div className="v2-mono text-v2-small text-[var(--v2-muted)]">{index + 1} / {total}</div>
+      <div className="mt-0.5 text-v2-body font-medium leading-snug text-[var(--v2-text)]" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{prompt.text}</div>
+      {prompt.reply !== undefined && <div className="mt-0.5 truncate text-v2-body text-[var(--v2-text-2)]">{prompt.reply}</div>}
+      {timing && <div className="mt-1 text-v2-small text-[var(--v2-muted)]">{timing}</div>}
       {files.length > 0 && (
-        <div className="mt-1 text-[10.5px] text-[var(--v2-muted)]">
+        <div className="mt-1 text-v2-small text-[var(--v2-muted)]">
           Changed {files.length} {files.length === 1 ? "file" : "files"}
           <div className="mt-0.5 flex flex-wrap gap-1">
             {files.slice(0, 5).map(f => (
               <button key={f} type="button" title={f} onClick={() => onOpenChange(f)}
-                className="rounded border border-[var(--v2-edge-2)] px-1 py-0.5 text-[10px] text-[var(--v2-text)] hover:border-[var(--v2-accent)]">
+                className="rounded border border-[var(--v2-edge-2)] px-1 py-0.5 text-v2-micro text-[var(--v2-text)] hover:border-[var(--v2-accent)]">
                 {baseName(f)}
               </button>
             ))}

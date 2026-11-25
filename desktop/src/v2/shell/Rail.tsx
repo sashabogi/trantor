@@ -19,12 +19,12 @@ function RailButton({ label, title, active, onClick, badge, dot, expanded, class
 }) {
   return (
     <button type="button" aria-label={label} title={expanded ? undefined : title} aria-current={active ? "page" : undefined} onClick={onClick}
-      className={`relative flex h-10 shrink-0 items-center rounded-[10px] border-0 ${expanded ? "w-full gap-2.5 px-2" : "w-10 justify-center"} ${
+      className={`relative flex h-10 shrink-0 items-center rounded-lg border-0 ${expanded ? "w-full gap-2.5 px-2" : "w-10 justify-center"} ${
         active ? "bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]" : "bg-transparent text-[var(--v2-muted)] hover:bg-[var(--v2-raised)] hover:text-[var(--v2-text)]"} ${className}`}>
       <span className="flex w-[26px] shrink-0 items-center justify-center">{children}</span>
-      {expanded && <span className="min-w-0 flex-1 truncate text-left text-[13px]">{title}</span>}
+      {expanded && <span className="min-w-0 flex-1 truncate text-left text-v2-base">{title}</span>}
       {!!badge && (
-        <span data-badge className={`${expanded ? "ml-auto" : "absolute top-[5px] right-1"} flex h-[14px] min-w-[14px] items-center justify-center rounded-[7px] bg-[var(--v2-accent)] px-[3px] text-[9px] font-bold text-[var(--v2-ink)]`}>
+        <span data-badge className={`${expanded ? "ml-auto" : "absolute top-[5px] right-1"} flex h-[14px] min-w-[14px] items-center justify-center rounded-md bg-[var(--v2-accent)] px-[3px] text-v2-micro font-bold text-[var(--v2-ink)]`}>
           {badge > 99 ? "99+" : badge}
         </span>
       )}
@@ -102,11 +102,11 @@ export function Rail({ screen, project, live, unread, needsYou, update, onNaviga
         </RailButton>
       </div>
       <button type="button" aria-label={action} title={action} onClick={toggle}
-        className={`mb-2.5 flex h-10 shrink-0 items-center rounded-[10px] border-0 bg-transparent text-[var(--v2-muted)] hover:bg-[var(--v2-raised)] hover:text-[var(--v2-text)] ${expanded ? "w-full gap-2.5 px-2" : "w-10 justify-center"}`}>
+        className={`mb-2.5 flex h-10 shrink-0 items-center rounded-lg border-0 bg-transparent text-[var(--v2-muted)] hover:bg-[var(--v2-raised)] hover:text-[var(--v2-text)] ${expanded ? "w-full gap-2.5 px-2" : "w-10 justify-center"}`}>
         <span className="flex w-[26px] shrink-0 items-center justify-center">
           {expanded ? <ChevronsLeft size={18} aria-hidden /> : <ChevronsRight size={18} aria-hidden />}
         </span>
-        {expanded && <span className="min-w-0 flex-1 truncate text-left text-[13px]">{action}</span>}
+        {expanded && <span className="min-w-0 flex-1 truncate text-left text-v2-base">{action}</span>}
       </button>
     </nav>
   );

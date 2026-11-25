@@ -17,10 +17,10 @@ function FilterButton({ id, label, icon, count, active, onClick }: {
 }) {
   return (
     <button type="button" aria-pressed={active} onClick={() => onClick(id)}
-      className={`v2-hover flex w-full items-center gap-2 rounded-[7px] border-0 px-2.5 py-1.5 text-left text-[12.5px] ${
+      className={`v2-hover flex w-full items-center gap-2 rounded-md border-0 px-2.5 py-1.5 text-left text-v2-base ${
         active ? "bg-[var(--v2-raised)] text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-text-2)]"}`}>
       <span className={id === "needs" ? "text-[var(--v2-warn)]" : "text-[var(--v2-muted)]"}>{icon}</span>
-      <span className="flex-1">{label}</span><span className="text-[11px] text-[var(--v2-muted)]">{count}</span>
+      <span className="flex-1">{label}</span><span className="text-v2-small text-[var(--v2-muted)]">{count}</span>
     </button>
   );
 }
@@ -40,8 +40,8 @@ export function InboxFilters({ items, settled, filter, project, onFilter, onProj
   return (
     <aside aria-label="Inbox filters" className="flex w-[232px] shrink-0 flex-col gap-0.5 border-r border-[var(--v2-edge)] bg-[var(--v2-bg)] p-2 pt-3.5">
       <div className="flex items-baseline gap-2 px-1.5 pb-2.5">
-        <h1 className="m-0 text-[18px] font-[650]">Inbox</h1>
-        <span className="text-[12px] text-[var(--v2-warn)]">{needs} need you</span>
+        <h1 className="m-0 text-v2-heading font-[650]">Inbox</h1>
+        <span className="text-v2-body text-[var(--v2-warn)]">{needs} need you</span>
       </div>
       {FILTERS.slice(0, 4).map(row => (
         <FilterButton key={row.id} {...row} active={filter === row.id && !project} onClick={onFilter}
@@ -52,19 +52,19 @@ export function InboxFilters({ items, settled, filter, project, onFilter, onProj
         <FilterButton key={row.id} {...row} active={filter === row.id && !project} onClick={onFilter}
           count={items.filter(item => itemMatches(item, row.id, settled)).length} />
       ))}
-      <button type="button" onClick={onMessages} className="v2-hover flex items-center gap-2 rounded-[7px] border-0 bg-transparent px-2.5 py-1.5 text-left text-[12.5px] text-[var(--v2-text-2)]">
+      <button type="button" onClick={onMessages} className="v2-hover flex items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-1.5 text-left text-v2-base text-[var(--v2-text-2)]">
         <MessagesSquare size={13} aria-hidden /><span className="flex-1">All bus conversations</span>
       </button>
-      <div className="px-2.5 pt-3.5 pb-1.5 text-[10.5px] font-semibold tracking-[0.08em] text-[var(--v2-muted)]">PROJECTS</div>
+      <div className="px-2.5 pt-3.5 pb-1.5 text-v2-small font-semibold tracking-[0.08em] text-[var(--v2-muted)]">PROJECTS</div>
       {projects.map(name => (
         <button key={name} type="button" aria-pressed={project === name} onClick={() => onProject(project === name ? "" : name)}
-          className={`v2-hover flex items-center gap-2 rounded-[7px] border-0 px-2.5 py-1.5 text-left text-[12.5px] ${project === name ? "bg-[var(--v2-raised)]" : "bg-transparent"}`}>
+          className={`v2-hover flex items-center gap-2 rounded-md border-0 px-2.5 py-1.5 text-left text-v2-base ${project === name ? "bg-[var(--v2-raised)]" : "bg-transparent"}`}>
           <ProjectTile name={name} size={16} /><span className="min-w-0 flex-1 truncate text-[var(--v2-text-2)]">{name}</span>
-          <span className="text-[11px] text-[var(--v2-muted)]">{waiting.filter(item => item.project === name).length}</span>
+          <span className="text-v2-small text-[var(--v2-muted)]">{waiting.filter(item => item.project === name).length}</span>
         </button>
       ))}
       <div className="flex-1" />
-      <div className="mx-1.5 flex gap-1.5 rounded-[9px] border border-[var(--v2-edge)] p-2.5 text-[11px] leading-[1.45] text-[var(--v2-muted)]">
+      <div className="mx-1.5 flex gap-1.5 rounded-lg border border-[var(--v2-edge)] p-2.5 text-v2-small leading-[1.45] text-[var(--v2-muted)]">
         <Smartphone className="shrink-0" size={12} aria-hidden />Same list on your phone. Answer either place; the other updates.
       </div>
     </aside>

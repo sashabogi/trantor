@@ -24,7 +24,7 @@ export function MoveToPicker({ project, seat, entry, onPick, onClose }: {
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
   return (
-    <div role="dialog" aria-label={`Move ${entry.name} to`} className="m-2 flex flex-col gap-1 rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-2 text-[12px]">
+    <div role="dialog" aria-label={`Move ${entry.name} to`} className="m-2 flex flex-col gap-1 rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-2 text-v2-body">
       <div className="flex items-center gap-1 text-[var(--v2-text-2)]">
         <button type="button" aria-label="Up one folder" title="Up one folder" disabled={dir === ""} onClick={() => setDir(parentOf(dir))}
           className="v2-hover inline-flex h-6 w-6 items-center justify-center rounded border-0 bg-transparent text-inherit disabled:opacity-40">
@@ -37,7 +37,7 @@ export function MoveToPicker({ project, seat, entry, onPick, onClose }: {
         {folders?.length === 0 && <span className="px-2 py-1 text-[var(--v2-muted)]">No folders here</span>}
         {folders?.map(f => (
           <button key={f.path} type="button" data-folder={f.path} onClick={() => setDir(f.path)}
-            className="v2-hover flex items-center gap-1.5 rounded border-0 bg-transparent px-2 py-1 text-left text-[12px] text-[var(--v2-text-2)]">
+            className="v2-hover flex items-center gap-1.5 rounded border-0 bg-transparent px-2 py-1 text-left text-v2-body text-[var(--v2-text-2)]">
             <Folder size={12} aria-hidden className="shrink-0 opacity-70" />
             <span className="truncate">{f.name}</span>
           </button>

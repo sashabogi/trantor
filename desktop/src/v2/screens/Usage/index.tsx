@@ -23,10 +23,10 @@ const EMPTY_SCOPE: Scope = { agents: [], models: [] };
 function FilterBar({ filters, onChange, onExport }: { filters: Filters; onChange: (f: Filters) => void; onExport: () => void }) {
   const active = FILTER_KEYS.map(k => [k, filters[k]] as const).filter(([, v]) => v);
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--v2-muted)]">
-      <span className="text-[10.5px] font-semibold tracking-[0.08em]">FILTERS</span>
+    <div className="flex flex-wrap items-center gap-2 text-v2-body text-[var(--v2-muted)]">
+      <span className="text-v2-small font-semibold tracking-[0.08em]">FILTERS</span>
       {active.map(([k, v]) => (
-        <span key={k} data-filter={k} className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border border-[var(--v2-accent-edge)] bg-[var(--v2-accent-soft)] px-[9px] py-0.5 text-[11.5px] text-[var(--v2-accent-hi)]">
+        <span key={k} data-filter={k} className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border border-[var(--v2-accent-edge)] bg-[var(--v2-accent-soft)] px-[9px] py-0.5 text-v2-body text-[var(--v2-accent-hi)]">
           {k}: {v}
           <button type="button" aria-label={`Remove filter ${k}: ${v}`} title={`Remove filter ${k}`} onClick={() => onChange({ ...filters, [k]: null })}
             className="border-0 bg-transparent p-0 text-[var(--v2-accent-hi)]">×</button>
@@ -43,8 +43,8 @@ function Header({ range, onRange }: { range: RangeKey; onRange: (r: RangeKey) =>
   return (
     <div className="flex flex-wrap items-end gap-[14px]">
       <div className="min-w-[280px] flex-1">
-        <div className="text-[10.5px] font-semibold tracking-[0.1em] text-[var(--v2-brand-claude)]">READ FROM THE HUB'S TURN LOG, THE SCROOGE LEDGER AND EACH PROVIDER'S OWN METER</div>
-        <h1 className="m-0 mt-1 text-[26px] font-[650] tracking-[-0.01em]">Usage and costs</h1>
+        <div className="text-v2-small font-semibold tracking-[0.1em] text-[var(--v2-brand-claude)]">READ FROM THE HUB'S TURN LOG, THE SCROOGE LEDGER AND EACH PROVIDER'S OWN METER</div>
+        <h1 className="m-0 mt-1 text-v2-display font-[650] tracking-[-0.01em]">Usage and costs</h1>
       </div>
       <Seg label="Range" value={range} onChange={onRange} options={RANGES} />
     </div>
@@ -95,7 +95,7 @@ export function UsageScreen({ client }: ScreenProps) {
         <>
           <KpiRow kpis={kpis} />
           {!hasTurns && (
-            <p data-empty-turns className="m-0 rounded-lg border border-[var(--v2-accent-edge)] bg-[var(--v2-panel)] px-4 py-3 text-[12px] text-[var(--v2-muted)]">
+            <p data-empty-turns className="m-0 rounded-lg border border-[var(--v2-accent-edge)] bg-[var(--v2-panel)] px-4 py-3 text-v2-body text-[var(--v2-muted)]">
               No turns in this range. {lastRowTs
                 ? `The last turn was reported ${new Date(lastRowTs).toLocaleString()}.`
                 : "No runner has reported a turn to this hub."}
@@ -123,7 +123,7 @@ export function UsageScreen({ client }: ScreenProps) {
 function Footnote({ updatedAt, onRescan }: { updatedAt: number; onRescan: () => void }) {
   const mins = updatedAt ? Math.max(0, Math.round((Date.now() - updatedAt) / 60000)) : null;
   return (
-    <p className="m-0 text-[11.5px] leading-[1.5] text-[var(--v2-muted)]">
+    <p className="m-0 text-v2-body leading-[1.5] text-[var(--v2-muted)]">
       * API value is what plan-covered usage would cost at list prices; subscriptions are not billed per token. Real spend is what the metered
       Scrooge ledger charged. Providers with no meter show no meter, never a guess. Economics are fleet-wide rolling windows (24h, 7d, 30d, all time);
       turns come from the hub's per-day turn log in UTC days. {mins == null ? "Loading..." : `Updated ${mins === 0 ? "just now" : `${mins} min ago`}.`}{" "}

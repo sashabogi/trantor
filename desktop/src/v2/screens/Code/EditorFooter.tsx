@@ -76,11 +76,11 @@ export function EditorFooter({ editorRef, version }: { editorRef: MutableRefObje
   };
   if (!info) return null;
   return (
-    <div className="v2-mono flex shrink-0 items-center gap-3 border-t border-[var(--v2-edge)] px-3 py-1 text-[11px] text-[var(--v2-muted)]">
+    <div className="v2-mono flex shrink-0 items-center gap-3 border-t border-[var(--v2-edge)] px-3 py-1 text-v2-small text-[var(--v2-muted)]">
       {asking ? (
         <input autoFocus aria-label="Go to line" placeholder="Line" inputMode="numeric" onBlur={() => setAsking(false)}
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); goTo(e.currentTarget.value); } else if (e.key === "Escape") setAsking(false); }}
-          className="w-16 rounded border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] px-1 text-[11px] text-[var(--v2-text)] outline-none" />
+          className="w-16 rounded border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] px-1 text-v2-small text-[var(--v2-text)] outline-none" />
       ) : (
         <button type="button" aria-label="Go to line" title="Go to line" className="v2-hover rounded px-1 text-left" onClick={() => setAsking(true)}>
           {`Ln ${info.line}, Col ${info.column}`}{info.selected > 0 && ` (${info.selected} selected)`}

@@ -24,9 +24,9 @@ export function SeatMessage({ client, project, seat, inputRef }: {
         onChange={e => { setText(e.target.value); if (state !== "idle") setState("idle"); }}
         onKeyDown={e => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }}
         placeholder={`Message ${seat.label} (it gets this at its next turn boundary)`}
-        className="min-w-0 flex-1 border-0 bg-transparent py-1.5 text-[12.5px] text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
-      {state === "sent" && <span role="status" className="text-[11px] text-[var(--v2-ok)]">sent</span>}
-      {state === "failed" && <span role="alert" className="text-[11px] text-[var(--v2-bad)]">not sent</span>}
+        className="min-w-0 flex-1 border-0 bg-transparent py-1.5 text-v2-base text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
+      {state === "sent" && <span role="status" className="text-v2-small text-[var(--v2-ok)]">sent</span>}
+      {state === "failed" && <span role="alert" className="text-v2-small text-[var(--v2-bad)]">not sent</span>}
       <button type="button" aria-label={`Send to ${seat.label}`} title="Send (delivered at its next turn boundary)"
         disabled={!body || state === "sending"} onClick={() => void send()}
         className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-0 bg-[var(--v2-text)] text-[var(--v2-ink)] disabled:opacity-40">

@@ -10,9 +10,9 @@ export const NO_STOP = "Stopping a seat from the app needs a hub stop endpoint t
 export const NO_SWAP = "Swapping a seat's model needs a hub swap endpoint that does not exist yet";
 
 export function CardChip({ seat }: { seat: Seat }) {
-  if (!seat.card) return <span className="text-[12px] text-[var(--v2-muted)]">{seat.status || "no card"}</span>;
+  if (!seat.card) return <span className="text-v2-body text-[var(--v2-muted)]">{seat.status || "no card"}</span>;
   return (
-    <span className="min-w-0 truncate text-[12.5px] text-[var(--v2-text)]">
+    <span className="min-w-0 truncate text-v2-base text-[var(--v2-text)]">
       <span className="v2-mono text-[var(--v2-accent)]">#{seat.card.id}</span> {seat.card.title}
     </span>
   );

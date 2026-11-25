@@ -25,7 +25,7 @@ export function sizeLabel(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const NOTE = "px-4 py-6 text-[12.5px] text-[var(--v2-muted)]";
+const NOTE = "px-4 py-6 text-v2-base text-[var(--v2-muted)]";
 
 function MarkdownPreview({ project, scope, path }: { project: string; scope: string | null; path: string }) {
   const [text, setText] = useState<string | null>(null);
@@ -38,9 +38,9 @@ function MarkdownPreview({ project, scope, path }: { project: string; scope: str
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
   }, [project, scope, path]);
-  if (error) return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{error}</div>;
+  if (error) return <div role="alert" className="px-4 py-6 text-v2-base text-[var(--v2-bad)]">{error}</div>;
   if (text === null) return <div className={NOTE}>Reading {path}</div>;
-  return <div data-preview="markdown" className="min-h-0 flex-1 overflow-y-auto px-6 py-4 text-[13px]"><MarkdownText text={text} /></div>;
+  return <div data-preview="markdown" className="min-h-0 flex-1 overflow-y-auto px-6 py-4 text-v2-base"><MarkdownText text={text} /></div>;
 }
 
 function ImagePreview({ project, scope, path }: { project: string; scope: string | null; path: string }) {
@@ -55,12 +55,12 @@ function ImagePreview({ project, scope, path }: { project: string; scope: string
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
   }, [project, scope, path]);
-  if (error) return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{error}</div>;
+  if (error) return <div role="alert" className="px-4 py-6 text-v2-base text-[var(--v2-bad)]">{error}</div>;
   if (!body) return <div className={NOTE}>Reading {path}</div>;
   const info = [pixels, sizeLabel(body.bytes)].filter(Boolean).join(" · ");
   return (
     <div data-preview="image" className="flex min-h-0 flex-1 flex-col">
-      <div data-image-info className="v2-mono border-b border-[var(--v2-edge)] px-3 py-1 text-[11px] text-[var(--v2-muted)]">{info}</div>
+      <div data-image-info className="v2-mono border-b border-[var(--v2-edge)] px-3 py-1 text-v2-small text-[var(--v2-muted)]">{info}</div>
       {body.data === null
         ? <div className={NOTE}>This image is {sizeLabel(body.bytes)}, which is too large to preview here.</div>
         : (
@@ -86,7 +86,7 @@ export function FilePreview({ kind, project, scope, path, source }: {
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {switchable && (
         <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5">
-          <span className="v2-mono min-w-0 flex-1 truncate text-[11.5px] text-[var(--v2-muted)]">{path.split("/").join(" › ")}</span>
+          <span className="v2-mono min-w-0 flex-1 truncate text-v2-body text-[var(--v2-muted)]">{path.split("/").join(" › ")}</span>
           <Seg label="View" value={view} onChange={setView}
             options={[{ value: "preview", label: "Preview" }, { value: "source", label: "Source" }]} />
         </div>

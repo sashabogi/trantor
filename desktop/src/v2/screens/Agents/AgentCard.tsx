@@ -42,10 +42,10 @@ function stateLine(v: SeatView): string {
 }
 
 function PlanBar({ plan, vendor }: { plan: BalanceChip | null; vendor: string }) {
-  if (!plan) return <span className="text-[11px] text-[var(--v2-muted)]">{vendor} plan: not reported</span>;
+  if (!plan) return <span className="text-v2-small text-[var(--v2-muted)]">{vendor} plan: not reported</span>;
   const fill = plan.tone === "ok" ? "var(--v2-accent)" : "var(--v2-warn)";
   return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--v2-muted)]" title={plan.tooltip}>
+    <span className="inline-flex items-center gap-1.5 text-v2-small text-[var(--v2-muted)]" title={plan.tooltip}>
       plan
       {plan.barPct != null && (
         <span className="h-1 w-[54px] overflow-hidden rounded-full bg-[var(--v2-track)]">
@@ -66,10 +66,10 @@ function MessageBox({ client, view, onDone }: { client: HubClient; view: SeatVie
     <div className="mt-2 flex items-center gap-2">
       <input aria-label={`Message ${seatLabel(view.peer.session)}`} value={text} onChange={e => setText(e.target.value)}
         onKeyDown={e => { if (e.key === "Enter" && text.trim()) void send(); }} placeholder="Write a message"
-        className="min-w-0 flex-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-bg)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)]" />
+        className="min-w-0 flex-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-bg)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)]" />
       <button type="button" disabled={!text.trim()} onClick={() => void send()}
-        className="rounded-lg border border-[var(--v2-edge-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)] disabled:opacity-45">Send</button>
-      {note && <span className="text-[11px] text-[var(--v2-muted)]">{note}</span>}
+        className="rounded-lg border border-[var(--v2-edge-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)] disabled:opacity-45">Send</button>
+      {note && <span className="text-v2-small text-[var(--v2-muted)]">{note}</span>}
     </div>
   );
 }
@@ -78,7 +78,7 @@ function MessageBox({ client, view, onDone }: { client: HubClient; view: SeatVie
 function Notice({ crew, seat }: { crew: Crew; seat: string }) {
   if (!crew.notice || noticeSeat(crew.notice.text) !== seat) return null;
   return (
-    <div role="status" className={`flex items-center gap-2 text-[11.5px] ${crew.notice.failed ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
+    <div role="status" className={`flex items-center gap-2 text-v2-body ${crew.notice.failed ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
       <span className="min-w-0 flex-1">{crew.notice.text}</span>
       <IconButton label="Dismiss the seat notice" title="Dismiss" size={20} onClick={crew.dismiss}><X size={11} /></IconButton>
     </div>
@@ -127,18 +127,18 @@ export function AgentCard(props: AgentCardProps) {
         <Avatar name={p.session} size={28} presence={view.presence} surface="var(--v2-panel)" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-[13px] font-semibold">{seatLabel(p.session)}</span>
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--v2-muted)]">
+            <span className="truncate text-v2-base font-semibold">{seatLabel(p.session)}</span>
+            <span className="inline-flex items-center gap-1.5 text-v2-small text-[var(--v2-muted)]">
               <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: modelHue(`${view.vendor} ${model}`) }} />
               {view.vendor.toLowerCase()}{model && <> · <span className="text-[var(--v2-text-2)]">{model}</span></>}
             </span>
           </div>
-          <div className="text-[11.5px] text-[var(--v2-muted)]">
+          <div className="text-v2-body text-[var(--v2-muted)]">
             <span style={{ color: STATE_COLOR[view.presence] }}>{PRESENCE_LABEL[view.presence]}</span> · {stateLine(view)} · {p.machine || "machine unknown"}
           </div>
         </div>
       </div>
-      <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[12px]">
+      <div className="mt-2.5 flex flex-wrap items-center gap-2 text-v2-body">
         {card
           ? <button type="button" onClick={() => onNavigate("board", card.project)} title={card.title}
               className="inline-flex min-w-0 max-w-full items-center gap-1.5 truncate border-0 bg-transparent p-0 text-left text-[var(--v2-accent)]">
@@ -150,7 +150,7 @@ export function AgentCard(props: AgentCardProps) {
       </div>
       <div className="mt-2"><PlanBar plan={plan} vendor={view.vendor} /></div>
       {warn && (
-        <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-2 py-1 text-[11.5px] text-[var(--v2-warn)]">
+        <div className="mt-2 flex items-center gap-1.5 rounded-lg border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-2 py-1 text-v2-body text-[var(--v2-warn)]">
           <AlertTriangle size={12} />{plan.label} plan {plan.value}: give it light work until the reset
         </div>
       )}

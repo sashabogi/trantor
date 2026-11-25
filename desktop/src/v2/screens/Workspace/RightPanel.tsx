@@ -28,7 +28,7 @@ function Sheet({ kind, onBack, children }: { kind: SheetKind; onBack: () => void
     <div role="dialog" aria-label={SHEET_TITLE[kind]} className="absolute inset-0 z-20 flex flex-col bg-[var(--v2-side)]">
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--v2-edge)] px-2.5 py-1.5">
         <IconButton label="Back to chat" title="Back to chat" size={26} onClick={onBack}><ArrowLeft size={14} aria-hidden /></IconButton>
-        <span className="text-[12.5px] font-semibold">{SHEET_TITLE[kind]}</span>
+        <span className="text-v2-base font-semibold">{SHEET_TITLE[kind]}</span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
     </div>

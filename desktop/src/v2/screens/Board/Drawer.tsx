@@ -59,7 +59,7 @@ function Moves({ task, busy, error, onMove }: { task: BoardCard; busy: boolean; 
           <Button variant="danger" onClick={() => onMove("failed")} disabledReason={busy ? "Moving the card" : null} title="Mark the card failed">Failed</Button>
         )}
       </div>
-      {error && <div role="alert" className="text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
+      {error && <div role="alert" className="text-v2-body text-[var(--v2-bad)]">{error}</div>}
     </div>
   );
 }
@@ -70,17 +70,17 @@ function Header({ task, id, error, onClose }: { task: BoardCard | null; id: numb
   return (
     <>
       <div className="flex items-center gap-2">
-        <span className="v2-mono text-[11.5px] text-[var(--v2-muted)]">#{id}</span>
+        <span className="v2-mono text-v2-body text-[var(--v2-muted)]">#{id}</span>
         {task && <Chip tone={dictGet(TONE, task.status) ?? "neutral"}>{task.status}</Chip>}
-        {task?.difficulty && <span className="text-[11px] text-[var(--v2-muted)]">{task.difficulty}</span>}
+        {task?.difficulty && <span className="text-v2-small text-[var(--v2-muted)]">{task.difficulty}</span>}
         <span className="flex-1" />
         <IconButton label="Close card" title="Close the card drawer" onClick={onClose}>×</IconButton>
       </div>
-      <h2 className="m-0 break-words text-[15px] font-semibold leading-[1.3]">
+      <h2 className="m-0 break-words text-v2-title font-semibold leading-[1.3]">
         {task ? (task.summary || cleanTitle(task.title)) : error ? `Card unavailable: ${error}` : "Loading…"}
       </h2>
       {task && (seat || meta) && (
-        <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-[var(--v2-muted)]">
+        <div className="flex flex-wrap items-center gap-2 text-v2-body text-[var(--v2-muted)]">
           {seat && <Avatar name={seat} size={22} surface="var(--v2-side)" />}
           {seat && <span className="text-[var(--v2-text-2)]">{seatLabel(seat)}</span>}
           {meta && <span>{seat ? "· " : ""}{meta}</span>}
@@ -111,7 +111,7 @@ export function Drawer({ client, id, onClose, onMoved, onOpen }: DrawerProps) {
     if (!task) return;
     client.checklistToggle(task.id, index, done).then(() => { void load(); onMoved(); }).catch(() => { void load(); });
   };
-  const count = (n: number) => n > 0 ? <span className="ml-1 text-[10.5px] text-[var(--v2-muted)]">{n}</span> : null;
+  const count = (n: number) => n > 0 ? <span className="ml-1 text-v2-small text-[var(--v2-muted)]">{n}</span> : null;
   const badge = { overview: null, code: count((code?.files.length ?? 0) + (code?.commits.length ?? 0)), story: count(task?.log?.length ?? 0), timeline: null };
   return (
     <aside aria-label={`Card #${id}`} className="flex w-[430px] shrink-0 flex-col border-l border-[var(--v2-edge)] bg-[var(--v2-side)]">
@@ -122,7 +122,7 @@ export function Drawer({ client, id, onClose, onMoved, onOpen }: DrawerProps) {
       <div role="tablist" aria-label="Card sections" className="flex gap-1 border-b border-[var(--v2-edge)] px-3">
         {TABS.map(t => (
           <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
-            className={`border-0 border-b-2 bg-transparent px-2.5 py-2 text-[12px] font-medium ${tab === t ? "border-[var(--v2-accent)] text-[var(--v2-text)]" : "border-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
+            className={`border-0 border-b-2 bg-transparent px-2.5 py-2 text-v2-body font-medium ${tab === t ? "border-[var(--v2-accent)] text-[var(--v2-text)]" : "border-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
             {TAB_LABEL[t]}{badge[t]}
           </button>
         ))}

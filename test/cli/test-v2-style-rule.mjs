@@ -36,6 +36,13 @@ try {
     ok(`${name} colours fail`, result.status === 1 && /theme token/.test(result.output), result.output);
   }
 
+  const sized = lint("desktop/src/v2/screens/SizeFixture.ts", `export const row = "px-2 text-[11.5px] rounded-[7px]";\n`);
+  ok("a font size or radius off the 2.0 scale fails", sized.status === 1 && (sized.output.match(/2\.0 scale/g) || []).length >= 1, sized.output);
+  const primitive = lint("desktop/src/v2/ui/SizeFixture.ts", `export const row = "hover:text-[12.5px]";\n`);
+  ok("the scale holds inside v2/ui as well", primitive.status === 1 && /2\.0 scale/.test(primitive.output), primitive.output);
+  const scaled = lint("desktop/src/v2/screens/ScaleFixture.ts", `export const row = "text-v2-body rounded-lg h-[19px] w-[36px]";\n`);
+  ok("scale names and plain pixel sizes of boxes pass", scaled.status === 0, scaled.output);
+
   const clean = lint("desktop/src/v2/screens/CleanFixture.tsx", `export const Good = () => <><Checkbox /><Select /><div className="bg-[var(--v2-panel)]">var(--v2-text)</div></>;\n`);
   ok("shared primitives and tokens pass", clean.status === 0, clean.output);
 

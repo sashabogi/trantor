@@ -53,7 +53,7 @@ function readSeat(project: string): string | null {
 
 function EmptyCrew() {
   return (
-    <div className="m-5 rounded-xl border border-dashed border-[var(--v2-edge-2)] p-6 text-center text-[12.5px] leading-relaxed text-[var(--v2-muted)]">
+    <div className="m-5 rounded-xl border border-dashed border-[var(--v2-edge-2)] p-6 text-center text-v2-base leading-relaxed text-[var(--v2-muted)]">
       No crew on this project yet. Add a seat above and its live terminal renders here.
     </div>
   );
@@ -108,7 +108,7 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
   const openCommit = (sha: string) => { setOpenIntent(project, { kind: "commit", sha, seat: scope ?? undefined }); onNavigate("code"); };
 
   let body;
-  if (data.seats === null) body = <div className="m-5 text-[12.5px] text-[var(--v2-muted)]">Reading seats</div>;
+  if (data.seats === null) body = <div className="m-5 text-v2-base text-[var(--v2-muted)]">Reading seats</div>;
   else if (!selected) body = <EmptyCrew />;
   else if (layout === "focus") {
     body = <WorkArea client={client} project={project} seat={selected} holds={data.holds.filter(h => h.session === selected.session)}
@@ -137,7 +137,7 @@ export function WorkspaceScreen({ client, project, onNavigate }: ScreenProps) {
       </ChatColumn>
       {recording && (me
         ? <DrillMode me={me} onClose={() => setRecording(false)} />
-        : <div role="alert" className="fixed bottom-14 right-4 z-40 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-2 text-[12px] text-[var(--v2-muted)]">Waiting for the signed identity before a drill can start.</div>)}
+        : <div role="alert" className="fixed bottom-14 right-4 z-40 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-2 text-v2-body text-[var(--v2-muted)]">Waiting for the signed identity before a drill can start.</div>)}
     </div>
   );
 }

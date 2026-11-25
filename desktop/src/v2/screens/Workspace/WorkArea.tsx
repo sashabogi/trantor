@@ -38,7 +38,7 @@ function TabBody({ tab, project, seat, diff }: { tab: WorkTab; project: string; 
   }
   if (seat.isOrchestrator) return <NotWired title="Changes" line="The orchestrator works in the project checkout; open Code to review it." />;
   if (seat.machine) return <NotWired title="Changes" line={`${seat.label} runs on ${seat.machine}; its diff is not readable from here yet.`} />;
-  return <Suspense fallback={<div className="p-4 text-[12.5px] text-[var(--v2-muted)]">Loading the diff view</div>}><ChangesTab state={diff} seatName={seat.label} /></Suspense>;
+  return <Suspense fallback={<div className="p-4 text-v2-base text-[var(--v2-muted)]">Loading the diff view</div>}><ChangesTab state={diff} seatName={seat.label} /></Suspense>;
 }
 
 export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messageRef, onDecided }: {
@@ -54,10 +54,10 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
           id: t.id,
           label: t.label,
           leading: t.icon,
-          sub: t.id === "changes" && changed > 0 ? <span className="rounded-lg bg-[var(--v2-edge)] px-[5px] text-[10px]">{changed}</span> : undefined,
+          sub: t.id === "changes" && changed > 0 ? <span className="rounded-lg bg-[var(--v2-edge)] px-[5px] text-v2-micro">{changed}</span> : undefined,
         }))}
         activeId={tab} onSelect={onTab}
-        end={<span className="inline-flex items-center gap-[5px] text-[11px] text-[var(--v2-muted)]">
+        end={<span className="inline-flex items-center gap-[5px] text-v2-small text-[var(--v2-muted)]">
           <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: seat.presence === "offline" ? "var(--v2-track)" : "var(--v2-ok)" }} />
           {seat.presence === "offline" ? "offline" : "live"}{seat.machine ? ` · ${seat.machine}` : ""}
         </span>} />

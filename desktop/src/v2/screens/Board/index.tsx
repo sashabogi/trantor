@@ -79,7 +79,7 @@ export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <Toolbar view={view} onView={setView} filters={filters} onFilters={setFilters} seats={seatGroups(all, presence)} counts={counts} onNewCard={() => setNewCard(true)} />
-      <div className="px-5 pb-2 text-[11.5px] text-[var(--v2-muted)]">
+      <div className="px-5 pb-2 text-v2-body text-[var(--v2-muted)]">
         {all.length === 0 ? "No cards on this board yet." : `${all.filter(c => c.status === "done").length} of ${all.length} done${filtering ? ` · showing ${model.shown}` : ""}`}
       </div>
       <div className="flex min-h-0 flex-1">

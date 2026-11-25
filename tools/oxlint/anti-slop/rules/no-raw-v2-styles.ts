@@ -12,6 +12,9 @@ const HEX = /#(?:[\da-fA-F]{8}|[\da-fA-F]{6}|[\da-fA-F]{4}|[\da-fA-F]{3})\b/;
 const RGB = /\brgba?\(/;
 const PALETTE = /^(?:bg|text|border|from|via|to|ring|outline|shadow|decoration|accent|caret|fill|stroke)-(?:black|white|(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-(?:50|100|200|300|400|500|600|700|800|900|950))(?:\/\d+)?$/;
 
+// #14208: font sizes and radii come from the scale, in primitives too.
+const OFF_SCALE = /(?:^|[\s:!])(?:text|rounded(?:-(?:tl|tr|bl|br|t|b|l|r|s|e))?)-\[\d+(?:\.\d+)?px\]/;
+
 function rawControl(node: ESTree.JSXOpeningElement): string | null {
   if (node.name.type !== "JSXIdentifier") return null;
   if (node.name.name === "select") return "select";
@@ -37,16 +40,20 @@ export const noRawV2StylesRule = defineRule({
     messages: {
       rawControl: "Use a v2/ui control primitive instead of a raw {{control}}.",
       rawColor: "Use a --v2-* theme token instead of a raw hex, rgb colour, or Tailwind palette class.",
+      offScale: "Use the 2.0 scale: text-v2-micro, -small, -body, -base, -title, -heading, -display, and rounded-sm, -md, -lg, -xl or -full.",
     },
   },
   create(context) {
     const filename = context.filename.replaceAll("\\", "/");
-    if (!filename.includes(V2_ROOT) || filename.includes(V2_UI) || ALLOWLIST.some(file => filename.endsWith(file))) return {};
+    if (!filename.includes(V2_ROOT) || ALLOWLIST.some(file => filename.endsWith(file))) return {};
+    const primitive = filename.includes(V2_UI);
     const checkColor = (node: ESTree.Node, value: string) => {
-      if (hasRawColor(value)) context.report({ node, messageId: "rawColor" });
+      if (!primitive && hasRawColor(value)) context.report({ node, messageId: "rawColor" });
+      if (OFF_SCALE.test(value)) context.report({ node, messageId: "offScale" });
     };
     return {
       JSXOpeningElement(node) {
+        if (primitive) return;
         const control = rawControl(node);
         if (control) context.report({ node, messageId: "rawControl", data: { control } });
       },

@@ -13,7 +13,7 @@ const KIND_LABEL = { hold: "Collision gate", proposal: "Proposal", message: "Que
 
 export function ItemMeta({ item }: { item: QueueItem }) {
   return (
-    <div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-[var(--v2-muted)]">
+    <div className="mt-0.5 flex items-center gap-1.5 text-v2-body text-[var(--v2-muted)]">
       <ProjectTile name={item.project || "?"} size={16} />
       <span className="truncate">
         {item.project || "no project"}
@@ -55,7 +55,7 @@ function QueueRow({ item, d, onNavigate }: { item: QueueItem; d: Decisions; onNa
         <Icon size={14} aria-hidden />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] text-[var(--v2-text)]">{item.title}</div>
+        <div className="truncate text-v2-base text-[var(--v2-text)]">{item.title}</div>
         <ItemMeta item={item} />
       </div>
       <div className="flex shrink-0 items-center gap-1.5"><Actions item={item} d={d} onNavigate={onNavigate} /></div>
@@ -78,14 +78,14 @@ export function NeedsYou({ items, d, onNavigate }: { items: QueueItem[]; d: Deci
     <section aria-labelledby={heading} className="rounded-xl border border-[var(--v2-warn-edge)] bg-[var(--v2-panel)]">
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-[14px] py-[10px]">
         <AlertTriangle size={15} aria-hidden className="text-[var(--v2-warn)]" />
-        <h2 id={heading} className="m-0 text-[13px] font-semibold">Needs you <span className="v2-mono text-[var(--v2-warn)]">{actionable.length}</span></h2>
+        <h2 id={heading} className="m-0 text-v2-base font-semibold">Needs you <span className="v2-mono text-[var(--v2-warn)]">{actionable.length}</span></h2>
       </div>
-      {d.error && <p role="alert" className="m-0 px-[14px] pt-2 text-[12px] text-[var(--v2-bad)]">{d.error}</p>}
-      {actionable.length === 0 && <p className="m-0 px-[14px] py-4 text-[12.5px] text-[var(--v2-muted)]">Nothing needs an answer.</p>}
+      {d.error && <p role="alert" className="m-0 px-[14px] pt-2 text-v2-body text-[var(--v2-bad)]">{d.error}</p>}
+      {actionable.length === 0 && <p className="m-0 px-[14px] py-4 text-v2-base text-[var(--v2-muted)]">Nothing needs an answer.</p>}
       {shownActionable.map(item => <QueueRow key={item.key} item={item} d={d} onNavigate={onNavigate} />)}
       {drills.length > 0 && (
         <div className="border-y border-[var(--v2-edge)] px-[14px] pb-1 pt-2">
-          <h3 className="m-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--v2-muted)]">Waiting for a drill <span className="v2-mono">{drillCount}</span></h3>
+          <h3 className="m-0 text-v2-small font-semibold uppercase tracking-[0.08em] text-[var(--v2-muted)]">Waiting for a drill <span className="v2-mono">{drillCount}</span></h3>
         </div>
       )}
       {shownDrills.map(item => <QueueRow key={item.key} item={item} d={d} onNavigate={onNavigate} />)}

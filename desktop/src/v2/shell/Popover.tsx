@@ -20,7 +20,7 @@ export function Popover({ open, onClose, label, align = "left", children }: {
   if (!open) return null;
   return (
     <div ref={ref} role="menu" aria-label={label}
-      className={`absolute top-[calc(100%+6px)] z-50 min-w-[220px] max-h-[60vh] overflow-y-auto rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[var(--v2-shadow-menu)] ${align === "right" ? "right-0" : "left-0"}`}>
+      className={`absolute top-[calc(100%+6px)] z-50 min-w-[220px] max-h-[60vh] overflow-y-auto rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[var(--v2-shadow-menu)] ${align === "right" ? "right-0" : "left-0"}`}>
       {children}
     </div>
   );
@@ -31,7 +31,7 @@ export function MenuItem({ onSelect, children, active, title }: {
 }) {
   return (
     <button type="button" role="menuitem" title={title} onClick={onSelect} aria-current={active || undefined}
-      className={`v2-hover flex w-full items-center gap-2 rounded-[7px] border-0 px-2 py-1.5 text-left text-[12.5px] ${
+      className={`v2-hover flex w-full items-center gap-2 rounded-md border-0 px-2 py-1.5 text-left text-v2-base ${
         active ? "bg-[var(--v2-accent-soft)] text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-text-2)]"}`}>
       {children}
     </button>

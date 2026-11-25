@@ -23,7 +23,7 @@ function CopyCommandButton({ command }: { command: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       }}
-      className="shrink-0 rounded-lg border-0 bg-transparent px-1.5 py-0.5 text-[11px] leading-none text-[var(--v2-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--v2-text)]">
+      className="shrink-0 rounded-lg border-0 bg-transparent px-1.5 py-0.5 text-v2-small leading-none text-[var(--v2-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--v2-text)]">
       {copied ? "copied" : "copy command"}
     </button>
   );
@@ -39,7 +39,7 @@ function lastLines(output: string, count = 3): string {
 export function UpdateOutcomeLine({ report, result }: { report: AgentCliCompatibility; result: AgentCliUpdate }) {
   if (result.ok) {
     return (
-      <p className="m-0 min-w-0 flex-1 text-[12.5px] text-[var(--v2-warn)]"
+      <p className="m-0 min-w-0 flex-1 text-v2-base text-[var(--v2-warn)]"
         data-agent-cli-updated={report.cli}>
         Updated {report.label} {bareVersion(result.before) ?? "an unreadable version"} to {bareVersion(result.after) ?? "an unreadable version"}.
       </p>
@@ -47,8 +47,8 @@ export function UpdateOutcomeLine({ report, result }: { report: AgentCliCompatib
   }
   return (
     <div className="m-0 min-w-0 flex-1" data-agent-cli-failed={report.cli}>
-      <p className="m-0 text-[12.5px] text-[var(--v2-warn)]">The update did not succeed:</p>
-      <pre className="m-0 mt-0.5 whitespace-pre-wrap font-mono text-[11.5px] leading-snug text-[var(--v2-muted)]">{lastLines(result.output)}</pre>
+      <p className="m-0 text-v2-base text-[var(--v2-warn)]">The update did not succeed:</p>
+      <pre className="m-0 mt-0.5 whitespace-pre-wrap font-mono text-v2-body leading-snug text-[var(--v2-muted)]">{lastLines(result.output)}</pre>
     </div>
   );
 }
@@ -76,7 +76,7 @@ function RestartWithHandoffButton({ project }: { project: string }) {
         title={done ? "Handed off to a fresh session" : "Writes a recap, opens a fresh session that takes over"}>
         {done ? "Restarted" : busy ? "Restarting" : confirm ? "Confirm: restart with a handoff" : "Restart with a handoff"}
       </Button>
-      {error && <span className="max-w-[220px] truncate text-[11px] text-[var(--v2-bad)]" title={error}>{error}</span>}
+      {error && <span className="max-w-[220px] truncate text-v2-small text-[var(--v2-bad)]" title={error}>{error}</span>}
     </span>
   );
 }
@@ -92,7 +92,7 @@ export function AgentCliSessions({ cli, refreshKey = 0 }: { cli: string; refresh
     <div data-agent-cli-sessions={cli} className="flex flex-col gap-1 border-t border-[var(--v2-warn-edge)] px-4 py-2">
       {rows.map(r => (
         <div key={`${r.project}:${r.seat}`} data-agent-cli-stale={`${r.project}:${r.seat}`}
-          className="flex items-center gap-2 text-[12px] text-[var(--v2-warn)]">
+          className="flex items-center gap-2 text-v2-body text-[var(--v2-warn)]">
           <span className="m-0 min-w-0 flex-1">
             <span className="font-medium">{r.project}</span>
             <span className="text-[var(--v2-muted)]"> · {r.seat} · </span>
@@ -103,7 +103,7 @@ export function AgentCliSessions({ cli, refreshKey = 0 }: { cli: string; refresh
         </div>
       ))}
       {!!report?.machinesNotChecked.length && (
-        <p className="m-0 text-[11px] text-[var(--v2-muted)]">
+        <p className="m-0 text-v2-small text-[var(--v2-muted)]">
           Checked on this machine only — not checked on {report.machinesNotChecked.join(", ")}.
         </p>
       )}
@@ -120,7 +120,7 @@ function CliBanner({ report, onDismiss }: { report: AgentCliCompatibility; onDis
       <div className="flex items-center gap-3 px-4 py-2">
         {update.result
           ? <UpdateOutcomeLine report={report} result={update.result} />
-          : <p className="m-0 min-w-0 flex-1 text-[12.5px] text-[var(--v2-warn)]">
+          : <p className="m-0 min-w-0 flex-1 text-v2-base text-[var(--v2-warn)]">
               {report.label} {report.installed} is older than Trantor needs ({report.minimum}): {report.reason}.
             </p>}
         {!update.result && (report.updateCommand
@@ -130,11 +130,11 @@ function CliBanner({ report, onDismiss }: { report: AgentCliCompatibility; onDis
                 {update.busy ? "Updating" : `Update ${report.label}`}
               </Button>
             </>
-          : <span className="shrink-0 text-[12px] text-[var(--v2-muted)]">update it the way you installed it</span>)}
+          : <span className="shrink-0 text-v2-body text-[var(--v2-muted)]">update it the way you installed it</span>)}
         {report.updateCommand && <CopyCommandButton command={report.updateCommand} />}
         <button type="button" aria-label={`Dismiss the ${report.label} version banner for this session`}
           onClick={onDismiss}
-          className="shrink-0 rounded-lg border-0 bg-transparent p-1.5 text-[14px] leading-none text-[var(--v2-muted)] hover:text-[var(--v2-text)]">
+          className="shrink-0 rounded-lg border-0 bg-transparent p-1.5 text-v2-base leading-none text-[var(--v2-muted)] hover:text-[var(--v2-text)]">
           ×
         </button>
       </div>

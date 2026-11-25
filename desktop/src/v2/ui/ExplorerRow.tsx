@@ -32,7 +32,7 @@ export function NameInput({ depth, initial = "", placeholder, onCommit, onCancel
     <div className="flex items-center py-[2px] pr-2" style={{ paddingLeft: 26 + depth * 12 }}>
       <input ref={ref} defaultValue={initial} placeholder={placeholder} aria-label={placeholder ?? "Name"} onKeyDown={onKey}
         onBlur={e => finish(true, e.currentTarget.value)}
-        className="min-w-0 flex-1 rounded border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2 py-0.5 text-[12px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
+        className="min-w-0 flex-1 rounded border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2 py-0.5 text-v2-body text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
     </div>
   );
 }
@@ -62,16 +62,16 @@ export function ExplorerRow({ entry, depth, open, mark, selected, focusable, men
         onDragStart={e => { if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; drag?.onStart(); }} onDragEnd={() => drag?.onEnd()}
         onDragOver={e => { if (entry.dir && drag) { e.preventDefault(); drag.onOver(); } }}
         onDrop={e => { if (entry.dir && drag) { e.preventDefault(); e.stopPropagation(); drag.onDrop(); } }}
-        className={`v2-hover flex cursor-pointer items-center gap-1.5 py-[3px] pr-2 text-[12px] ${selected || drag?.over ? "bg-[var(--v2-raised)]" : ""}`}
+        className={`v2-hover flex cursor-pointer items-center gap-1.5 py-[3px] pr-2 text-v2-body ${selected || drag?.over ? "bg-[var(--v2-raised)]" : ""}`}
         style={{ paddingLeft: 6 + depth * 12 }}>
         {entry.dir
           ? (open ? <ChevronDown size={12} aria-hidden className="shrink-0" /> : <ChevronRight size={12} aria-hidden className="shrink-0" />)
           : <span className="w-3 shrink-0" />}
         {entry.dir ? <Folder size={12} aria-hidden className="shrink-0 opacity-70" /> : <FileIcon size={12} aria-hidden className="shrink-0 opacity-70" />}
         <span data-name className={`min-w-0 flex-1 truncate ${deco?.letter === "D" ? "line-through" : ""}`} style={{ color }}>{entry.name}</span>
-        {counts && <span data-counts className="v2-mono shrink-0 text-[10px] tabular-nums text-[var(--v2-muted)]">{counts}</span>}
+        {counts && <span data-counts className="v2-mono shrink-0 text-v2-micro tabular-nums text-[var(--v2-muted)]">{counts}</span>}
         {!entry.dir && deco && (
-          <span data-letter={deco.letter} aria-label={decorationTitle(deco)} className="v2-mono w-3 shrink-0 text-center text-[11px] font-semibold" style={{ color: TONE_VAR[deco.tone] }}>{deco.letter}</span>
+          <span data-letter={deco.letter} aria-label={decorationTitle(deco)} className="v2-mono w-3 shrink-0 text-center text-v2-small font-semibold" style={{ color: TONE_VAR[deco.tone] }}>{deco.letter}</span>
         )}
         {entry.dir && folder && <span data-folder-dot={folder.top.tone} aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: TONE_VAR[folder.top.tone] }} />}
       </div>

@@ -99,14 +99,14 @@ export function Output() {
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="output-panel">
       <div className="flex h-8 shrink-0 items-center justify-end gap-1 border-b border-[var(--v2-edge)] px-2">
-        {error && <div role="alert" className="mr-auto truncate text-[11px] text-[var(--v2-bad)]" title={error}>{error}</div>}
+        {error && <div role="alert" className="mr-auto truncate text-v2-small text-[var(--v2-bad)]" title={error}>{error}</div>}
         <button type="button" aria-label="Clear output" title="Clear output"
           onClick={() => { generation.current += 1; setLines([]); setError(null); }}
-          className="v2-hover inline-flex h-6 items-center gap-1 rounded-md px-2 text-[11px] text-[var(--v2-muted)]">
+          className="v2-hover inline-flex h-6 items-center gap-1 rounded-md px-2 text-v2-small text-[var(--v2-muted)]">
           <Trash2 size={12} aria-hidden /> Clear
         </button>
         <select aria-label="Output channel" value={channel} onChange={event => chooseChannel(event.target.value)}
-          className="h-6 rounded-md border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-1.5 text-[11px] text-[var(--v2-text)] outline-none">
+          className="h-6 rounded-md border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-1.5 text-v2-small text-[var(--v2-text)] outline-none">
           {CHANNELS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
         </select>
       </div>
@@ -119,14 +119,14 @@ export function Output() {
             follow.current = atBottom;
             setFollowing(atBottom);
           }}
-          className="h-full overflow-auto px-3 py-2 font-mono text-[11px] leading-[1.55] text-[var(--v2-text-2)]">
+          className="h-full overflow-auto px-3 py-2 font-mono text-v2-small leading-[1.55] text-[var(--v2-text-2)]">
           {missing
             ? <p className="font-sans text-[var(--v2-muted)]">Nothing has been written here yet.</p>
             : lines.map((line, index) => <div key={`${index}:${line}`} className="whitespace-pre">{line || " "}</div>)}
         </div>
         {!following && (
           <button type="button" onClick={() => { follow.current = true; setFollowing(true); scrollToLatest(scroller.current); }}
-            className="absolute bottom-3 right-4 inline-flex items-center gap-1.5 rounded-full border border-[var(--v2-edge)] bg-[var(--v2-raised)] px-3 py-1.5 text-[11px] text-[var(--v2-text)] shadow-lg">
+            className="absolute bottom-3 right-4 inline-flex items-center gap-1.5 rounded-full border border-[var(--v2-edge)] bg-[var(--v2-raised)] px-3 py-1.5 text-v2-small text-[var(--v2-text)] shadow-lg">
             <ArrowDown size={12} aria-hidden /> Jump to latest
           </button>
         )}

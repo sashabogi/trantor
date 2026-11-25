@@ -10,7 +10,7 @@ import { applyFilters, chipForVendor, currentCard, levelFor, rosterSort, type Sc
 import type { AgentsData } from "./useAgentsData";
 import type { OverseerData } from "./useOverseer";
 
-const PILL = "rounded-full border px-2.5 py-1 text-[11.5px]";
+const PILL = "rounded-full border px-2.5 py-1 text-v2-body";
 
 function Pill({ on, onClick, children }: { on: boolean; onClick: () => void; children: string }) {
   return (
@@ -37,7 +37,7 @@ export function RosterTab({ client, project, data, ov, crew, onNavigate }: Roste
         <Pill on={state === "needs-you"} onClick={() => toggle("needs-you")}>Needs you</Pill>
         <Pill on={state === "idle"} onClick={() => toggle("idle")}>Idle</Pill>
         <span className="flex-1" />
-        <span className="text-[11px] text-[var(--v2-muted)]">sorted: needs you, working, ready</span>
+        <span className="text-v2-small text-[var(--v2-muted)]">sorted: needs you, working, ready</span>
       </div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-2.5">
         {shown.map(v => (
@@ -47,7 +47,7 @@ export function RosterTab({ client, project, data, ov, crew, onNavigate }: Roste
             duty={v.peer.session === ov.status?.dutySession ? { busy: ov.busy, start: ov.startDuty, stop: ov.stopDuty } : undefined} />
         ))}
       </div>
-      {shown.length === 0 && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">No seats match this filter.</p>}
+      {shown.length === 0 && <p className="m-0 text-v2-base text-[var(--v2-muted)]">No seats match this filter.</p>}
       <AddSeat report={data.balances.report} crew={crew} />
       <div className={SECTION_LABEL}>Machines</div>
       <Machines report={data.machines} views={data.views} />

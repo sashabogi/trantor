@@ -48,12 +48,12 @@ export function KpiRow({ kpis }: { kpis: Kpi[] }) {
     <div className="grid grid-cols-[repeat(auto-fit,minmax(170px,1fr))] gap-[10px]">
       {kpis.map(k => (
         <div key={k.key} data-kpi={k.key} className="flex flex-col gap-1 rounded-xl border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-[14px] py-3">
-          <span className="text-[10.5px] font-semibold tracking-[0.08em] text-[var(--v2-muted)]">{k.label}</span>
+          <span className="text-v2-small font-semibold tracking-[0.08em] text-[var(--v2-muted)]">{k.label}</span>
           <div className="flex items-end justify-between gap-2">
-            <span className={`text-[22px] font-semibold leading-tight ${k.warn ? "text-[var(--v2-warn)]" : k.value.startsWith("n/a") ? "text-[var(--v2-muted)] text-[15px]" : ""}`}>{k.value}</span>
+            <span className={`text-v2-heading font-semibold leading-tight ${k.warn ? "text-[var(--v2-warn)]" : k.value.startsWith("n/a") ? "text-[var(--v2-muted)] text-v2-title" : ""}`}>{k.value}</span>
             {k.spark && k.spark.length > 1 && <Sparkline values={k.spark} />}
           </div>
-          <span className="text-[11px] text-[var(--v2-muted)]">{k.sub}</span>
+          <span className="text-v2-small text-[var(--v2-muted)]">{k.sub}</span>
         </div>
       ))}
     </div>

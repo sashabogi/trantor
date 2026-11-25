@@ -45,16 +45,16 @@ export function HubPage() {
     <Section title="Hub and machines" sub="A project lives on exactly one hub. Pins are written by trantor hub set.">
       <div className="flex flex-col gap-2.5">
         {rows.map(h => (
-          <div key={h.url} className="rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
+          <div key={h.url} className="rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
             <div className="flex items-center gap-2.5">
-              <span className="v2-mono text-[12.5px]">{h.url.replace(/^https?:\/\//, "")}</span>
+              <span className="v2-mono text-v2-base">{h.url.replace(/^https?:\/\//, "")}</span>
               <Chip tone={h.ok === null ? "neutral" : h.ok ? "ok" : "bad"}>{h.ok === null ? "checking" : h.ok ? "reachable" : "unreachable"}</Chip>
-              <span className="ml-auto text-[11px] text-[var(--v2-muted)]">{h.url.includes("127.0.0.1") || h.url.includes("localhost") ? "this machine" : "remote"}</span>
+              <span className="ml-auto text-v2-small text-[var(--v2-muted)]">{h.url.includes("127.0.0.1") || h.url.includes("localhost") ? "this machine" : "remote"}</span>
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">{h.projects.map(p => <Chip key={p} mono>{p}</Chip>)}</div>
           </div>
         ))}
-        {!rows.length && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">No pins yet. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
+        {!rows.length && <p className="m-0 text-v2-base text-[var(--v2-muted)]">No pins yet. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
       </div>
     </Section>
   );
@@ -66,8 +66,8 @@ export function IdentityPage({ me }: { me: string }) {
       <div className="flex items-center gap-4">
         <Avatar name={me || "?"} size={44} />
         <div className="min-w-0 flex-1">
-          <div className="text-[14px] font-medium">{me || "reading identity…"}</div>
-          <div className="mt-0.5 text-[12px] text-[var(--v2-muted)]">
+          <div className="text-v2-base font-medium">{me || "reading identity…"}</div>
+          <div className="mt-0.5 text-v2-body text-[var(--v2-muted)]">
             The key lives in ~/.agent-bus/keys and never leaves the Rust side; the webview never sees it. Change it with RELAY_OWNER_IDENTITY.
           </div>
         </div>
@@ -110,17 +110,17 @@ function AgentCliRow({ r }: { r: AgentCliCompatibility }) {
   const update = useAgentCliUpdate(r.cli);
   return (
     <div key={r.cli} data-agent-cli={r.cli}
-      className="flex items-center gap-2.5 rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
-      <span className="text-[13px] font-medium">{r.label}</span>
-      <span className="v2-mono text-[12px] text-[var(--v2-muted)]">{r.installed ?? "—"}</span>
-      <span className="ml-auto text-[11px] text-[var(--v2-muted)]">{stateWords(r)}</span>
+      className="flex items-center gap-2.5 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
+      <span className="text-v2-base font-medium">{r.label}</span>
+      <span className="v2-mono text-v2-body text-[var(--v2-muted)]">{r.installed ?? "—"}</span>
+      <span className="ml-auto text-v2-small text-[var(--v2-muted)]">{stateWords(r)}</span>
       {r.state === "below_minimum" && r.updateCommand && (
         <Button onClick={update.run} disabledReason={update.busy ? "the updater is running" : null} aria-busy={update.busy || undefined}
           title={`Runs ${r.updateCommand}`}>
           {update.busy ? "Updating" : `Update ${r.label}`}
         </Button>
       )}
-      {update.result && <span className="min-w-[180px] max-w-[320px] text-right text-[11px] text-[var(--v2-muted)]"
+      {update.result && <span className="min-w-[180px] max-w-[320px] text-right text-v2-small text-[var(--v2-muted)]"
         title={update.result.output}>
         {update.result.ok
           ? `updated ${bareVersion(update.result.before) ?? "?"} to ${bareVersion(update.result.after) ?? "?"}`
@@ -136,7 +136,7 @@ export function AgentClisCard() {
     <Section title="Agent CLIs" sub="Each agent CLI's version against the range Trantor has verified.">
       <div className="flex flex-col gap-2.5">
         {reports.map(r => <AgentCliRow key={r.cli} r={r} />)}
-        {!reports.length && <p className="m-0 text-[12.5px] text-[var(--v2-muted)]">Reading installed agent CLIs…</p>}
+        {!reports.length && <p className="m-0 text-v2-base text-[var(--v2-muted)]">Reading installed agent CLIs…</p>}
         {reports.some(r => r.cli === "claude") && <AgentCliSessions cli="claude" />}
       </div>
     </Section>

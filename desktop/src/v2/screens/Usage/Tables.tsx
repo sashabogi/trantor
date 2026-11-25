@@ -9,11 +9,11 @@ import { agentTable, cardTable, projectTable, type TableData } from "./tableData
 const NUMERIC = /^(TURNS|WASTED|CARDS|COST|API)/;
 
 function Grid({ data, cell, empty }: { data: TableData; cell?: (row: number, col: number) => ReactNode | undefined; empty: string }) {
-  if (data.rows.length === 0) return <p className="m-0 px-[14px] py-3 text-[12px] text-[var(--v2-muted)]">{empty}</p>;
+  if (data.rows.length === 0) return <p className="m-0 px-[14px] py-3 text-v2-body text-[var(--v2-muted)]">{empty}</p>;
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-[12px]">
-        <thead><tr className="text-left text-[10.5px] tracking-[0.06em] text-[var(--v2-muted)]">
+      <table className="w-full border-collapse text-v2-body">
+        <thead><tr className="text-left text-v2-small tracking-[0.06em] text-[var(--v2-muted)]">
           {data.head.map(h => <th key={h} className={`px-3 py-2 font-semibold ${NUMERIC.test(h) ? "text-right" : ""}`}>{h}</th>)}
         </tr></thead>
         <tbody>{data.rows.map((r, i) => (

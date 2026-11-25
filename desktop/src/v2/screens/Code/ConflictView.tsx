@@ -26,11 +26,11 @@ function allPicks(count: number, pick: Choice): Map<number, Choice> {
 function Side({ title, label, text, onAccept }: { title: string; label: string; text: string; onAccept: () => void }) {
   return (
     <div className="min-w-0 flex-1 basis-1/2 overflow-hidden rounded-lg border border-[var(--v2-edge)]">
-      <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-3 py-1.5 text-[11.5px]">
+      <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-3 py-1.5 text-v2-body">
         <span className="font-semibold text-[var(--v2-text)]">{title}</span><span className="v2-mono min-w-0 flex-1 truncate text-[var(--v2-muted)]">{label}</span>
-        <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" onClick={onAccept}>Accept this</Button>
+        <Button variant="quiet" className="!px-2 !py-0.5 !text-v2-small" onClick={onAccept}>Accept this</Button>
       </div>
-      <pre className="v2-mono m-0 overflow-x-auto px-3 py-2 text-[12px] leading-[19px] text-[var(--v2-text-2)]">{text || " "}</pre>
+      <pre className="v2-mono m-0 overflow-x-auto px-3 py-2 text-v2-body leading-[19px] text-[var(--v2-text-2)]">{text || " "}</pre>
     </div>
   );
 }
@@ -46,13 +46,13 @@ function ConflictEditor({ project, scope, path, onResolved, onError }: { project
     return () => { alive = false; };
   }, [project, scope, path, onError]);
   const total = useMemo(() => (chunks ? countConflicts(chunks) : 0), [chunks]);
-  if (!chunks) return <div className="p-4 text-[12.5px] text-[var(--v2-muted)]">Reading {path}</div>;
+  if (!chunks) return <div className="p-4 text-v2-base text-[var(--v2-muted)]">Reading {path}</div>;
   const left = total - picks.size;
   const pick = (i: number, p: Choice) => setPicks(m => new Map(m).set(i, p));
   let n = -1;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-4 py-2 text-[12px]">
+      <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-4 py-2 text-v2-body">
         <span className="v2-mono flex-1 truncate text-[var(--v2-text)]">{path}</span>
         <span className="text-[var(--v2-muted)]">{total} {total === 1 ? "conflict" : "conflicts"} · {left} left</span>
         <Button variant="primary" disabledReason={left > 0 ? "Resolve the remaining conflicts first" : null}
@@ -67,9 +67,9 @@ function ConflictEditor({ project, scope, path, onResolved, onError }: { project
           const chosen = picks.get(i);
           return (
             <section key={i} aria-label={`Conflict ${i + 1} of ${total}`} className="flex flex-col gap-2">
-              <div className="flex items-center gap-2 text-[11.5px] text-[var(--v2-muted)]">
+              <div className="flex items-center gap-2 text-v2-body text-[var(--v2-muted)]">
                 Conflict {i + 1} of {total}{chosen && <span className="text-[var(--v2-ok)]">· resolved: {chosen === "both" ? "both" : chosen === "theirs" ? "incoming" : "current"}</span>}
-                <span className="flex-1" /><Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" onClick={() => pick(i, "both")}>Accept both</Button>
+                <span className="flex-1" /><Button variant="quiet" className="!px-2 !py-0.5 !text-v2-small" onClick={() => pick(i, "both")}>Accept both</Button>
               </div>
               <div className="flex gap-3">
                 <Side title="Incoming" label={c.theirsLabel} text={c.theirs} onAccept={() => pick(i, "theirs")} />
@@ -125,7 +125,7 @@ export function ConflictView({ project, snap, path, onPick, onResolved }: { proj
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <aside aria-label="Conflicted files" className="flex w-[300px] shrink-0 flex-col gap-2 overflow-y-auto border-r border-[var(--v2-edge)] p-3">
-        {operation && <div role="status" className="rounded-[10px] border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] p-3 text-[12px] text-[var(--v2-text-2)]">
+        {operation && <div role="status" className="rounded-lg border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] p-3 text-v2-body text-[var(--v2-text-2)]">
           <div className="mb-1 flex items-center gap-1.5 font-semibold text-[var(--v2-warn)]"><AlertTriangle size={13} aria-hidden />{operationName(operation)} paused</div>
           {paths.length} {paths.length === 1 ? "conflicted file" : "conflicted files"} on {snap.branch ?? scope ?? "the project checkout"}.
           <div className="mt-2 flex flex-wrap gap-1.5">
@@ -137,14 +137,14 @@ export function ConflictView({ project, snap, path, onPick, onResolved }: { proj
             <div className="flex gap-1.5"><Button variant="danger" disabledReason={busy ? "Aborting" : null} onClick={() => void finish("abort")}>Confirm abort</Button><Button disabledReason={busy ? "Aborting" : null} onClick={() => setConfirmAbort(false)}>Cancel</Button></div>
           </div>}
         </div>}
-        {error && <div role="alert" className="text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
-        {paths.length === 0 && <div className="text-[12px] text-[var(--v2-ok)]">{operation ? `No unmerged files. The ${operation} is ready to continue.` : "No unmerged files. Nothing is waiting on you."}</div>}
+        {error && <div role="alert" className="text-v2-body text-[var(--v2-bad)]">{error}</div>}
+        {paths.length === 0 && <div className="text-v2-body text-[var(--v2-ok)]">{operation ? `No unmerged files. The ${operation} is ready to continue.` : "No unmerged files. Nothing is waiting on you."}</div>}
         {paths.map(p => (
           <div key={p} className={`rounded-lg border p-2 ${p === active ? "border-[var(--v2-accent)]" : "border-[var(--v2-edge)]"}`}>
-            <button type="button" onClick={() => onPick(p)} className="flex w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-[12px]"><span className="text-[var(--v2-bad)]">!</span><PathLabel path={p} /></button>
+            <button type="button" onClick={() => onPick(p)} className="flex w-full items-center gap-2 border-0 bg-transparent p-0 text-left text-v2-body"><span className="text-[var(--v2-bad)]">!</span><PathLabel path={p} /></button>
             <div className="mt-1.5 flex gap-1">
-              <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" title="Keep the current side of every conflict in this file" onClick={() => take(p, "ours")}>Take current</Button>
-              <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" title="Keep the incoming side of every conflict in this file" onClick={() => take(p, "theirs")}>Take incoming</Button>
+              <Button variant="quiet" className="!px-2 !py-0.5 !text-v2-small" title="Keep the current side of every conflict in this file" onClick={() => take(p, "ours")}>Take current</Button>
+              <Button variant="quiet" className="!px-2 !py-0.5 !text-v2-small" title="Keep the incoming side of every conflict in this file" onClick={() => take(p, "theirs")}>Take incoming</Button>
             </div>
           </div>
         ))}

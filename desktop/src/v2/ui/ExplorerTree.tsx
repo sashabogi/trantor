@@ -23,7 +23,7 @@ function Legend() {
         <CircleHelp size={13} aria-hidden />
       </IconButton>
       <Popover open={open} onClose={() => setOpen(false)} label="Git status legend" align="right">
-        <div className="flex flex-col gap-1.5 p-2 text-[11.5px]">
+        <div className="flex flex-col gap-1.5 p-2 text-v2-body">
           {LEGEND.map(l => (
             <div key={l.letter} data-legend={l.letter} className="flex items-baseline gap-2">
               <span className="v2-mono w-3 shrink-0 text-center font-semibold" style={{ color: TONE_VAR[l.tone] }}>{l.letter}</span>
@@ -128,8 +128,8 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
   };
   const onKeyDown = useTreeKeys(d, onOpen, treeRef, setEdit, remove);
 
-  if (d.error) return <div className="px-3 py-1.5 text-[11.5px] leading-relaxed text-[var(--v2-muted)]">{d.error}</div>;
-  if (!d.roots) return <div className="px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">reading</div>;
+  if (d.error) return <div className="px-3 py-1.5 text-v2-body leading-relaxed text-[var(--v2-muted)]">{d.error}</div>;
+  if (!d.roots) return <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">reading</div>;
   const createAt = (dir: string) => edit?.kind === "create" && edit.dir === dir
     ? <NameInput depth={dir ? (d.rows.find(r => r.entry.path === dir)?.depth ?? -1) + 1 : 0} placeholder={edit.folder ? "folder name" : "file name"} onCommit={n => commitCreate(dir, edit.folder, n)} onCancel={() => setEdit(null)} />
     : null;
@@ -150,7 +150,7 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
       </div>
       {moving && <MoveToPicker project={project} seat={seat} entry={moving} onClose={() => setMoving(null)} onPick={dir => { if (dir) d.expand(dir); ops.move(moving, dir); setMoving(null); }} />}
       {asking && <DeleteConfirm text={asking.text} onConfirm={confirmRemove} onCancel={() => setAsking(null)} />}
-      {note && <div role="status" className="px-3 pb-1 text-[11px] text-[var(--v2-bad)]">{note}</div>}
+      {note && <div role="status" className="px-3 pb-1 text-v2-small text-[var(--v2-bad)]">{note}</div>}
       <div ref={treeRef} role="tree" aria-label="Files" onKeyDown={onKeyDown} className="flex flex-col">
         {createAt("")}
         {d.rows.map(({ entry, depth }) => (

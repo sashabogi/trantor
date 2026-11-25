@@ -23,7 +23,7 @@ export function IconButton({ label, title, children, size = 28, variant = "plain
       style={{ width: size, height: size, borderRadius: round ? "50%" : Math.round(size / 4), border }}>
       {children}
       {!!badge && (
-        <span data-badge className="absolute flex min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold"
+        <span data-badge className="absolute flex min-w-4 items-center justify-center rounded-full px-1 text-v2-micro font-bold"
           style={{ top: -4, right: -4, height: 16,
             background: badgeTone === "warn" ? "var(--v2-warn)" : "var(--v2-accent)",
             color: badgeTone === "warn" ? "var(--v2-warn-ink)" : "var(--v2-ink)" }}>

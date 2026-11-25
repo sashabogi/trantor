@@ -34,8 +34,8 @@ function ClassicLensBody({ client, project, me, lens, onNavigate }: ClassicLensP
 export function NotWired({ title, line }: { title: string; line: string }) {
   return (
     <div className="px-5 py-6">
-      <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
-      <p className="mt-1 text-[12.5px] text-[var(--v2-muted)]">{line}</p>
+      <h2 className="m-0 text-v2-title font-semibold">{title}</h2>
+      <p className="mt-1 text-v2-base text-[var(--v2-muted)]">{line}</p>
     </div>
   );
 }
@@ -49,20 +49,20 @@ export function AllProjects({ projects, live, onNavigate, onStartProject }: { pr
   return (
     <div className="px-5 py-4">
       <div className="flex items-center gap-3">
-        <h1 className="m-0 flex-1 text-[20px] font-[650]">All projects</h1>
+        <h1 className="m-0 flex-1 text-v2-heading font-[650]">All projects</h1>
         {onStartProject && (
           <button type="button" onClick={onStartProject} title="Create a project and wake its orchestrator (⌘N)"
-            className="rounded-[8px] border-0 bg-[var(--v2-accent)] px-3 py-1.5 text-[12.5px] font-semibold text-[var(--v2-ink)]">
+            className="rounded-lg border-0 bg-[var(--v2-accent)] px-3 py-1.5 text-v2-base font-semibold text-[var(--v2-ink)]">
             Start a project
           </button>
         )}
       </div>
-      <p className="mt-1 text-[12px] text-[var(--v2-muted)]">{projects.length} known · {live.length} with live sessions</p>
+      <p className="mt-1 text-v2-body text-[var(--v2-muted)]">{projects.length} known · {live.length} with live sessions</p>
       <ul className="mt-4 grid list-none grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2 p-0">
         {projects.map(p => (
           <li key={p}>
             <button type="button" onClick={() => onNavigate(landingLens(), p)}
-              className="v2-hover flex w-full items-center gap-2.5 rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2 text-left text-[13px] text-[var(--v2-text)]">
+              className="v2-hover flex w-full items-center gap-2.5 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2 text-left text-v2-base text-[var(--v2-text)]">
               <ProjectTile name={p} size={26} />
               <span className="min-w-0 flex-1 truncate">{p}</span>
               {live.includes(p) && <span role="img" aria-label="live" title="Has a live session" className="h-[7px] w-[7px] rounded-full bg-[var(--v2-accent)]" />}
@@ -70,7 +70,7 @@ export function AllProjects({ projects, live, onNavigate, onStartProject }: { pr
           </li>
         ))}
       </ul>
-      {!projects.length && <p className="text-[12.5px] text-[var(--v2-muted)]">No projects pinned. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
+      {!projects.length && <p className="text-v2-base text-[var(--v2-muted)]">No projects pinned. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
     </div>
   );
 }

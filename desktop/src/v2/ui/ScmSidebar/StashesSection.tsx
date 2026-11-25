@@ -6,10 +6,10 @@ import { scopeStashChange, scopeStashes, scopeStashSave, type GitStash, type Git
 
 function StashRow({ stash, busy, onAction }: { stash: GitStash; busy: boolean; onAction: (action: GitStashAction) => void }) {
   return (
-    <div data-stash={stash.name} className="flex items-center gap-1 px-3 py-1.5 text-[11.5px]">
+    <div data-stash={stash.name} className="flex items-center gap-1 px-3 py-1.5 text-v2-body">
       <div className="min-w-0 flex-1" title={new Date(stash.created_at * 1000).toLocaleString()}>
         <div className="truncate text-[var(--v2-text)]">{stash.message}</div>
-        <div className="v2-mono text-[10px] text-[var(--v2-muted)]">{stash.name} · {stash.sha.slice(0, 7)}</div>
+        <div className="v2-mono text-v2-micro text-[var(--v2-muted)]">{stash.name} · {stash.sha.slice(0, 7)}</div>
       </div>
       <IconButton label={`Apply ${stash.name}`} title="Apply this stash and keep it" size={22} disabled={busy} onClick={() => onAction("apply")}><CornerUpLeft size={12} aria-hidden /></IconButton>
       <Button variant="quiet" disabledReason={busy ? "A stash action is running" : null} onClick={() => onAction("pop")}>Pop</Button>
@@ -43,13 +43,13 @@ export function StashesSection({ project, scope, onMutated }: { project: string;
       <div className="flex gap-1.5 px-3 py-2">
         <label htmlFor="v2-stash-message" className="sr-only">Stash message</label>
         <input id="v2-stash-message" value={message} onChange={e => setMessage(e.target.value)} placeholder="Stash message"
-          className="min-w-0 flex-1 rounded-md border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2 py-1 text-[11.5px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
+          className="min-w-0 flex-1 rounded-md border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2 py-1 text-v2-body text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
         <Button variant="quiet" icon={<Archive size={12} aria-hidden />} disabledReason={!message.trim() ? "Write a stash message first" : busy ? "Stashing changes" : null}
           onClick={() => run(() => scopeStashSave(project, scope, message))}>Stash</Button>
       </div>
-      {error && <div role="alert" className="px-3 py-1.5 text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
-      {!loaded && <div className="px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">Reading stashes</div>}
-      {loaded && stashes.length === 0 && <div className="px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">No stashes.</div>}
+      {error && <div role="alert" className="px-3 py-1.5 text-v2-body text-[var(--v2-bad)]">{error}</div>}
+      {!loaded && <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">Reading stashes</div>}
+      {loaded && stashes.length === 0 && <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">No stashes.</div>}
       {stashes.map(stash => <StashRow key={stash.name} stash={stash} busy={busy}
         onAction={action => run(() => scopeStashChange(project, scope, stash.name, action))} />)}
     </div>

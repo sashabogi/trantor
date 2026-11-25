@@ -28,29 +28,29 @@ export function DialRow({ label, why, choices, value, changed, blockedNote, prov
     <div data-dial={label} className="flex items-start gap-4 border-b border-[var(--v2-edge)] px-[14px] py-3 last:border-b-0">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-[13px] font-medium text-[var(--v2-text)]">{label}</span>
+          <span className="text-v2-base font-medium text-[var(--v2-text)]">{label}</span>
           <Chip tone={changed ? "info" : "neutral"}>{changed ? "changed" : "default"}</Chip>
           <IconButton label={`Help for ${label}`} title={why} size={18}>
-            <span aria-hidden="true" className="text-[10px] font-semibold">?</span>
+            <span aria-hidden="true" className="text-v2-micro font-semibold">?</span>
           </IconButton>
         </div>
-        <div className="mt-0.5 text-[12px] text-[var(--v2-muted)]">{why}</div>
-        {blockedNote && <div className="mt-1 text-[11.5px] text-[var(--v2-warn)]">{blockedNote}</div>}
-        {note && <div className="mt-1 text-[11.5px] text-[var(--v2-warn)]">{note}</div>}
-        {provenance && <div className="v2-mono mt-1 text-[11px] text-[var(--v2-muted)]">{provenance}</div>}
+        <div className="mt-0.5 text-v2-body text-[var(--v2-muted)]">{why}</div>
+        {blockedNote && <div className="mt-1 text-v2-body text-[var(--v2-warn)]">{blockedNote}</div>}
+        {note && <div className="mt-1 text-v2-body text-[var(--v2-warn)]">{note}</div>}
+        {provenance && <div className="v2-mono mt-1 text-v2-small text-[var(--v2-muted)]">{provenance}</div>}
       </div>
       {isBoolean(choices)
         ? <Toggle label={label} on={value === "on"} disabled={locked || !!busy} title={blockedNote ?? undefined}
             onToggle={() => onPick(value === "on" ? "off" : "on")} />
         : (
       <div role="radiogroup" aria-label={label} title={blockedNote ?? undefined}
-        className="flex shrink-0 rounded-[9px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-[2px]">
+        className="flex shrink-0 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-[2px]">
         {choices.map(c => {
           const on = c.value === value;
           return (
             <button key={c.value} type="button" role="radio" aria-checked={on} disabled={locked || busy}
               onClick={() => { if (!on) onPick(c.value); }}
-              className={`rounded-[7px] border-0 px-[11px] py-[5px] text-[12px] font-medium disabled:opacity-45 ${
+              className={`rounded-md border-0 px-[11px] py-[5px] text-v2-body font-medium disabled:opacity-45 ${
                 on ? "bg-[var(--v2-hover)] text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
               {c.label}
             </button>

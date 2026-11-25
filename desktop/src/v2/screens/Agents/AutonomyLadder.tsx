@@ -35,10 +35,10 @@ export function AutonomyLadder({ client, project, level, busy, run }: AutonomyLa
       <ol className="m-0 flex list-none flex-col gap-1 p-0">
         {RUNGS.map(n => (
           <li key={n} aria-current={n === level ? "step" : undefined}
-            className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[12px] ${n === level ? "bg-[var(--v2-accent-soft)]" : ""}`}>
+            className={`flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-v2-body ${n === level ? "bg-[var(--v2-accent-soft)]" : ""}`}>
             <span className="v2-mono w-4 text-[var(--v2-muted)]">{n}</span>
             <span className="flex-1 capitalize">{dictGet(LEVEL_LABEL, String(n))}</span>
-            {n === level && <span className="text-[10.5px] font-semibold text-[var(--v2-accent-hi)]">now</span>}
+            {n === level && <span className="text-v2-small font-semibold text-[var(--v2-accent-hi)]">now</span>}
           </li>
         ))}
       </ol>

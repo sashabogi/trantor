@@ -12,7 +12,7 @@ type Mode = "text" | "files";
 export type OpenAt = (path: string, line?: number, column?: number) => void;
 type PaneProps = { project: string; scope: string | null; onOpen: OpenAt; onMutated: () => void };
 
-const INPUT = "m-3 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]";
+const INPUT = "m-3 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]";
 const MODES = [{ value: "text", label: "Text" }, { value: "files", label: "Files" }] as const;
 const ON = "!bg-[var(--v2-accent-soft)] !text-[var(--v2-accent-hi)]";
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -31,8 +31,8 @@ function FileNameSearch({ project, scope, onOpen }: PaneProps) {
       <label htmlFor="v2-file-search" className="sr-only">Search files</label>
       <input id="v2-file-search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Find a file by name" className={INPUT} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {hits.map(h => <button key={h} type="button" onClick={() => onOpen(h)} className="v2-hover v2-mono block w-full truncate border-0 bg-transparent px-3 py-1 text-left text-[11.5px] text-[var(--v2-text-2)]">{h}</button>)}
-        {q.trim() && hits.length === 0 && <div className="px-3 text-[12px] text-[var(--v2-muted)]">No file matches.</div>}
+        {hits.map(h => <button key={h} type="button" onClick={() => onOpen(h)} className="v2-hover v2-mono block w-full truncate border-0 bg-transparent px-3 py-1 text-left text-v2-body text-[var(--v2-text-2)]">{h}</button>)}
+        {q.trim() && hits.length === 0 && <div className="px-3 text-v2-body text-[var(--v2-muted)]">No file matches.</div>}
       </div>
     </>
   );
@@ -48,7 +48,7 @@ function Highlighted({ match, query }: { match: TextMatch; query: string }) {
   return (
     <>
       {text.slice(0, start)}
-      <mark className="rounded-[2px] bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]">{text.slice(start, start + len)}</mark>
+      <mark className="rounded-sm bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]">{text.slice(start, start + len)}</mark>
       {text.slice(start + len)}
     </>
   );
@@ -86,11 +86,11 @@ function Results({ found, onOpen, onReplace }: {
 }) {
   const [closed, setClosed] = useState<Set<string>>(new Set());
   const { data, query } = found;
-  if (data.files.length === 0) return <div className="px-3 text-[12px] text-[var(--v2-muted)]">No results.</div>;
+  if (data.files.length === 0) return <div className="px-3 text-v2-body text-[var(--v2-muted)]">No results.</div>;
   const toggle = (p: string) => setClosed(c => { const n = new Set(c); if (!n.delete(p)) n.add(p); return n; });
   return (
     <>
-      <div className="px-3 pb-1 text-[11px] text-[var(--v2-muted)]">
+      <div className="px-3 pb-1 text-v2-small text-[var(--v2-muted)]">
         {data.total} {data.total === 1 ? "result" : "results"} in {data.files.length} {data.files.length === 1 ? "file" : "files"}
         {data.truncated && <div>Showing the first 2,000 results</div>}
       </div>
@@ -100,10 +100,10 @@ function Results({ found, onOpen, onReplace }: {
           <div key={f.path}>
             <div className="flex items-center pr-2">
               <button type="button" aria-expanded={!shut} onClick={() => toggle(f.path)} title={f.path}
-                className="v2-hover flex min-w-0 flex-1 items-center gap-1 border-0 bg-transparent px-2 py-1 text-left text-[11.5px] text-[var(--v2-text)]">
+                className="v2-hover flex min-w-0 flex-1 items-center gap-1 border-0 bg-transparent px-2 py-1 text-left text-v2-body text-[var(--v2-text)]">
                 {shut ? <ChevronRight size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
                 <span className="v2-mono min-w-0 flex-1 truncate">{f.path}</span>
-                <span className="shrink-0 text-[10.5px] text-[var(--v2-muted)]">{f.matches.length}</span>
+                <span className="shrink-0 text-v2-small text-[var(--v2-muted)]">{f.matches.length}</span>
               </button>
               <IconButton label={`Replace all in ${f.path}`} title={`Replace all in ${f.path}`} size={20} onClick={() => onReplace({ kind: "file", path: f.path })}>
                 <Replace size={11} aria-hidden />
@@ -112,8 +112,8 @@ function Results({ found, onOpen, onReplace }: {
             {!shut && f.matches.map(m => (
               <div key={`${m.line}:${m.column}`} className="flex items-center pr-2">
                 <button type="button" onClick={() => onOpen(f.path, m.line, m.column)} title={`${f.path}:${m.line}`}
-                  className="v2-hover flex min-w-0 flex-1 items-baseline gap-2 border-0 bg-transparent py-0.5 pl-6 pr-3 text-left text-[11.5px] text-[var(--v2-text-2)]">
-                  <span className="v2-mono w-8 shrink-0 text-right text-[10.5px] text-[var(--v2-muted)]">{m.line}</span>
+                  className="v2-hover flex min-w-0 flex-1 items-baseline gap-2 border-0 bg-transparent py-0.5 pl-6 pr-3 text-left text-v2-body text-[var(--v2-text-2)]">
+                  <span className="v2-mono w-8 shrink-0 text-right text-v2-small text-[var(--v2-muted)]">{m.line}</span>
                   <span className="v2-mono min-w-0 flex-1 truncate"><Highlighted match={m} query={query} /></span>
                 </button>
                 <IconButton label={`Replace this result in ${f.path}`} title={`Replace this result in ${f.path}`} size={20} onClick={() => onReplace({ kind: "one", path: f.path, match: m })}>
@@ -191,7 +191,7 @@ function SearchBoxes(p: BoxesProps) {
         <label htmlFor="v2-text-search" className="sr-only">Search text</label>
         <input id="v2-text-search" autoFocus value={p.q} onChange={e => p.onQ(e.target.value)}
           placeholder={p.on.useRegex ? "Search with a regular expression" : "Search in files"}
-          className="min-w-0 flex-1 border-0 bg-transparent px-1 py-1 text-[12px] text-[var(--v2-text)] !outline-none" />
+          className="min-w-0 flex-1 border-0 bg-transparent px-1 py-1 text-v2-body text-[var(--v2-text)] !outline-none" />
         {toggle("caseSensitive", "Match case", <CaseSensitive size={15} aria-hidden />)}
         {toggle("useRegex", "Regular expression", <Regex size={15} aria-hidden />)}
         {toggle("wholeWord", "Whole word", <WholeWord size={15} aria-hidden />)}
@@ -222,15 +222,15 @@ function SearchBoxes(p: BoxesProps) {
 /** Says what a replace will do and waits for the click that does it. */
 function ReplaceConfirm({ text, busy, onRun, onCancel }: { text: string | null; busy: boolean; onRun: () => void; onCancel: () => void }) {
   return (
-    <div className="mx-3 mb-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-[12px]">
+    <div className="mx-3 mb-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-v2-body">
       <div className="text-[var(--v2-text)]">{text}</div>
       <div className="mt-1 flex gap-1">
         <button type="button" disabled={busy} onClick={onRun}
-          className="rounded-md border-0 bg-[var(--v2-text)] px-2 py-0.5 text-[11.5px] font-semibold text-[var(--v2-ink)] hover:bg-[var(--v2-knob)] disabled:opacity-50">
+          className="rounded-md border-0 bg-[var(--v2-text)] px-2 py-0.5 text-v2-body font-semibold text-[var(--v2-ink)] hover:bg-[var(--v2-knob)] disabled:opacity-50">
           Replace
         </button>
         <button type="button" disabled={busy} onClick={onCancel}
-          className="rounded-md border border-[var(--v2-edge-2)] bg-transparent px-2 py-0.5 text-[11.5px] text-[var(--v2-text-2)] disabled:opacity-50">
+          className="rounded-md border border-[var(--v2-edge-2)] bg-transparent px-2 py-0.5 text-v2-body text-[var(--v2-text-2)] disabled:opacity-50">
           Cancel
         </button>
       </div>
@@ -274,10 +274,10 @@ function TextSearch({ project, scope, onOpen, onMutated }: PaneProps) {
         include={include} onInclude={setInclude} exclude={exclude} onExclude={setExclude}
         on={on} flip={key => setOn(s => ({ ...s, [key]: !s[key] }))}
         canReplaceAll={!!data && data.total > 0 && !busy} onReplaceAll={() => setPending({ kind: "all" })} />
-      {error && <div role="alert" className="px-3 pb-1 pt-1 text-[12px] text-[var(--v2-bad)]">{error}</div>}
+      {error && <div role="alert" className="px-3 pb-1 pt-1 text-v2-body text-[var(--v2-bad)]">{error}</div>}
       {note && (
         <div role={note.kind === "bad" ? "alert" : "status"}
-          className={`px-3 pb-1 text-[12px] ${note.kind === "bad" ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
+          className={`px-3 pb-1 text-v2-body ${note.kind === "bad" ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
           {note.text}
         </div>
       )}

@@ -34,8 +34,8 @@ function Dot({ presence }: { presence: SeatInfo["presence"] }) {
 function MenuRow({ label, hint, onClick, disabled }: { label: string; hint?: string; onClick?: () => void; disabled?: string | null }) {
   return (
     <button type="button" role="menuitem" disabled={!!disabled} title={disabled ?? hint} onClick={onClick}
-      className="v2-hover flex w-full flex-col items-start rounded-md border-0 bg-transparent px-2 py-1 text-left text-[12px] text-[var(--v2-text-2)] disabled:opacity-45">
-      {label}{(disabled ?? hint) && <span className="text-[10.5px] text-[var(--v2-muted)]">{disabled ?? hint}</span>}
+      className="v2-hover flex w-full flex-col items-start rounded-md border-0 bg-transparent px-2 py-1 text-left text-v2-body text-[var(--v2-text-2)] disabled:opacity-45">
+      {label}{(disabled ?? hint) && <span className="text-v2-small text-[var(--v2-muted)]">{disabled ?? hint}</span>}
     </button>
   );
 }
@@ -48,8 +48,8 @@ function SeatMenu({ s, acts, ops, onClose }: { s: SeatInfo & { branchLabel: stri
   const rebaseReason = s.presence === "working" ? `${seatLabel(s.seat)} is working; rebase after the turn ends`
     : !branch?.current ? "Open this seat's worktree; rebase acts on its current branch" : !main ? "main is not present in this checkout" : null;
   return (
-    <div role="menu" ref={showWhole} aria-label={`${s.branchLabel} actions`} className="absolute right-2 top-full z-10 w-[280px] rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[var(--v2-shadow-menu)]">
-      <div className="flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-[var(--v2-muted)]"><Avatar name={s.seat} size={16} /><span className="v2-mono text-[var(--v2-text)]">{s.branchLabel}</span> · {ahead}</div>
+    <div role="menu" ref={showWhole} aria-label={`${s.branchLabel} actions`} className="absolute right-2 top-full z-10 w-[280px] rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[var(--v2-shadow-menu)]">
+      <div className="flex items-center gap-1.5 px-2 py-1 text-v2-body text-[var(--v2-muted)]"><Avatar name={s.seat} size={16} /><span className="v2-mono text-[var(--v2-text)]">{s.branchLabel}</span> · {ahead}</div>
       <SectionLabel>Open</SectionLabel>
       <MenuRow label="Open its worktree in a tab" onClick={run(() => acts.onSeat(s.seat))} />
       <MenuRow label={`Message ${seatLabel(s.seat)}`} onClick={run(() => acts.onMessage(s.seat))} />
@@ -69,14 +69,14 @@ function SeatRow({ s, current, acts, ops, onClose }: { s: SeatInfo & { branchLab
   const [menu, setMenu] = useState(false);
   return (
     <div className="relative">
-      <div data-current={current || undefined} className={`flex items-center gap-2 px-3 py-1.5 text-[12px] ${current ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
+      <div data-current={current || undefined} className={`flex items-center gap-2 px-3 py-1.5 text-v2-body ${current ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
         <button type="button" onClick={() => { acts.onSeat(s.seat); onClose(); }} className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left text-[var(--v2-text)]">
           <GitBranchIcon size={13} aria-hidden className="shrink-0 text-[var(--v2-muted)]" />
-          <span className="v2-mono shrink-0 text-[12px]">{s.branchLabel}</span>
+          <span className="v2-mono shrink-0 text-v2-body">{s.branchLabel}</span>
           <Dot presence={s.presence} />
-          <span className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] text-[var(--v2-muted)]"><Avatar name={s.seat} size={16} />{seatLabel(s.seat)} · {PRESENCE_LABEL[s.presence]}{s.machine ? ` · ${s.machine}` : ""}</span>
+          <span className="flex min-w-0 items-center gap-1.5 truncate text-v2-body text-[var(--v2-muted)]"><Avatar name={s.seat} size={16} />{seatLabel(s.seat)} · {PRESENCE_LABEL[s.presence]}{s.machine ? ` · ${s.machine}` : ""}</span>
         </button>
-        {s.ahead ? <span className="v2-mono shrink-0 text-[11px] text-[var(--v2-muted)]" title={`${s.ahead} commits ahead of main`}>↑{s.ahead}</span> : null}
+        {s.ahead ? <span className="v2-mono shrink-0 text-v2-small text-[var(--v2-muted)]" title={`${s.ahead} commits ahead of main`}>↑{s.ahead}</span> : null}
         <IconButton label={`More actions for ${s.branchLabel}`} title="More actions" size={22} onClick={() => setMenu(m => !m)}><MoreHorizontal size={13} aria-hidden /></IconButton>
       </div>
       {menu && <SeatMenu s={s} acts={acts} ops={ops} onClose={() => { setMenu(false); onClose(); }} />}
@@ -99,16 +99,16 @@ function BranchRow({ branch, ops }: { branch: GitBranch; ops: BranchOps }) {
   const integrateReason = branch.current ? "This is already the current branch" : ops.mutationReason();
   return (
     <div className="relative px-1">
-      <div data-current={branch.current || undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[12px] ${branch.current ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
+      <div data-current={branch.current || undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-v2-body ${branch.current ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
         <button type="button" disabled={!!ops.switchReason(branch)} title={ops.switchReason(branch) ?? `Switch to ${branch.name}`} onClick={() => ops.switchTo(branch)}
           className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left text-[var(--v2-text)] disabled:opacity-45">
           <GitBranchIcon size={13} aria-hidden className="shrink-0 text-[var(--v2-muted)]" /><span className="v2-mono truncate">{branch.name}</span>
         </button>
-        <span className="shrink-0 text-[10.5px] text-[var(--v2-muted)]">{age(branch.committed_at)}</span>
-        {(branch.ahead || branch.behind) ? <span className="v2-mono shrink-0 text-[10.5px] text-[var(--v2-muted)]">{branch.ahead ? `↑${branch.ahead}` : ""}{branch.behind ? ` ↓${branch.behind}` : ""}</span> : null}
+        <span className="shrink-0 text-v2-small text-[var(--v2-muted)]">{age(branch.committed_at)}</span>
+        {(branch.ahead || branch.behind) ? <span className="v2-mono shrink-0 text-v2-small text-[var(--v2-muted)]">{branch.ahead ? `↑${branch.ahead}` : ""}{branch.behind ? ` ↓${branch.behind}` : ""}</span> : null}
         <IconButton label={`More actions for ${branch.name}`} title="Branch actions" size={22} onClick={() => setMenu(value => !value)}><MoreHorizontal size={13} aria-hidden /></IconButton>
       </div>
-      {menu && <div role="menu" ref={showWhole} aria-label={`${branch.name} actions`} className="absolute right-2 top-full z-20 w-[280px] rounded-[10px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-xl">
+      {menu && <div role="menu" ref={showWhole} aria-label={`${branch.name} actions`} className="absolute right-2 top-full z-20 w-[280px] rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-xl">
         <MenuRow label={`Switch to ${branch.name}`} disabled={ops.switchReason(branch)} onClick={run(() => ops.switchTo(branch))} />
         <MenuRow label={`Merge into ${branch.current ? "current branch" : "the current branch"}`} hint={`Merge ${branch.name}`} disabled={integrateReason} onClick={run(() => ops.integrate("merge", branch))} />
         <MenuRow label="Rebase current onto this branch" disabled={integrateReason} onClick={run(() => ops.integrate("rebase", branch))} />
@@ -133,7 +133,7 @@ export function BranchPicker({ project, seats, snap, scope, acts, onClose, onMut
         <Search size={13} aria-hidden className="text-[var(--v2-muted)]" />
         <label htmlFor="v2-branch-filter" className="sr-only">Switch to a branch or seat</label>
         <input id="v2-branch-filter" autoFocus value={filter} onChange={event => setFilter(event.target.value)} placeholder="Switch to a branch, seat or worktree…"
-          className="min-w-0 flex-1 border-0 bg-transparent text-[12.5px] text-[var(--v2-text)] outline-none" />
+          className="min-w-0 flex-1 border-0 bg-transparent text-v2-base text-[var(--v2-text)] outline-none" />
         <IconButton label={sort === "recent" ? "Sort: most recent first" : "Sort: A to Z"} title="Sort: most recent first, or A to Z" size={24} onClick={() => setSort(value => (value === "recent" ? "name" : "recent"))}>
           {sort === "recent" ? <Clock size={13} aria-hidden /> : <ArrowDownAZ size={13} aria-hidden />}
         </IconButton>
@@ -143,25 +143,25 @@ export function BranchPicker({ project, seats, snap, scope, acts, onClose, onMut
         {groups.checkout.length > 0 && <>
           <SectionLabel>This checkout</SectionLabel>
           <button type="button" onClick={() => { acts.onCheckout(); onClose(); }} data-current={scope === null || undefined}
-            className={`flex w-full items-center gap-2 border-0 px-3 py-1.5 text-left text-[12px] ${scope === null ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
+            className={`flex w-full items-center gap-2 border-0 px-3 py-1.5 text-left text-v2-body ${scope === null ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
             <GitBranchIcon size={13} aria-hidden className="text-[var(--v2-muted)]" /><span className="text-[var(--v2-text)]">Project checkout</span>
-            <span className="v2-mono text-[11.5px] text-[var(--v2-muted)]">· {snap?.branch ?? "reading branch"}</span>
+            <span className="v2-mono text-v2-body text-[var(--v2-muted)]">· {snap?.branch ?? "reading branch"}</span>
           </button>
         </>}
         <SectionLabel>Seats · each in its own worktree</SectionLabel>
-        {groups.seats.length === 0 && <div className="px-3 py-1.5 text-[12px] text-[var(--v2-muted)]">{seats.some(seat => seat.hasWorktree) ? "No seat matches." : "No seat has a worktree for this project."}</div>}
+        {groups.seats.length === 0 && <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">{seats.some(seat => seat.hasWorktree) ? "No seat matches." : "No seat has a worktree for this project."}</div>}
         {groups.seats.map(seat => <SeatRow key={seat.seat} s={seat} current={scope === seat.seat} acts={acts} ops={ops} onClose={onClose} />)}
         {show === "all" && <>
           <SectionLabel>Other local</SectionLabel>
-          {branchState.readError && <div role="alert" className="px-3 py-1.5 text-[12px] text-[var(--v2-bad)]">{branchState.readError}</div>}
-          {!branchState.readError && locals.length === 0 && <div className="px-3 py-1.5 text-[12px] text-[var(--v2-muted)]">No other local branches match.</div>}
+          {branchState.readError && <div role="alert" className="px-3 py-1.5 text-v2-body text-[var(--v2-bad)]">{branchState.readError}</div>}
+          {!branchState.readError && locals.length === 0 && <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">No other local branches match.</div>}
           {locals.map(item => <BranchRow key={item.name} branch={item} ops={ops} />)}
           <SectionLabel>Remote</SectionLabel>
-          {!branchState.readError && remotes.length === 0 && <div className="px-3 py-1.5 text-[12px] text-[var(--v2-muted)]">No remote branches match.</div>}
+          {!branchState.readError && remotes.length === 0 && <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">No remote branches match.</div>}
           {remotes.map(item => <BranchRow key={item.name} branch={item} ops={ops} />)}
         </>}
       </div>
-      <div className="flex items-center gap-2 border-t border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-muted)]">
+      <div className="flex items-center gap-2 border-t border-[var(--v2-edge)] px-3 py-2 text-v2-body text-[var(--v2-muted)]">
         <Button disabledReason={ops.mutationReason()} onClick={() => setDialog({ kind: "create" })}>Create branch…</Button>
         <span className="flex-1" />
         <span>⏎ switch</span>

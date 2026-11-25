@@ -39,8 +39,8 @@ export function WorkingAgreements() {
           <label key={a.title} className="flex items-start gap-2.5" title="Edited in BUILD-DOCTRINE.md, not here">
             <Checkbox checked disabled readOnly aria-label={`${a.title}, edited in BUILD-DOCTRINE.md`} className="mt-[3px]" />
             <span className="flex flex-col">
-              <span className="text-[12.5px] text-[var(--v2-text)]">{a.title}</span>
-              <span className="text-[11.5px] text-[var(--v2-muted)]">{a.body}</span>
+              <span className="text-v2-base text-[var(--v2-text)]">{a.title}</span>
+              <span className="text-v2-body text-[var(--v2-muted)]">{a.body}</span>
             </span>
           </label>
         ))}

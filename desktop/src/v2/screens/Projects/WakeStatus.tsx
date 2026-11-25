@@ -22,15 +22,15 @@ export function WakeLine({ project, state, startedAt, hint, onRetry, onDismiss, 
   if (!line && !hint) return null;
   return (
     <div role="status" aria-label={`${project} start status`}
-      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--v2-edge)] bg-[var(--v2-panel)] px-5 py-2 text-[12px]">
+      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--v2-edge)] bg-[var(--v2-panel)] px-5 py-2 text-v2-body">
       {line && <span title={line.title} className={TONE[line.tone]}>{line.text}</span>}
       {state?.phase === "outcome" && state.kind === "sent" && (
         <button type="button" aria-label="Dismiss wake status" title="Dismiss wake status" onClick={() => onDismiss(project)}
-          className="border-0 bg-transparent px-1 text-[13px] text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
+          className="border-0 bg-transparent px-1 text-v2-base text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
       )}
       {line?.retry && (
         <button type="button" onClick={() => onRetry(project)}
-          className="v2-hover rounded-md border border-[var(--v2-edge-2)] bg-transparent px-2 py-0.5 text-[11.5px] font-semibold text-[var(--v2-text)]">
+          className="v2-hover rounded-md border border-[var(--v2-edge-2)] bg-transparent px-2 py-0.5 text-v2-body font-semibold text-[var(--v2-text)]">
           Try again
         </button>
       )}
@@ -38,7 +38,7 @@ export function WakeLine({ project, state, startedAt, hint, onRetry, onDismiss, 
         <span className="flex items-center gap-1.5 text-[var(--v2-muted)]">
           {PLAN_HINT}
           <button type="button" aria-label="Dismiss this note" title="Dismiss this note" onClick={onDismissHint}
-            className="border-0 bg-transparent px-1 text-[13px] text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
+            className="border-0 bg-transparent px-1 text-v2-base text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
         </span>
       )}
     </div>
@@ -66,12 +66,12 @@ export function WakeNotice({ wakes, wakeStarts, activeProject }: {
   if (!text || project === activeProject || dismissed === wakeKey || expired === wakeKey) return null;
   return (
     <div role="status" aria-live="polite" title={`${project} · ${text}`}
-      className="flex min-w-0 max-w-[360px] flex-[1_1_220px] items-center gap-1 overflow-hidden rounded-[9px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-1.5 text-[12px] text-[var(--v2-text-2)]">
+      className="flex min-w-0 max-w-[360px] flex-[1_1_220px] items-center gap-1 overflow-hidden rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-1.5 text-v2-body text-[var(--v2-text-2)]">
       <span className="min-w-0 flex-1 truncate">
         <span className="font-semibold text-[var(--v2-text)]">{project}</span> · {text}
       </span>
       <button type="button" aria-label="Dismiss the wake notice" title="Dismiss the wake notice" onClick={() => setDismissed(wakeKey)}
-        className="shrink-0 border-0 bg-transparent px-1 text-[13px] text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
+        className="shrink-0 border-0 bg-transparent px-1 text-v2-base text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
     </div>
   );
 }

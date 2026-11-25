@@ -41,11 +41,11 @@ function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenGr
     if (!loaded) { editorRef.current = null; return; }
     if (reveal && editorRef.current) revealAt(editorRef.current, reveal);
   }, [reveal, loaded]);
-  if (doc.load.kind === "loading") return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Reading {path}</div>;
-  if (doc.load.kind === "error") return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{doc.load.reason === "binary file" ? "This file is not text" : doc.load.reason}</div>;
+  if (doc.load.kind === "loading") return <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">Reading {path}</div>;
+  if (doc.load.kind === "error") return <div role="alert" className="px-4 py-6 text-v2-base text-[var(--v2-bad)]">{doc.load.reason === "binary file" ? "This file is not text" : doc.load.reason}</div>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">
+      <div className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">
         <span className="v2-mono min-w-0 flex-1 truncate">{path.split("/").join(" › ")}</span>
         <ReviewChip project={project} seat={scope} path={path} onOpenGraph={onOpenGraph} />
         <FileHistoryControl project={project} scope={scope} path={path} />

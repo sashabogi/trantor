@@ -22,7 +22,7 @@ type LineSelect = (index: number, shift: boolean) => void;
 type Blame = { lines: Map<number, GitBlameLine> | null; error: string | null };
 
 function Gutter({ n }: { n: number | null }) {
-  return <span className="w-[34px] shrink-0 select-none pr-1.5 text-right text-[10.5px] text-[var(--v2-track)]">{n ?? ""}</span>;
+  return <span className="w-[34px] shrink-0 select-none pr-1.5 text-right text-v2-small text-[var(--v2-track)]">{n ?? ""}</span>;
 }
 
 // #14237: the history cell leads its own diff row, so it lines up and stays in view whatever the line length.
@@ -30,7 +30,7 @@ function Gutter({ n }: { n: number | null }) {
 function BlameCell({ line, uncommitted = false }: { line: GitBlameLine | null; uncommitted?: boolean }) {
   return (
     <span data-blame-cell title={line ? `${line.subject} · ${line.sha}` : undefined}
-      className="v2-mono flex h-[19px] w-[190px] shrink-0 select-none items-center gap-1.5 overflow-hidden whitespace-nowrap border-r border-[var(--v2-edge)] px-2 text-[10px] text-[var(--v2-muted)]">
+      className="v2-mono flex h-[19px] w-[190px] shrink-0 select-none items-center gap-1.5 overflow-hidden whitespace-nowrap border-r border-[var(--v2-edge)] px-2 text-v2-micro text-[var(--v2-muted)]">
       {!line && uncommitted && <span className="min-w-0 flex-1 truncate">not committed</span>}
       {line && <>
         <span className="min-w-0 flex-1 truncate text-[var(--v2-text-2)]">{line.author}</span>
@@ -58,7 +58,7 @@ function CombinedLine({ l, index, selected, onSelect, blame }: { l: DiffLine; in
   const interactive = l.kind !== "ctx" ? selectionProps(index, onSelect) : {};
   return (
     <div data-kind={l.kind} data-selected={selected || undefined} {...interactive}
-      className="v2-mono flex min-w-max whitespace-pre text-[12px] leading-[19px] data-[selected=true]:outline data-[selected=true]:outline-1 data-[selected=true]:-outline-offset-1 data-[selected=true]:outline-[var(--v2-accent)]"
+      className="v2-mono flex min-w-max whitespace-pre text-v2-body leading-[19px] data-[selected=true]:outline data-[selected=true]:outline-1 data-[selected=true]:-outline-offset-1 data-[selected=true]:outline-[var(--v2-accent)]"
       style={{ background: ROW_BG[l.kind] }}>
       {blame !== undefined && <BlameCell line={blame?.get(l.oldNo ?? -1) ?? null} uncommitted={!!blame && l.kind === "add"} />}
       <Gutter n={l.oldNo} /><Gutter n={l.newNo} />
@@ -72,7 +72,7 @@ function SplitCell({ l, side, index, selected, onSelect }: { l: DiffLine | null;
   const interactive = l && l.kind !== "ctx" ? selectionProps(index, onSelect) : {};
   return (
     <div {...interactive} data-selected={selected || undefined}
-      className="v2-mono flex min-w-0 flex-1 basis-1/2 whitespace-pre text-[12px] leading-[19px] data-[selected=true]:outline data-[selected=true]:outline-1 data-[selected=true]:-outline-offset-1 data-[selected=true]:outline-[var(--v2-accent)]"
+      className="v2-mono flex min-w-0 flex-1 basis-1/2 whitespace-pre text-v2-body leading-[19px] data-[selected=true]:outline data-[selected=true]:outline-1 data-[selected=true]:-outline-offset-1 data-[selected=true]:outline-[var(--v2-accent)]"
       style={{ background: l ? ROW_BG[l.kind === "ctx" ? "ctx" : side === "left" ? "del" : "add"] : "transparent" }}>
       <Gutter n={l ? (side === "left" ? l.oldNo : l.newNo) : null} />
       <span className="pr-4 text-[var(--v2-text-2)]">{l?.text ?? ""}</span>
@@ -82,7 +82,7 @@ function SplitCell({ l, side, index, selected, onSelect }: { l: DiffLine | null;
 
 function PatchButton({ action, unit, busy, onRun }: { action: GitPatchAction; unit: string; busy: boolean; onRun: (action: GitPatchAction) => void }) {
   const label = `${action === "stage" ? "Stage" : action === "unstage" ? "Unstage" : "Discard"} ${unit}`;
-  return <Button variant={action === "discard" ? "danger" : "quiet"} className="!px-2 !py-0.5 !text-[11px]" disabledReason={busy ? "Applying patch" : null} onClick={() => onRun(action)}>{label}</Button>;
+  return <Button variant={action === "discard" ? "danger" : "quiet"} className="!px-2 !py-0.5 !text-v2-small" disabledReason={busy ? "Applying patch" : null} onClick={() => onRun(action)}>{label}</Button>;
 }
 
 function HunkBlock({ file, hunk, layout, busy, onAddToChat, onApply, blame }: {
@@ -118,14 +118,14 @@ function HunkBlock({ file, hunk, layout, busy, onAddToChat, onApply, blame }: {
   };
   return (
     <div>
-      <div className="v2-mono sticky left-0 flex min-w-max items-center gap-2 border-y border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-3 py-1 text-[11px] text-[var(--v2-muted)] whitespace-nowrap">
+      <div className="v2-mono sticky left-0 flex min-w-max items-center gap-2 border-y border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-3 py-1 text-v2-small text-[var(--v2-muted)] whitespace-nowrap">
         <span className="min-w-[120px] flex-1">{hunk.header}</span>
-        <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" onClick={() => onAddToChat(hunkText(file, hunk))} title="Attach this hunk to the chat">Add to chat</Button>
+        <Button variant="quiet" className="!px-2 !py-0.5 !text-v2-small" onClick={() => onAddToChat(hunkText(file, hunk))} title="Attach this hunk to the chat">Add to chat</Button>
         {onApply && (["stage", "unstage", "discard"] as const).map(action => <PatchButton key={action} action={action} unit={unit} busy={busy} onRun={run} />)}
       </div>
-      {blame && !blame.lines && !blame.error && <div className="px-3 py-1 text-[11px] text-[var(--v2-muted)]">Reading blame</div>}
-      {blame?.error && <div role="alert" className="px-3 py-1 text-[11px] text-[var(--v2-bad)]">{blame.error}</div>}
-      {error && <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-1.5 text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
+      {blame && !blame.lines && !blame.error && <div className="px-3 py-1 text-v2-small text-[var(--v2-muted)]">Reading blame</div>}
+      {blame?.error && <div role="alert" className="px-3 py-1 text-v2-small text-[var(--v2-bad)]">{blame.error}</div>}
+      {error && <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-1.5 text-v2-body text-[var(--v2-bad)]">{error}</div>}
       {layout === "combined"
         ? hunk.lines.map((l, i) => <CombinedLine key={i} l={l} index={i} selected={selected.has(i)} onSelect={onApply ? select : undefined} blame={blame?.lines} />)
         : <div className="min-w-max">{pairHunk(hunk).map((r, i) => {
@@ -149,7 +149,7 @@ function FileHeader({ file, layout, onLayout, onOpenFile, project, scope, lineOn
   return (
     <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2">
       <StatusLetter letter={file.status} />
-      <span className="v2-mono min-w-0 flex-1 truncate text-[12px] text-[var(--v2-text)]">{file.path}</span>
+      <span className="v2-mono min-w-0 flex-1 truncate text-v2-body text-[var(--v2-text)]">{file.path}</span>
       <Seg label="Diff layout" value={layout} onChange={onLayout} options={[{ value: "combined", label: "Combined" }, { value: "split", label: "Side by side" }]} />
       {onOpenFile && <IconButton label="Open file in editor" title={file.status === "D" ? "The deleted file cannot be opened" : "Open the file"} size={24} disabled={file.status === "D"} onClick={() => onOpenFile(file.path)}><FileText size={13} aria-hidden /></IconButton>}
       {project && <FileHistoryControl project={project} scope={scope ?? null} path={file.path} />}
@@ -164,7 +164,7 @@ function DiffBody({ file, layout, busy, onAddToChat, apply, blame }: {
 }) {
   return (
     <div className="min-w-0">
-      {file.binary && <div className="px-4 py-3 text-[12px] text-[var(--v2-muted)]">Binary file: git shows no text diff.</div>}
+      {file.binary && <div className="px-4 py-3 text-v2-body text-[var(--v2-muted)]">Binary file: git shows no text diff.</div>}
       {file.hunks.map(h => <HunkBlock key={h.header} file={file} hunk={h} layout={layout} busy={busy} onAddToChat={onAddToChat} onApply={apply} blame={blame} />)}
     </div>
   );
@@ -205,7 +205,7 @@ export function DiffView({ files, layout, onLayout, onAddToChat, onOpenFile, onA
     try { await onApply(patch, action, path); }
     finally { setBusy(false); }
   };
-  if (files.length === 0) return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">No diff for this selection.</div>;
+  if (files.length === 0) return <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">No diff for this selection.</div>;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto" data-diff-scroll>
       {files.map(file => (

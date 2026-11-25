@@ -27,7 +27,7 @@ export function IconTile({ ext, size = 36 }: { ext: Ext; size?: number }) {
     return <img src={ext.iconUrl} alt="" style={box} onError={() => setBroken(true)} className="shrink-0 rounded-lg bg-[var(--v2-panel-2)] object-cover" />;
   }
   return (
-    <span aria-hidden style={box} className="v2-mono flex shrink-0 items-center justify-center rounded-lg bg-[var(--v2-panel-2)] text-[11px] text-[var(--v2-text-2)]">
+    <span aria-hidden style={box} className="v2-mono flex shrink-0 items-center justify-center rounded-lg bg-[var(--v2-panel-2)] text-v2-small text-[var(--v2-text-2)]">
       {monogram(ext.displayName)}
     </span>
   );
@@ -44,18 +44,18 @@ export function Results({ query, onQuery, sort, onSort, state, selectedId, onSel
       <div className="flex flex-col gap-2 border-b border-[var(--v2-edge)] p-3">
         <label htmlFor="ext-search" className="sr-only">Search extensions and tools</label>
         <input id="ext-search" type="search" value={query} onChange={e => onQuery(e.target.value)} placeholder="Search Open VSX extensions"
-          className="rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] px-3 py-2 text-[13px] text-[var(--v2-text)] outline-none" />
+          className="rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] px-3 py-2 text-v2-base text-[var(--v2-text)] outline-none" />
         <div className="flex flex-wrap gap-1.5">
           {SORTS.map(s => (
             <button key={s.id} type="button" aria-pressed={sort === s.id} onClick={() => onSort(s.id)}
-              className={`rounded-md border px-2.5 py-1 text-[11.5px] ${sort === s.id ? "border-[var(--v2-accent)] bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]" : "border-[var(--v2-edge)] text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
+              className={`rounded-md border px-2.5 py-1 text-v2-body ${sort === s.id ? "border-[var(--v2-accent)] bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]" : "border-[var(--v2-edge)] text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
               {s.label}
             </button>
           ))}
         </div>
       </div>
       <Body state={state} selectedId={selectedId} onSelect={onSelect} />
-      <p className="m-3 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2.5 text-[11.5px] leading-snug text-[var(--v2-muted)]">
+      <p className="m-3 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2.5 text-v2-body leading-snug text-[var(--v2-muted)]">
         Looking for Pylance, C/C++ or Remote-SSH? They are Microsoft-only and not on Open VSX. Open alternatives: basedpyright, clangd, Open Remote SSH.
       </p>
     </section>
@@ -63,15 +63,15 @@ export function Results({ query, onQuery, sort, onSort, state, selectedId, onSel
 }
 
 function Body({ state, selectedId, onSelect }: Pick<Props, "state" | "selectedId" | "onSelect">) {
-  if (state.status === "loading") return <div role="status" className="p-4 text-[12.5px] text-[var(--v2-muted)]">Searching Open VSX...</div>;
+  if (state.status === "loading") return <div role="status" className="p-4 text-v2-base text-[var(--v2-muted)]">Searching Open VSX...</div>;
   if (state.status === "error") {
-    return <div role="alert" className="m-3 rounded-lg border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] p-3 text-[12.5px] text-[var(--v2-warn)]">Open VSX could not be read: {state.message}. Check the network and try again.</div>;
+    return <div role="alert" className="m-3 rounded-lg border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] p-3 text-v2-base text-[var(--v2-warn)]">Open VSX could not be read: {state.message}. Check the network and try again.</div>;
   }
   const { items, total } = state.data;
-  if (items.length === 0) return <div className="p-4 text-[12.5px] text-[var(--v2-muted)]">No extensions match that search.</div>;
+  if (items.length === 0) return <div className="p-4 text-v2-base text-[var(--v2-muted)]">No extensions match that search.</div>;
   return (
     <>
-      <div className="px-3 pt-2.5 text-[11.5px] text-[var(--v2-muted)]">{total.toLocaleString("en-US")} results on Open VSX</div>
+      <div className="px-3 pt-2.5 text-v2-body text-[var(--v2-muted)]">{total.toLocaleString("en-US")} results on Open VSX</div>
       <ul className="m-0 flex list-none flex-col gap-1 p-2">
         {items.map(e => <Row key={e.id} ext={e} selected={e.id === selectedId} onSelect={onSelect} />)}
       </ul>
@@ -86,11 +86,11 @@ function Row({ ext, selected, onSelect }: { ext: Ext; selected: boolean; onSelec
         className="flex min-w-0 flex-1 items-start gap-3 bg-transparent p-0 text-left text-[var(--v2-text)]">
         <IconTile ext={ext} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex items-center gap-2"><span className="truncate text-[13px] font-semibold">{ext.displayName}</span><Chip>Editor</Chip></span>
-          <span className="text-[11.5px] text-[var(--v2-muted)]">
+          <span className="flex items-center gap-2"><span className="truncate text-v2-base font-semibold">{ext.displayName}</span><Chip>Editor</Chip></span>
+          <span className="text-v2-body text-[var(--v2-muted)]">
             {ext.namespace}{ext.verified ? " (verified)" : ""} · {ext.version} · {formatCount(ext.downloads)} installs · {ext.rating === null ? "no rating" : `${ext.rating.toFixed(1)} stars`}
           </span>
-          <span className="truncate text-[12px] text-[var(--v2-text-2)]">{ext.description}</span>
+          <span className="truncate text-v2-body text-[var(--v2-text-2)]">{ext.description}</span>
         </span>
       </button>
       <Button variant="primary" disabledReason={INSTALL_REASON}>Install</Button>

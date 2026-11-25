@@ -49,7 +49,7 @@ export function SourceListColumn(p: {
   return (
     <div data-testid="source-list" className="flex min-h-0 shrink-0 flex-col">
       {conflicts.length > 0 && (
-        <div role="status" className="flex items-center gap-3 border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-4 py-2 text-[12px] text-[var(--v2-text-2)]">
+        <div role="status" className="flex items-center gap-3 border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-4 py-2 text-v2-body text-[var(--v2-text-2)]">
           <span className="flex-1">Git lists {conflicts.length} {conflicts.length === 1 ? "file" : "files"} as unmerged here. Something is paused until they are resolved.</span>
           <Button onClick={() => p.onOpenConflict(conflicts[0])}>Resolve conflicts</Button>
         </div>

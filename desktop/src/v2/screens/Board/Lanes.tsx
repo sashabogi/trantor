@@ -22,14 +22,14 @@ function LaneHead({ lane, count }: { lane: keyof typeof LANE_DOT; count: number 
   return (
     <div className="flex items-center gap-[7px] px-0.5">
       <span className="h-2 w-2 rounded-full" style={{ background: LANE_DOT[lane] }} />
-      <h3 className="m-0 text-[12px] font-semibold">{LANE_LABEL[lane]}</h3>
-      <span className="text-[11px] text-[var(--v2-muted)]">{count}</span>
+      <h3 className="m-0 text-v2-body font-semibold">{LANE_LABEL[lane]}</h3>
+      <span className="text-v2-small text-[var(--v2-muted)]">{count}</span>
     </div>
   );
 }
 
 function Empty({ line }: { line: string }) {
-  return <div className="rounded-[10px] border border-dashed border-[var(--v2-edge-2)] px-2.5 py-3 text-center text-[11px] text-[var(--v2-muted)]">{line}</div>;
+  return <div className="rounded-lg border border-dashed border-[var(--v2-edge-2)] px-2.5 py-3 text-center text-v2-small text-[var(--v2-muted)]">{line}</div>;
 }
 
 function LaneColumn({ lane, data, width = 262, filtering, renderCard, onOpen, cap }: {
@@ -45,7 +45,7 @@ function LaneColumn({ lane, data, width = 262, filtering, renderCard, onOpen, ca
       {cards.map(renderCard)}
       {hidden > 0 && (
         <button type="button" onClick={() => setAll(true)}
-          className="v2-hover rounded-[10px] border border-dashed border-[var(--v2-edge-2)] bg-transparent p-2 text-[11.5px] font-medium text-[var(--v2-muted)]">
+          className="v2-hover rounded-lg border border-dashed border-[var(--v2-edge-2)] bg-transparent p-2 text-v2-body font-medium text-[var(--v2-muted)]">
           {hidden} more · show
         </button>
       )}
@@ -66,9 +66,9 @@ function GroupHead({ label, count, note, open, onToggle }: { label: string; coun
     <>
       {onToggle
         ? <button type="button" aria-expanded={open} onClick={onToggle}
-            className="flex items-center gap-1.5 border-0 bg-transparent px-0.5 pt-1 text-[10.5px] font-semibold tracking-[0.06em] text-[var(--v2-muted)]">{inner}</button>
-        : <div className="flex items-center gap-1.5 px-0.5 pt-1 text-[10.5px] font-semibold tracking-[0.06em] text-[var(--v2-muted)]">{inner}</div>}
-      <div className="px-0.5 text-[10.5px] text-[var(--v2-faint)]">{note}</div>
+            className="flex items-center gap-1.5 border-0 bg-transparent px-0.5 pt-1 text-v2-small font-semibold tracking-[0.06em] text-[var(--v2-muted)]">{inner}</button>
+        : <div className="flex items-center gap-1.5 px-0.5 pt-1 text-v2-small font-semibold tracking-[0.06em] text-[var(--v2-muted)]">{inner}</div>}
+      <div className="px-0.5 text-v2-small text-[var(--v2-faint)]">{note}</div>
     </>
   );
 }
@@ -98,10 +98,10 @@ function ExceptionStrip({ lane, cards, open, onToggle }: { lane: ExceptionLane; 
   return (
     <button type="button" aria-expanded={open} aria-label={`${LANE_LABEL[lane]}, ${cards.length}`} onClick={onToggle}
       title={`${cards.length} ${lane}: ${titles}${cards.length > 3 ? ", …" : ""}`}
-      className="v2-hover flex w-10 shrink-0 flex-col items-center gap-2 self-stretch rounded-[10px] border border-[var(--v2-edge)] bg-[var(--v2-sunken)] py-2.5 text-[var(--v2-text-2)]">
+      className="v2-hover flex w-10 shrink-0 flex-col items-center gap-2 self-stretch rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-sunken)] py-2.5 text-[var(--v2-text-2)]">
       <span className="h-2 w-2 rounded-full" style={{ background: LANE_DOT[lane] }} />
-      <span className="text-[11px] font-bold">{cards.length}</span>
-      <span className="text-[11.5px] font-semibold [writing-mode:vertical-rl]">{LANE_LABEL[lane]}</span>
+      <span className="text-v2-small font-bold">{cards.length}</span>
+      <span className="text-v2-body font-semibold [writing-mode:vertical-rl]">{LANE_LABEL[lane]}</span>
     </button>
   );
 }
@@ -111,7 +111,7 @@ function ExceptionColumn({ lane, cards, onClose, renderCard }: { lane: Exception
     <section aria-label={LANE_LABEL[lane]} className="flex w-[240px] shrink-0 flex-col gap-2">
       <div className="flex items-center gap-[7px] px-0.5">
         <span className="h-2 w-2 rounded-full" style={{ background: LANE_DOT[lane] }} />
-        <h3 className="m-0 flex-1 text-[12px] font-semibold">{LANE_LABEL[lane]}</h3>
+        <h3 className="m-0 flex-1 text-v2-body font-semibold">{LANE_LABEL[lane]}</h3>
         <button type="button" onClick={onClose} aria-label={`Collapse ${LANE_LABEL[lane]}`} title={`Collapse ${LANE_LABEL[lane]}`}
           className="v2-hover rounded border-0 bg-transparent px-1.5 text-[var(--v2-muted)]">×</button>
       </div>

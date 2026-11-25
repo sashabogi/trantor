@@ -18,7 +18,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           <button key={command.id} type="button" role="option" aria-selected={i === keys.sel} onClick={() => run(command)} onMouseEnter={() => keys.setSel(i)}
             className={`${ROW} ${rowTone(i === keys.sel)}`}>
             <span className="min-w-0 flex-1 truncate">{command.title}</span>
-            <span className="shrink-0 text-[11px] text-[var(--v2-muted)]">{command.group}</span>
+            <span className="shrink-0 text-v2-small text-[var(--v2-muted)]">{command.group}</span>
             {command.shortcut && <Kbd>{formatShortcut(command.shortcut)}</Kbd>}
           </button>
         ))}

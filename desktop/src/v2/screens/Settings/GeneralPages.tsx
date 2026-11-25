@@ -14,8 +14,8 @@ export function Row({ title, body, children }: { title: string; body: ReactNode;
   return (
     <div className="flex items-center gap-4 border-b border-[var(--v2-edge)] px-[14px] py-3 last:border-b-0">
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-[var(--v2-text)]">{title}</div>
-        <div className="mt-0.5 text-[12px] text-[var(--v2-muted)]">{body}</div>
+        <div className="text-v2-base font-medium text-[var(--v2-text)]">{title}</div>
+        <div className="mt-0.5 text-v2-body text-[var(--v2-muted)]">{body}</div>
       </div>
       <div className="shrink-0">{children}</div>
     </div>

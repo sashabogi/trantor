@@ -13,7 +13,7 @@ function Thumb({ path }: { path: string }) {
     return () => { alive = false; };
   }, [path]);
   if (!src) return <span className="flex h-6 w-6 items-center justify-center text-[var(--v2-muted)]"><ImageIcon size={13} aria-hidden /></span>;
-  return <img src={src} alt="" draggable={false} onError={() => setSrc(null)} className="h-6 w-6 rounded-[5px] object-cover" />;
+  return <img src={src} alt="" draggable={false} onError={() => setSrc(null)} className="h-6 w-6 rounded-sm object-cover" />;
 }
 
 export function AttachmentRow({ chips, onRemove }: { chips: AttachmentChip[]; onRemove: (id: string) => void }) {
@@ -26,7 +26,7 @@ export function AttachmentRow({ chips, onRemove }: { chips: AttachmentChip[]; on
           {c.kind === "image"
             ? <Thumb path={c.path} />
             : <span className="flex h-6 w-6 items-center justify-center text-[var(--v2-muted)]"><FileText size={13} aria-hidden /></span>}
-          {c.size !== null && <span className="text-[10px] leading-none text-[var(--v2-muted)]">{formatBytes(c.size)}</span>}
+          {c.size !== null && <span className="text-v2-micro leading-none text-[var(--v2-muted)]">{formatBytes(c.size)}</span>}
           <button type="button" aria-label={`Remove ${c.name}`} title={`Remove ${c.name}`} onClick={() => onRemove(c.id)}
             className="v2-hover rounded p-0.5 text-[var(--v2-muted)]"><X size={11} strokeWidth={2.5} aria-hidden /></button>
         </div>

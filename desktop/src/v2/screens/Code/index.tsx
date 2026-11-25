@@ -134,7 +134,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
             onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
             onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
           <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />
-          {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-[12px] text-[var(--v2-bad)]">{notice}</button>}
+          {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-v2-body text-[var(--v2-bad)]">{notice}</button>}
           {/* #14241: the source tab's list runs full height on the left; every tab's body fills the right column. */}
           <div className="flex min-h-0 min-w-0 flex-1">
             {tabs.active.kind === "source" && snap && (
@@ -174,7 +174,7 @@ type MainProps = {
 function Main(p: MainProps) {
   if (p.tab.kind === "file" && p.tab.path) {
     return (
-      <Suspense fallback={<div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Opening the editor</div>}>
+      <Suspense fallback={<div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">Opening the editor</div>}>
         {/* #14072: keyed by tab so a switch remounts cleanly and the draft resumes from the tab's cache. */}
         <FileEditor key={p.tab.id} project={p.project} scope={p.tab.scope} path={p.tab.path} onOpenGraph={() => p.onNavigate("graph")}
           reveal={p.reveal && p.reveal.tab === p.tab.id ? p.reveal : undefined} headRev={p.snap?.log[0]?.sha ?? null}
@@ -184,7 +184,7 @@ function Main(p: MainProps) {
     );
   }
   if (p.state.kind === "error") return <div className="p-4"><NotWiredBlock title="Git could not be read for this view" line={p.state.reason} /></div>;
-  if (!p.snap) return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Reading git</div>;
+  if (!p.snap) return <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">Reading git</div>;
   if (p.tab.kind === "conflict") {
     return <ConflictView project={p.project} snap={p.snap} path={p.conflictPath ?? conflictPaths(p.snap.status)[0] ?? null} onPick={path => p.onOpenConflict(path)} onResolved={p.onMutated} />;
   }

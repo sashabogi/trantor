@@ -38,11 +38,11 @@ export function ChatRail({ client, project, peers, open, onToggle, draft, onDraf
   return (
     <aside aria-label="Chat" className="flex w-[340px] shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)]">
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2">
-        <span className="flex-1 text-[13px] font-semibold">Chat</span>
-        <span className="inline-flex items-center gap-1.5 text-[11.5px] text-[var(--v2-muted)]"><Avatar name={name} size={16} />{seatLabel(name)}</span>
+        <span className="flex-1 text-v2-base font-semibold">Chat</span>
+        <span className="inline-flex items-center gap-1.5 text-v2-body text-[var(--v2-muted)]"><Avatar name={name} size={16} />{seatLabel(name)}</span>
         <IconButton label="Fold the chat" title="Fold the chat into the rail" size={26} onClick={onToggle}><PanelRightClose size={14} aria-hidden /></IconButton>
       </div>
-      <div className="flex-1 overflow-y-auto px-3 py-3 text-[12px] leading-relaxed text-[var(--v2-muted)]">
+      <div className="flex-1 overflow-y-auto px-3 py-3 text-v2-body leading-relaxed text-[var(--v2-muted)]">
         {draft.trim() ? "Your attachment is in the box below. Edit it, then send." : "Use Add to chat on a commit or a hunk to attach it here."}
         {note && <div role="status" className="mt-2 text-[var(--v2-text-2)]">{note}</div>}
       </div>

@@ -22,7 +22,7 @@ export function Button({ variant = "ghost", icon, disabledReason, children, clas
   return (
     <button {...rest} type={type} disabled={disabled} aria-disabled={disabled || undefined}
       title={disabled ? disabledReason ?? undefined : title} data-variant={variant}
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-[11px] py-[6px] text-[12px] font-medium transition-colors disabled:opacity-45 ${VARIANT[variant]} ${className}`}>
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-[11px] py-[6px] text-v2-body font-medium transition-colors disabled:opacity-45 ${VARIANT[variant]} ${className}`}>
       {icon}{children}
     </button>
   );

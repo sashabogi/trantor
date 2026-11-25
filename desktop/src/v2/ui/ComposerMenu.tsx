@@ -14,7 +14,7 @@ export type Choice = {
   tone?: "warn";
 };
 
-const PILL = "inline-flex min-w-0 items-center rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] text-[11.5px] font-medium";
+const PILL = "inline-flex min-w-0 items-center rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] text-v2-body font-medium";
 
 export function ChoiceIcon({ choice, size = 13 }: { choice?: Choice; size?: number }) {
   if (choice?.icon === "zap") return <Zap size={size} aria-hidden />;
@@ -53,7 +53,7 @@ export function ChipMenu({ label, title, group, className = "", chip, menuLabel,
       </button>
       {open && (
         <div role="menu" aria-label={menuLabel}
-          className="absolute bottom-[calc(100%+8px)] left-0 z-50 max-h-[60vh] w-[min(320px,100%)] overflow-y-auto rounded-[12px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1.5 shadow-[var(--v2-shadow-menu-up)]">
+          className="absolute bottom-[calc(100%+8px)] left-0 z-50 max-h-[60vh] w-[min(320px,100%)] overflow-y-auto rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1.5 shadow-[var(--v2-shadow-menu-up)]">
           {children(() => setOpen(false))}
         </div>
       )}
@@ -62,7 +62,7 @@ export function ChipMenu({ label, title, group, className = "", chip, menuLabel,
 }
 
 export function MenuHeading({ children }: { children: ReactNode }) {
-  return <div className="px-2 pt-1.5 pb-1 text-[10px] font-semibold tracking-[0.08em] text-[var(--v2-muted)] uppercase">{children}</div>;
+  return <div className="px-2 pt-1.5 pb-1 text-v2-micro font-semibold tracking-[0.08em] text-[var(--v2-muted)] uppercase">{children}</div>;
 }
 
 /** One option row: icon, name, what it does, and a check on the current one. */
@@ -73,11 +73,11 @@ export function ChoiceRow({ choice, current, onPick, leading, busy = false }: {
 }) {
   return (
     <button type="button" role="menuitemradio" aria-checked={current} aria-busy={busy || undefined} onClick={onPick}
-      className={`v2-hover flex w-full items-start gap-2 rounded-[8px] border-0 px-2 py-1.5 text-left ${current ? "bg-[var(--v2-raised)]" : "bg-transparent"}`}>
+      className={`v2-hover flex w-full items-start gap-2 rounded-lg border-0 px-2 py-1.5 text-left ${current ? "bg-[var(--v2-raised)]" : "bg-transparent"}`}>
       <span className={`mt-[2px] flex-none ${choice.tone === "warn" ? "text-[var(--v2-warn)]" : "text-[var(--v2-text-2)]"}`}>{leading}</span>
       <span className="min-w-0 flex-1">
-        <span className="block text-[12.5px] font-medium text-[var(--v2-text)]">{choice.label}</span>
-        {choice.description && <span className="block text-[11.5px] leading-snug text-[var(--v2-muted)]">{choice.description}</span>}
+        <span className="block text-v2-base font-medium text-[var(--v2-text)]">{choice.label}</span>
+        {choice.description && <span className="block text-v2-body leading-snug text-[var(--v2-muted)]">{choice.description}</span>}
       </span>
       {busy ? <Loader2 size={13} aria-label="Switching" className="mt-[3px] flex-none animate-spin text-[var(--v2-muted)]" />
         : current && <Check size={13} aria-hidden className="mt-[3px] flex-none text-[var(--v2-accent)]" />}
@@ -93,7 +93,7 @@ export function LevelPills({ label, choices, value, onPick }: {
     <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1 px-2 pt-1 pb-1.5">
       {choices.map(c => (
         <button key={c.value} type="button" role="radio" aria-checked={c.value === value} title={c.description} onClick={() => onPick(c.value)}
-          className={`v2-hover rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${
+          className={`v2-hover rounded-full border px-2.5 py-[3px] text-v2-body font-medium ${
             c.value === value ? "border-[var(--v2-accent)] bg-[var(--v2-accent-soft)] text-[var(--v2-text)]" : "border-[var(--v2-edge-2)] bg-transparent text-[var(--v2-text-2)]"}`}>
           {c.label}
         </button>

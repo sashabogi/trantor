@@ -132,7 +132,7 @@ export function ComposerAdapter(p: ClassicProps) {
   } : {};
   return (
     <div className="flex flex-col gap-1.5 border-t border-[var(--v2-edge)] px-3 pb-3 pt-2.5">
-      {shown && <div role="status" className="text-[11.5px] text-[var(--v2-warn)]">{shown}</div>}
+      {shown && <div role="status" className="text-v2-body text-[var(--v2-warn)]">{shown}</div>}
       <Composer2 value={value} onChange={v => { setValue(v); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
         permissionHeading={PERMISSION_HEADING}
         label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"

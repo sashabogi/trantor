@@ -14,13 +14,13 @@ import type { OverseerData } from "./useOverseer";
 function Panel({ title, count, children }: { title: string; count?: number; children: ReactNode }) {
   return (
     <section aria-label={title} className="rounded-xl border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-3">
-      <div className="mb-2 flex items-center"><span className={`${SECTION_LABEL} flex-1`}>{title}</span>{count != null && <span className="text-[11px] text-[var(--v2-muted)]">{count}</span>}</div>
+      <div className="mb-2 flex items-center"><span className={`${SECTION_LABEL} flex-1`}>{title}</span>{count != null && <span className="text-v2-small text-[var(--v2-muted)]">{count}</span>}</div>
       {children}
     </section>
   );
 }
 
-const MUTED = "m-0 text-[12px] text-[var(--v2-muted)]";
+const MUTED = "m-0 text-v2-body text-[var(--v2-muted)]";
 
 function DutyPanel({ ov, peers }: { ov: OverseerData; peers: Peer[] }) {
   const { status, duty } = ov;
@@ -34,8 +34,8 @@ function DutyPanel({ ov, peers }: { ov: OverseerData; peers: Peer[] }) {
       <div className="flex items-center gap-2.5">
         {status.dutySession && <Avatar name={status.dutySession} size={28} presence={online ? "ready" : "offline"} surface="var(--v2-panel)" />}
         <div className="min-w-0">
-          <div className="truncate text-[13px] font-semibold">{status.dutySession ? seatLabel(status.dutySession) : "no duty seat"}</div>
-          <div className="text-[11.5px] text-[var(--v2-muted)]">
+          <div className="truncate text-v2-base font-semibold">{status.dutySession ? seatLabel(status.dutySession) : "no duty seat"}</div>
+          <div className="text-v2-body text-[var(--v2-muted)]">
             {alive ? "operating" : status.engine ? "stalled" : "engine missing"} · last sweep {status.lastTickTs ? `${ago(status.lastTickTs)} ago` : "never"}{peer?.model ? ` · ${peer.model}` : ""}
           </div>
         </div>
@@ -59,9 +59,9 @@ function Episodes({ ov, peers }: { ov: OverseerData; peers: Peer[] }) {
       {open.length === 0 && <p className={MUTED}>Clear because {quietEvidence(ov.status, peers)}.</p>}
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {open.map(e => (
-          <li key={e.key} className="text-[12px]">
+          <li key={e.key} className="text-v2-body">
             <div className="break-words">{e.detail || e.kind}</div>
-            <div className="text-[11px] text-[var(--v2-muted)]">{e.project} · {lasting(e.first)} · state, not an alarm</div>
+            <div className="text-v2-small text-[var(--v2-muted)]">{e.project} · {lasting(e.first)} · state, not an alarm</div>
           </li>
         ))}
       </ul>
@@ -73,7 +73,7 @@ function LinkForm({ project, ov }: { project: string; ov: OverseerData }) {
   const [other, setOther] = useState("");
   const [reason, setReason] = useState("");
   const ready = !!project && !!other.trim() && !!reason.trim() && other.trim() !== project;
-  const input = "min-w-0 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-bg)] px-2 py-1 text-[12px] text-[var(--v2-text)]";
+  const input = "min-w-0 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-bg)] px-2 py-1 text-v2-body text-[var(--v2-text)]";
   return (
     <div className="mt-2 flex flex-wrap gap-1.5">
       <input aria-label="Link this project to" className={`${input} w-28`} value={other} onChange={e => setOther(e.target.value)} placeholder="other project" />
@@ -91,7 +91,7 @@ function Links({ ov, project }: { ov: OverseerData; project: string }) {
       {links.length === 0 && <p className={MUTED}>No codependency links declared.</p>}
       <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
         {links.map(l => (
-          <li key={l.projects.join("\0")} className="flex items-center gap-2 text-[12px]">
+          <li key={l.projects.join("\0")} className="flex items-center gap-2 text-v2-body">
             <span className="min-w-0 flex-1"><span className="font-medium">{l.projects.join(" ↔ ")}</span> <span className="text-[var(--v2-muted)]">{l.reason || "linked"}</span></span>
             <IconButton label="Unlink" title={`Unlink ${l.projects.join(" and ")}`} size={22} disabled={ov.busy}
               onClick={() => void ov.run(() => policyUnlink(l.projects))}><X size={12} /></IconButton>
@@ -114,8 +114,8 @@ export function OverseerColumn({ client, project, ov, peers }: { client: HubClie
         {grants.length === 0 && <p className={MUTED}>No approved grants for this project.</p>}
         <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
           {grants.map(g => (
-            <li key={g.id} className="text-[12px]"><span className="v2-mono text-[var(--v2-muted)]">#{g.id}</span> {g.scope}
-              <div className="text-[11px] text-[var(--v2-muted)]">{seatLabel(g.session)} · when {g.condition} · except {g.exclusions}</div></li>
+            <li key={g.id} className="text-v2-body"><span className="v2-mono text-[var(--v2-muted)]">#{g.id}</span> {g.scope}
+              <div className="text-v2-small text-[var(--v2-muted)]">{seatLabel(g.session)} · when {g.condition} · except {g.exclusions}</div></li>
           ))}
         </ul>
       </Panel>

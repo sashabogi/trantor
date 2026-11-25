@@ -35,10 +35,10 @@ function NewChatMenu({ project }: { project: string }) {
         <MenuItem onSelect={handOff} title="Writes a recap, opens a fresh session that takes over">
           <span className="flex flex-col">
             <span>{busy ? "Handing off" : confirm ? "Confirm: hand off now" : "Hand off to a fresh session"}</span>
-            <span className="text-[11px] text-[var(--v2-muted)]">Writes a recap, opens a fresh session that takes over</span>
+            <span className="text-v2-small text-[var(--v2-muted)]">Writes a recap, opens a fresh session that takes over</span>
           </span>
         </MenuItem>
-        {error && <div role="alert" className="px-2 py-1.5 text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
+        {error && <div role="alert" className="px-2 py-1.5 text-v2-body text-[var(--v2-bad)]">{error}</div>}
       </Popover>
     </span>
   );

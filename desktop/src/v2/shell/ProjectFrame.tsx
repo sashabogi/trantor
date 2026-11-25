@@ -33,16 +33,16 @@ export function LensTabs({ lens, openCards, onNavigate, order = LENS_SCREENS, co
         const on = l === lens;
         return (
           <button key={l} type="button" role="tab" aria-selected={on} onClick={() => onNavigate(l)}
-            className={`inline-flex items-center gap-1.5 whitespace-nowrap border-0 border-b-2 bg-transparent px-[11px] py-[7px] text-[12.5px] font-medium ${
+            className={`inline-flex items-center gap-1.5 whitespace-nowrap border-0 border-b-2 bg-transparent px-[11px] py-[7px] text-v2-base font-medium ${
               on ? "border-[var(--v2-accent)] text-[var(--v2-text)]" : "border-transparent text-[var(--v2-muted)] hover:text-[var(--v2-text)]"}`}>
             {LENS_ICON[l]}{LENS_LABEL[l]}
             {l === "board" && openCards != null && (
-              <span className="rounded-lg bg-[var(--v2-edge)] px-1.5 text-[10px]">{openCards}</span>
+              <span className="rounded-lg bg-[var(--v2-edge)] px-1.5 text-v2-micro">{openCards}</span>
             )}
           </button>
         );
       })}
-      {summary != null && <span className="ml-auto whitespace-nowrap pl-3 text-[12px] text-[var(--v2-muted)]">{summary}</span>}
+      {summary != null && <span className="ml-auto whitespace-nowrap pl-3 text-v2-body text-[var(--v2-muted)]">{summary}</span>}
     </div>
   );
 }
@@ -72,8 +72,8 @@ export function ProjectFrame({ client, project, lens, onNavigate, actions, notic
         <div className="flex flex-wrap items-center gap-3 px-5 pt-4">
           <ProjectTile name={project} size={34} />
           <div className="min-w-0 flex-[1_1_260px]">
-            <h1 className="m-0 text-[20px] font-[650] tracking-[-0.01em]">{project}</h1>
-            <div className="text-[12px] text-[var(--v2-muted)]">{summary}</div>
+            <h1 className="m-0 text-v2-heading font-[650] tracking-[-0.01em]">{project}</h1>
+            <div className="text-v2-body text-[var(--v2-muted)]">{summary}</div>
           </div>
           {actions}
         </div>

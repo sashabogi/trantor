@@ -38,12 +38,12 @@ export function Inspector({ project, seat, card, mayDo, crew, onNavigate, onMess
   const status = seat.target.status;
   const orchNote = "This is your own session; manage it from its window";
   return (
-    <div className="flex flex-wrap items-center gap-3.5 border-b border-[var(--v2-edge)] bg-[var(--v2-sunken)] px-5 py-2.5 text-[12px]">
+    <div className="flex flex-wrap items-center gap-3.5 border-b border-[var(--v2-edge)] bg-[var(--v2-sunken)] px-5 py-2.5 text-v2-body">
       <span className="inline-flex items-center gap-2">
         <Avatar name={seat.brand} size={26} />
         <span>
           <span className="font-semibold">{name}</span>
-          <span className="block text-[11px] text-[var(--v2-muted)]">{seat.session}{seat.machine ? ` · ${seat.machine}` : ""}</span>
+          <span className="block text-v2-small text-[var(--v2-muted)]">{seat.session}{seat.machine ? ` · ${seat.machine}` : ""}</span>
         </span>
       </span>
       {card && (
@@ -77,7 +77,7 @@ export function Inspector({ project, seat, card, mayDo, crew, onNavigate, onMess
           onClick={() => void crew.stop(seat.agent)} className="text-[var(--v2-bad)]"><Square size={13} fill="currentColor" aria-hidden /></IconButton>
       </span>
       {crew.notice && (
-        <div role="status" className={`flex basis-full items-center gap-2 text-[11.5px] ${crew.notice.failed ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
+        <div role="status" className={`flex basis-full items-center gap-2 text-v2-body ${crew.notice.failed ? "text-[var(--v2-bad)]" : "text-[var(--v2-muted)]"}`}>
           <span className="min-w-0 flex-1">{crew.notice.text}</span>
           <IconButton label="Dismiss the seat notice" title="Dismiss" size={20} onClick={crew.dismiss}><X size={11} aria-hidden /></IconButton>
         </div>

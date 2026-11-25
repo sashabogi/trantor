@@ -27,7 +27,7 @@ function PlanChip({ chip, onOpen }: { chip: BalanceChip; onOpen: () => void }) {
   const t = CHIP_TONE[chip.tone];
   return (
     <button type="button" onClick={onOpen} title={`${chip.tooltip}. Open Usage and costs`} data-chip={chip.key}
-      className="inline-flex shrink-0 items-center gap-[7px] rounded-lg px-[9px] py-1 text-[11.5px] font-medium text-[var(--v2-text)]"
+      className="inline-flex shrink-0 items-center gap-[7px] rounded-lg px-[9px] py-1 text-v2-body font-medium text-[var(--v2-text)]"
       style={{ background: t.bg, border: `1px solid ${t.border}`, opacity: chip.stale ? 0.6 : 1 }}>
       <BrandMark icon={chip.icon} mono={chip.mono} hue={chip.hue} fg={chip.fg} />
       {chip.label}
@@ -95,7 +95,7 @@ export function PlansBar({ report, failure, refreshError, machines, spinning, on
     : report ? { color: "var(--v2-ok)", text: "hub connected" } : { color: "var(--v2-track)", text: "connecting" };
   return (
     <footer aria-label="Plans and balances"
-      className="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-t border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-3 text-[11.5px] text-[var(--v2-muted)]">
+      className="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-t border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-3 text-v2-body text-[var(--v2-muted)]">
       {/* #13984 drill: at 1440px the chips ran under the machine readout; they scroll in their own lane instead. */}
       <div data-bar-chips className="v2-no-scrollbar flex items-center gap-2 whitespace-nowrap"
         style={{ opacity: dim ? 0.55 : 1, minWidth: 0, flex: "0 1 auto", overflowX: "auto", flexWrap: "nowrap", scrollbarWidth: "none" }}>

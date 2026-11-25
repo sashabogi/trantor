@@ -60,7 +60,7 @@ function EffortBars({ lit, total }: { lit: number; total: number }) {
   return (
     <span aria-hidden className="inline-flex items-end gap-[1.5px]">
       {Array.from({ length: total }, (_, i) => (
-        <span key={i} data-lit={i < lit || undefined} className="w-[2px] rounded-[1px]"
+        <span key={i} data-lit={i < lit || undefined} className="w-[2px] rounded-sm"
           style={{ height: 4 + i * 2, background: i < lit ? "var(--v2-accent)" : "var(--v2-track)" }} />
       ))}
     </span>
@@ -127,9 +127,9 @@ function PermissionRows({ p, who, close }: { p: Composer2Props; who: string; clo
     ))}
     {p.onPermissionSettings && (
       <button type="button" role="menuitem" onClick={() => { close(); p.onPermissionSettings?.(); }}
-        className="v2-hover mt-1 block w-full rounded-[8px] border-0 border-t border-[var(--v2-edge)] bg-transparent px-2 py-1.5 text-left">
-        <span className="block text-[12.5px] text-[var(--v2-text-2)]">Permission settings…</span>
-        <span className="block text-[11.5px] text-[var(--v2-muted)]">Settings › Autonomy: the level new work starts at, and your rules</span>
+        className="v2-hover mt-1 block w-full rounded-lg border-0 border-t border-[var(--v2-edge)] bg-transparent px-2 py-1.5 text-left">
+        <span className="block text-v2-base text-[var(--v2-text-2)]">Permission settings…</span>
+        <span className="block text-v2-body text-[var(--v2-muted)]">Settings › Autonomy: the level new work starts at, and your rules</span>
       </button>
     )}
   </>);
@@ -197,13 +197,13 @@ export function Composer2(p: Composer2Props) {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
   };
   return (
-    <div ref={att?.rootRef} className="flex min-w-0 flex-col gap-2 rounded-[14px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-[10px]">
+    <div ref={att?.rootRef} className="flex min-w-0 flex-col gap-2 rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-[10px]">
       <label htmlFor={id} className="sr-only">{p.label}</label>
       <textarea id={id} ref={box} rows={2} value={p.value} placeholder={p.placeholder}
         onChange={e => p.onChange(e.target.value)} onKeyDown={onKey} onPaste={att?.onPaste}
-        className="resize-none overflow-y-auto border-0 bg-transparent p-[2px] text-[12.5px] leading-relaxed text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
+        className="resize-none overflow-y-auto border-0 bg-transparent p-[2px] text-v2-base leading-relaxed text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
       {att && <AttachmentRow chips={att.chips} onRemove={att.remove} />}
-      {att?.error && <div role="status" className="text-[11px] text-[var(--v2-warn)]">{att.error}</div>}
+      {att?.error && <div role="status" className="text-v2-small text-[var(--v2-warn)]">{att.error}</div>}
       <div className="relative flex min-w-0 items-center gap-1.5">
         <AgentChip {...p} />
         <ModelChip {...p} />

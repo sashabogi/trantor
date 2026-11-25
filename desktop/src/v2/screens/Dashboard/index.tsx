@@ -64,8 +64,8 @@ export function DashboardScreen({ client, onNavigate, onStartProject }: ScreenPr
       <main className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mb-4 flex items-end gap-3">
           <div className="min-w-0 flex-1">
-            <h1 className="m-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--v2-muted)]">Dashboard</h1>
-            <p className="m-0 mt-1 text-[22px] font-[650] text-[var(--v2-text)]">
+            <h1 className="m-0 text-v2-small font-semibold uppercase tracking-[0.12em] text-[var(--v2-muted)]">Dashboard</h1>
+            <p className="m-0 mt-1 text-v2-heading font-[650] text-[var(--v2-text)]">
               {actionable === 0 ? "Nothing needs you." : `${plural(actionable, "thing needs", "things need")} you.`} {plural(working, "agent is", "agents are")} moving.
             </p>
           </div>
@@ -80,7 +80,7 @@ export function DashboardScreen({ client, onNavigate, onStartProject }: ScreenPr
             </>
           ) : groups.map(group => (
             <section key={group.key} aria-label={group.label} className="flex flex-col gap-3">
-              <h2 className="m-0 text-[16px] font-semibold text-[var(--v2-text)]">{group.label}</h2>
+              <h2 className="m-0 text-v2-title font-semibold text-[var(--v2-text)]">{group.label}</h2>
               {group.items.length > 0 && <NeedsYou items={group.items} d={d} onNavigate={onNavigate} />}
               {group.seats.length > 0 && <WorkingNow seats={group.seats} queue={queue} autonomy={autonomy} d={d} onNavigate={onNavigate} />}
             </section>

@@ -39,13 +39,13 @@ export type ScmSidebarProps = {
 };
 
 function CountBadge({ n }: { n: number }) {
-  return <span data-count className="v2-mono rounded-full bg-[var(--v2-track)] px-1.5 text-[10px] text-[var(--v2-text-2)]">{n}</span>;
+  return <span data-count className="v2-mono rounded-full bg-[var(--v2-track)] px-1.5 text-v2-micro text-[var(--v2-text-2)]">{n}</span>;
 }
 
 /** What a git-dependent section shows while the panel has no snapshot. */
 function Pending({ state }: { state: ScopeState }) {
   const line = state.kind === "error" ? state.reason : "Reading git";
-  return <div className="px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">{line}</div>;
+  return <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">{line}</div>;
 }
 
 const fetchTimes = new Map<string, number>();
@@ -82,7 +82,7 @@ export function ScmSidebar(p: ScmSidebarProps) {
     <div data-testid="scm-sidebar" className="flex min-h-0 flex-1 flex-col">
       <header className="flex shrink-0 flex-col gap-1 border-b border-[var(--v2-edge)] px-3 pb-2 pt-2.5">
         <div className="flex items-center gap-1">
-          <span className="flex-1 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--v2-muted)]">Source control</span>
+          <span className="flex-1 text-v2-small font-semibold uppercase tracking-[0.06em] text-[var(--v2-muted)]">Source control</span>
           <button type="button" aria-label="Fetch from origin" title="Fetch origin with prune" disabled={fetch.busy}
             onClick={() => { void fetch.run(); }}
             className="v2-hover inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--v2-muted)] disabled:opacity-45">
@@ -90,11 +90,11 @@ export function ScmSidebar(p: ScmSidebarProps) {
           </button>
           {p.actions && <span className="flex shrink-0 items-center gap-1">{p.actions}</span>}
         </div>
-        <div className="flex min-w-0 items-center gap-1.5 text-[11px]">
+        <div className="flex min-w-0 items-center gap-1.5 text-v2-small">
           <span className="v2-mono min-w-0 shrink-0 truncate text-[var(--v2-text)]" title={snap?.branch ?? "reading…"}>{snap?.branch ?? "reading…"}</span>
           {snap && !snap.seatBacked && <MainCheckoutMark />}
           {snap && (
-            <span data-ahead className="v2-mono shrink-0 text-[10.5px] text-[var(--v2-muted)]"
+            <span data-ahead className="v2-mono shrink-0 text-v2-small text-[var(--v2-muted)]"
               title={aheadTitle}>
               {aheadLabel(snap)}
             </span>
@@ -103,10 +103,10 @@ export function ScmSidebar(p: ScmSidebarProps) {
         </div>
       </header>
       {fetch.error && (
-        <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-bad)]">{fetch.error}</div>
+        <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-v2-body text-[var(--v2-bad)]">{fetch.error}</div>
       )}
       {p.state.kind === "error" && (
-        <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-bad)]">{p.state.reason}</div>
+        <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-v2-body text-[var(--v2-bad)]">{p.state.reason}</div>
       )}
       {/* #14058: open bodies scroll in place; the column itself scrolls only when the sections' floors no longer fit */}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">

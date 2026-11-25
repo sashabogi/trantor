@@ -26,7 +26,7 @@ type Props = {
 
 function Heading({ label, count, action }: { label: string; count?: number; action?: ReactNode }) {
   return (
-    <div className="flex items-center gap-1.5 px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--v2-muted)]">
+    <div className="flex items-center gap-1.5 px-2 pb-1 pt-3 text-v2-micro font-semibold uppercase tracking-[0.12em] text-[var(--v2-muted)]">
       <span>{label}</span>{count !== undefined && <span className="v2-mono font-normal">{count}</span>}
       {action && <span className="ml-auto">{action}</span>}
     </div>
@@ -60,16 +60,16 @@ export function ProjectSidebar({ projects, cards, open, peers, interrupted, onNa
     interrupted.drop(r.project);
     void dismissedSessionsApi.dismiss(r.project, r.sessionId).catch(() => {});
   };
-  const row = "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] text-[var(--v2-text-2)] v2-hover";
+  const row = "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-v2-base text-[var(--v2-text-2)] v2-hover";
   return (
     <aside aria-label="Projects" className="flex w-[216px] shrink-0 flex-col overflow-y-auto border-r border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-2 py-2.5">
       <label htmlFor="v2-dash-filter" className="sr-only">Filter projects</label>
       <div className="flex items-center gap-1.5 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2 py-1.5">
         <Search size={13} aria-hidden className="text-[var(--v2-muted)]" />
         <input id="v2-dash-filter" value={filter} onChange={e => setFilter(e.target.value)} placeholder={`Filter ${projects.length} projects`}
-          className="min-w-0 flex-1 bg-transparent text-[12px] text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
+          className="min-w-0 flex-1 bg-transparent text-v2-body text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
       </div>
-      {error && <p role="alert" className="m-0 px-2 pt-2 text-[11px] text-[var(--v2-bad)]">{error}</p>}
+      {error && <p role="alert" className="m-0 px-2 pt-2 text-v2-small text-[var(--v2-bad)]">{error}</p>}
       <Heading label="Active now" count={live.length} />
       {live.map(p => {
         const act = activity.get(p);
@@ -79,22 +79,22 @@ export function ProjectSidebar({ projects, cards, open, peers, interrupted, onNa
             <ProjectTile name={p} size={22} dot={act ? DOT[act.state] : undefined} />
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium text-[var(--v2-text)]">{p}</span>
-              {line && <span className={`block truncate text-[10.5px] ${line.tone === "warn" ? "text-[var(--v2-warn)]" : "text-[var(--v2-muted)]"}`}>{line.text}</span>}
+              {line && <span className={`block truncate text-v2-small ${line.tone === "warn" ? "text-[var(--v2-warn)]" : "text-[var(--v2-muted)]"}`}>{line.text}</span>}
             </span>
           </button>
         );
       })}
       {interrupted.rows.length > 0 && <Heading label="Interrupted" count={interrupted.rows.length} />}
       {interrupted.rows.map(r => (
-        <div key={`${r.project}:${r.sessionId}`} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[12.5px]">
+        <div key={`${r.project}:${r.sessionId}`} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-v2-base">
           <ProjectTile name={r.project} size={22} />
           <span className="min-w-0 flex-1 truncate text-[var(--v2-text-2)]">{r.project}</span>
           <button type="button" title="Resume this session" onClick={() => void resume(r.project)}
-            className="inline-flex items-center gap-1 rounded-md bg-[var(--v2-ok-soft)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--v2-ok)]">
+            className="inline-flex items-center gap-1 rounded-md bg-[var(--v2-ok-soft)] px-1.5 py-0.5 text-v2-small font-semibold text-[var(--v2-ok)]">
             <Play size={10} aria-hidden />Resume
           </button>
           <button type="button" aria-label={`Dismiss ${r.project}`} title="Dismiss: it stays wakeable from its project row" onClick={() => dismiss(r)}
-            className="px-1 text-[13px] text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
+            className="px-1 text-v2-base text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
         </div>
       ))}
       <Heading label="Projects" action={onStartProject && (
@@ -109,11 +109,11 @@ export function ProjectSidebar({ projects, cards, open, peers, interrupted, onNa
         </button>
       ))}
       {!filter.trim() && inactive.length > 0 && (
-        <button type="button" onClick={toggleAll} className="mt-1 rounded-lg px-2 py-1.5 text-left text-[11.5px] text-[var(--v2-muted)] v2-hover">
+        <button type="button" onClick={toggleAll} className="mt-1 rounded-lg px-2 py-1.5 text-left text-v2-body text-[var(--v2-muted)] v2-hover">
           {showAll ? "Show fewer projects" : `Show all ${inactive.length}`}
         </button>
       )}
-      {!projects.some(match) && live.length === 0 && <p className="m-0 px-2 text-[11.5px] text-[var(--v2-muted)]">No projects match.</p>}
+      {!projects.some(match) && live.length === 0 && <p className="m-0 px-2 text-v2-body text-[var(--v2-muted)]">No projects match.</p>}
     </aside>
   );
 }

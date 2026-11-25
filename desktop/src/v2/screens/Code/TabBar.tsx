@@ -34,7 +34,7 @@ export function TabBar({ tabs, activeId, sidebarFolded, dirty, confirmId, onActi
     id: t.id,
     label: t.label,
     title: t.path ?? t.label,
-    leading: t.kind === "file" ? <span className="v2-mono text-[9.5px] text-[var(--v2-accent)]">{fileBadge(t.path ?? "")}</span> : ICON[t.kind],
+    leading: t.kind === "file" ? <span className="v2-mono text-v2-micro text-[var(--v2-accent)]">{fileBadge(t.path ?? "")}</span> : ICON[t.kind],
     close: t.kind !== "source",
     dirty: dirty.has(t.id),
   }));
@@ -49,7 +49,7 @@ export function TabBar({ tabs, activeId, sidebarFolded, dirty, confirmId, onActi
         ) : undefined}
         actions={<IconButton label="New tab" title="New tab: search for a file to open" size={28} onClick={onNew}><Plus size={14} aria-hidden /></IconButton>} />
       {confirming && (
-        <div role="alert" className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-[12px] text-[var(--v2-text)]">
+        <div role="alert" className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-v2-body text-[var(--v2-text)]">
           <span className="min-w-0 flex-1 truncate"><span className="v2-mono">{confirming.path ?? confirming.label}</span> has unsaved changes. Closing it discards them.</span>
           <Button variant="danger" onClick={onConfirmClose}>Discard and close</Button>
           <Button variant="quiet" onClick={onCancelClose}>Keep open</Button>

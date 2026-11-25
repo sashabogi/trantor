@@ -37,7 +37,7 @@ export function CollapsibleSection({ section, title, badge, actions, sizing = "c
       <div className="flex shrink-0 items-center pr-2">
         <button type="button" aria-expanded={open} aria-controls={id} data-section-toggle={section}
           title={open ? `Hide ${title}` : `Show ${title}`} onClick={toggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-[11.5px] font-semibold text-[var(--v2-text-2)] hover:bg-[var(--v2-raised)]">
+          className="flex min-w-0 flex-1 items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-v2-body font-semibold text-[var(--v2-text-2)] hover:bg-[var(--v2-raised)]">
           {open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />}
           <span className="truncate">{title}</span>
           {badge ? <span className="shrink-0">{badge}</span> : null}

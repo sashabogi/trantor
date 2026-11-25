@@ -12,17 +12,17 @@ const TONE = { ok: "var(--v2-ok)", warn: "var(--v2-warn)", bad: "var(--v2-bad)",
 export function AddSeat({ report, crew }: { report: BalancesReport | null; crew: Crew }) {
   return (
     <section aria-label="Add a seat" className="rounded-xl border border-dashed border-[var(--v2-edge-2)] bg-[var(--v2-panel)] p-3">
-      <div className="mb-2.5 flex items-center gap-2 text-[13px] font-semibold"><Plus size={14} aria-hidden />Add a seat</div>
+      <div className="mb-2.5 flex items-center gap-2 text-v2-base font-semibold"><Plus size={14} aria-hidden />Add a seat</div>
       <div className="flex flex-wrap gap-2">
         {VENDORS.map(v => {
           const own = v === "Claude";
           const plan = own ? { tone: "warn" as const, line: "your own quota" } : planLine(entryForVendor(v, report));
           return (
             <span key={v} title={own ? "Draws your own Claude plan: avoid for crew work" : `${v} plan: ${plan.line}`}
-              className="inline-flex items-center gap-2 rounded-lg border border-[var(--v2-edge-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)]">
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--v2-edge-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)]">
               <span aria-hidden className="h-2 w-2 rounded-full" style={{ background: modelHue(v) }} />
               {v}
-              <span className="text-[11px]" style={{ color: TONE[plan.tone] }}>{plan.line}</span>
+              <span className="text-v2-small" style={{ color: TONE[plan.tone] }}>{plan.line}</span>
             </span>
           );
         })}

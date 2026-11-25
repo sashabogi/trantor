@@ -21,7 +21,7 @@ function useMainBranch(project: string): string | null {
   return branch;
 }
 
-const rowBase = "v2-hover flex items-center gap-2 border-0 border-l-2 bg-transparent px-3 py-1.5 text-left text-[12px] text-[var(--v2-text)] disabled:opacity-50";
+const rowBase = "v2-hover flex items-center gap-2 border-0 border-l-2 bg-transparent px-3 py-1.5 text-left text-v2-body text-[var(--v2-text)] disabled:opacity-50";
 
 export type BranchesSectionProps = {
   project: string;
@@ -39,7 +39,7 @@ export function BranchesSection(p: BranchesSectionProps) {
         title={mainBranch ? `The project checkout on ${mainBranch}` : "The project checkout"}
         className={`${rowBase} ${p.scope === null ? "border-l-[var(--v2-accent)] bg-[var(--v2-raised)]" : "border-l-transparent"}`}>
         <span className="v2-mono min-w-0 flex-1 truncate">{mainBranch ?? "reading…"}</span>
-        <span className="shrink-0 text-[10.5px] text-[var(--v2-muted)]">main checkout</span>
+        <span className="shrink-0 text-v2-small text-[var(--v2-muted)]">main checkout</span>
       </button>
       {p.seats.map(s => (
         <button key={s.seat} type="button" data-scope-row={s.seat} disabled={!s.hasWorktree} aria-pressed={p.scope === s.seat}
@@ -51,12 +51,12 @@ export function BranchesSection(p: BranchesSectionProps) {
           <Avatar name={s.seat} size={20} presence={s.presence} />
           <span className="min-w-0 flex-1">
             <span className="block truncate">{seatLabel(s.seat)}</span>
-            <span className="v2-mono block truncate text-[10.5px] text-[var(--v2-muted)]">{s.branch ?? "no branch read"}</span>
+            <span className="v2-mono block truncate text-v2-small text-[var(--v2-muted)]">{s.branch ?? "no branch read"}</span>
           </span>
-          {s.ahead ? <span className="v2-mono shrink-0 text-[10.5px] text-[var(--v2-muted)]">↑{s.ahead}</span> : null}
+          {s.ahead ? <span className="v2-mono shrink-0 text-v2-small text-[var(--v2-muted)]">↑{s.ahead}</span> : null}
         </button>
       ))}
-      {p.seats.length === 0 && <div className="px-3 py-1 text-[11.5px] text-[var(--v2-muted)]">No seat sessions for this project.</div>}
+      {p.seats.length === 0 && <div className="px-3 py-1 text-v2-body text-[var(--v2-muted)]">No seat sessions for this project.</div>}
     </div>
   );
 }

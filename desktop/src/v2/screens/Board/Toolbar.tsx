@@ -29,9 +29,9 @@ function QuickChip({ label, count, on, onClick, title, disabledReason }: {
   const off = !!disabledReason;
   return (
     <button type="button" aria-pressed={on} disabled={off} onClick={onClick} title={disabledReason ?? title}
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-[10px] py-[3px] text-[11.5px] font-medium disabled:opacity-45 ${
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-[10px] py-[3px] text-v2-body font-medium disabled:opacity-45 ${
         on ? "border-[var(--v2-info-edge)] bg-[var(--v2-accent-soft)] text-[var(--v2-accent-hi)]" : "border-[var(--v2-edge)] bg-transparent text-[var(--v2-text-2)] hover:bg-[var(--v2-raised)]"}`}>
-      {label}{count !== undefined && <span className="text-[10.5px] text-[var(--v2-muted)]">{count}</span>}
+      {label}{count !== undefined && <span className="text-v2-small text-[var(--v2-muted)]">{count}</span>}
     </button>
   );
 }
@@ -48,10 +48,10 @@ export function Toolbar({ view, onView, filters, onFilters, seats, counts, onNew
       <label htmlFor="v2-board-search" className="sr-only">Search cards</label>
       <input id="v2-board-search" type="text" value={filters.query} onChange={e => set({ query: e.target.value })}
         placeholder="Search: text, #id, @seat"
-        className="w-[230px] rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2.5 py-[5px] text-[12px] text-[var(--v2-text)] placeholder:text-[var(--v2-muted)]" />
+        className="w-[230px] rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2.5 py-[5px] text-v2-body text-[var(--v2-text)] placeholder:text-[var(--v2-muted)]" />
       {seats.length > 0 && (
         <div role="group" aria-label="Filter by seat" className="flex items-center gap-1">
-          <span className="mr-0.5 text-[10.5px] text-[var(--v2-muted)]">Seat</span>
+          <span className="mr-0.5 text-v2-small text-[var(--v2-muted)]">Seat</span>
           {shownSeats.map(g => {
             const on = isOn(g);
             return (
@@ -63,7 +63,7 @@ export function Toolbar({ view, onView, filters, onFilters, seats, counts, onNew
           })}
           {!more && seats.length > SEAT_FILTER_MAX && (
             <button type="button" onClick={() => setMore(true)} title="Show the other seats with open cards"
-              className="rounded-full border border-[var(--v2-edge)] px-2 py-0.5 text-[10.5px] text-[var(--v2-muted)] hover:bg-[var(--v2-raised)]">+{seats.length - SEAT_FILTER_MAX}</button>
+              className="rounded-full border border-[var(--v2-edge)] px-2 py-0.5 text-v2-small text-[var(--v2-muted)] hover:bg-[var(--v2-raised)]">+{seats.length - SEAT_FILTER_MAX}</button>
           )}
         </div>
       )}

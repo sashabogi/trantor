@@ -77,10 +77,10 @@ function SingleCommit({ row, project, scope, cards, acts, onNavigate, onMutated,
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex flex-col gap-2 border-b border-[var(--v2-edge)] px-4 py-3">
         <div className="flex flex-wrap items-center gap-2.5">
-          <h2 className="m-0 min-w-0 flex-[1_1_300px] text-[16px] font-[650]">{row.subject}</h2>
+          <h2 className="m-0 min-w-0 flex-[1_1_300px] text-v2-title font-[650]">{row.subject}</h2>
           <Actions title={row.subject} sha={meta?.sha ?? row.sha} githubUrl={meta?.github_url ?? null} acts={acts} project={project} scope={scope} onMutated={onMutated} onError={onError} openExternal={openExternal} />
         </div>
-        <div className="flex flex-wrap items-center gap-2.5 text-[12px] text-[var(--v2-muted)]">
+        <div className="flex flex-wrap items-center gap-2.5 text-v2-body text-[var(--v2-muted)]">
           <span className="inline-flex items-center gap-1.5"><Avatar name={who} size={20} /><span className="text-[var(--v2-text-2)]">{seatLabel(who)}</span>{row.seat && row.author !== row.seat && <span>({row.author})</span>}</span>
           <span>{row.when}</span>
           <span className="v2-mono">{row.sha}</span>
@@ -89,8 +89,8 @@ function SingleCommit({ row, project, scope, cards, acts, onNavigate, onMutated,
           ))}</span>}
           {show.state.kind === "ok" && <span>{show.files.length} {show.files.length === 1 ? "file" : "files"} changed · <span className="text-[var(--v2-ok)]">+{plus}</span> <span className="text-[var(--v2-bad)]">−{minus}</span></span>}
         </div>
-        {meta && <pre className="m-0 whitespace-pre-wrap break-words font-[inherit] text-[12.5px] leading-5 text-[var(--v2-text-2)]">{meta.message}</pre>}
-        {metaError && <div role="alert" className="text-[11.5px] text-[var(--v2-bad)]">{metaError}</div>}
+        {meta && <pre className="m-0 whitespace-pre-wrap break-words font-[inherit] text-v2-base leading-5 text-[var(--v2-text-2)]">{meta.message}</pre>}
+        {metaError && <div role="alert" className="text-v2-body text-[var(--v2-bad)]">{metaError}</div>}
         {row.card !== null && (
           <div className="flex flex-wrap gap-1.5">
             <button type="button" onClick={() => onNavigate("board")} title="Open the board" className="border-0 bg-transparent p-0">
@@ -111,7 +111,7 @@ export function UnlandedDetail({ branch, count, diff, acts, project, scope }: { 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-[var(--v2-edge)] px-4 py-3">
-        <h2 className="m-0 min-w-0 flex-[1_1_300px] text-[16px] font-[650]">{count} {count === 1 ? "commit" : "commits"} on {branch ?? "this branch"} not on main</h2>
+        <h2 className="m-0 min-w-0 flex-[1_1_300px] text-v2-title font-[650]">{count} {count === 1 ? "commit" : "commits"} on {branch ?? "this branch"} not on main</h2>
         <Chip mono title="Merge base with main">{diff.base ? diff.base.slice(0, 7) : "base unknown"}</Chip>
       </div>
       <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={diff.state} onAddToChat={acts.addToChat} empty="No file changes against main." project={project} scope={scope} />
@@ -124,8 +124,8 @@ function CommitFromSha({ sha, project, scope, cards, acts, onNavigate, onMutated
   onMutated: () => void; onError: (message: string) => void; onSelectCommit: (sha: string) => void; openExternal: OpenExternal;
 }) {
   const { meta, error } = useMeta(project, scope, sha);
-  if (error) return <div role="alert" className="px-4 py-6 text-[12.5px] text-[var(--v2-bad)]">{error}</div>;
-  if (!meta) return <div className="px-4 py-6 text-[12.5px] text-[var(--v2-muted)]">Reading {sha.slice(0, 8)}</div>;
+  if (error) return <div role="alert" className="px-4 py-6 text-v2-base text-[var(--v2-bad)]">{error}</div>;
+  if (!meta) return <div className="px-4 py-6 text-v2-base text-[var(--v2-muted)]">Reading {sha.slice(0, 8)}</div>;
   const row = toRow(meta, { seats: [], branch: null });
   return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} />;
 }
@@ -136,5 +136,5 @@ export function CommitDetail({ row, selectedSha, project, scope, cards, acts, on
 }) {
   if (row) return <SingleCommit row={row} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} />;
   if (selectedSha) return <CommitFromSha sha={selectedSha} project={project} scope={scope} cards={cards} acts={acts} onNavigate={onNavigate} onMutated={onMutated} onError={onError} onSelectCommit={onSelectCommit} openExternal={openExternal} />;
-  return <div className="flex flex-1 items-center justify-center px-6 text-[12.5px] text-[var(--v2-muted)]">Pick a commit to read it.</div>;
+  return <div className="flex flex-1 items-center justify-center px-6 text-v2-base text-[var(--v2-muted)]">Pick a commit to read it.</div>;
 }

@@ -49,22 +49,22 @@ export function Rail({ category, onCategory, openVsxTotal, providers }: RailProp
   return (
     <aside aria-label="Extension categories" className="flex w-[232px] shrink-0 flex-col gap-1 overflow-y-auto border-r border-[var(--v2-edge)] bg-[var(--v2-chrome)] p-3">
       <div className="px-1.5 pb-2">
-        <h1 className="m-0 text-[15px] font-[650]">Extensions and tools</h1>
-        <div className="mt-0.5 text-[11.5px] text-[var(--v2-muted)]">for your editor and for your agents</div>
+        <h1 className="m-0 text-v2-title font-[650]">Extensions and tools</h1>
+        <div className="mt-0.5 text-v2-body text-[var(--v2-muted)]">for your editor and for your agents</div>
       </div>
       {CATEGORIES.map(c => (
         <button key={c.id} type="button" aria-current={category === c.id ? "page" : undefined} onClick={() => onCategory(c.id)}
-          className={`flex items-center justify-between gap-2 rounded-lg px-2.5 py-[7px] text-left text-[12.5px] ${category === c.id ? "bg-[var(--v2-raised)] text-[var(--v2-text)]" : "text-[var(--v2-text-2)] hover:bg-[var(--v2-panel-2)]"}`}>
+          className={`flex items-center justify-between gap-2 rounded-lg px-2.5 py-[7px] text-left text-v2-base ${category === c.id ? "bg-[var(--v2-raised)] text-[var(--v2-text)]" : "text-[var(--v2-text-2)] hover:bg-[var(--v2-panel-2)]"}`}>
           <span>{c.label}</span>
-          <span className="text-[11px] text-[var(--v2-muted)]">{count(c.id)}</span>
+          <span className="text-v2-small text-[var(--v2-muted)]">{count(c.id)}</span>
         </button>
       ))}
-      <div className="mt-3 flex items-center justify-between px-1.5 text-[10.5px] font-semibold tracking-wide text-[var(--v2-muted)]">
+      <div className="mt-3 flex items-center justify-between px-1.5 text-v2-small font-semibold tracking-wide text-[var(--v2-muted)]">
         <span>INSTALLED</span>
         <span>{failing > 0 ? `${failing} failing` : ""}</span>
       </div>
       <InstalledList providers={providers} />
-      <div className="mt-auto rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2.5 text-[11.5px] leading-snug text-[var(--v2-muted)]">
+      <div className="mt-auto rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-2.5 text-v2-body leading-snug text-[var(--v2-muted)]">
         Only you install. Seats can ask for a tool; it lands in your Inbox.
       </div>
     </aside>
@@ -72,16 +72,16 @@ export function Rail({ category, onCategory, openVsxTotal, providers }: RailProp
 }
 
 function InstalledList({ providers }: { providers: BalanceEntry[] | null }) {
-  if (providers === null) return <div className="px-1.5 text-[11.5px] text-[var(--v2-muted)]">Reading what is installed...</div>;
-  if (providers.length === 0) return <div className="px-1.5 text-[11.5px] text-[var(--v2-muted)]">Nothing readable as installed yet.</div>;
+  if (providers === null) return <div className="px-1.5 text-v2-body text-[var(--v2-muted)]">Reading what is installed...</div>;
+  if (providers.length === 0) return <div className="px-1.5 text-v2-body text-[var(--v2-muted)]">Nothing readable as installed yet.</div>;
   return (
     <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
       {providers.map(p => {
         const name = p.label ?? p.provider;
         const h = providerHealth(p);
         return (
-          <li key={p.provider} className="flex items-center gap-2 px-1.5 py-[5px] text-[12.5px]">
-            <span aria-hidden className="v2-mono flex h-[22px] w-[22px] items-center justify-center rounded-md bg-[var(--v2-panel-2)] text-[9px] text-[var(--v2-text-2)]">{monogram(name)}</span>
+          <li key={p.provider} className="flex items-center gap-2 px-1.5 py-[5px] text-v2-base">
+            <span aria-hidden className="v2-mono flex h-[22px] w-[22px] items-center justify-center rounded-md bg-[var(--v2-panel-2)] text-v2-micro text-[var(--v2-text-2)]">{monogram(name)}</span>
             <span className="min-w-0 flex-1 truncate">{name}</span>
             <span role="img" aria-label={DOT_LABEL[h]} title={DOT_LABEL[h]} className="h-2 w-2 rounded-full" style={{ background: DOT[h] }} />
           </li>

@@ -34,9 +34,9 @@ export function SettingsScreen({ client, project, onNavigate }: ScreenProps) {
       <div className="min-w-0 flex-1 overflow-auto px-6 py-5">
         <div className="mx-auto flex max-w-[860px] flex-col gap-4">
           <header>
-            <div className="text-[11px] text-[var(--v2-muted)]">{def?.group}</div>
-            <h2 className="m-0 text-[20px] font-[650]">{def?.label}</h2>
-            <p className="mt-1 text-[12.5px] text-[var(--v2-muted)]">{def?.desc}</p>
+            <div className="text-v2-small text-[var(--v2-muted)]">{def?.group}</div>
+            <h2 className="m-0 text-v2-heading font-[650]">{def?.label}</h2>
+            <p className="mt-1 text-v2-base text-[var(--v2-muted)]">{def?.desc}</p>
           </header>
           <Page id={active} props={{ client, project }} data={data} query={query} onNavigate={onNavigate} />
         </div>
@@ -71,7 +71,7 @@ function Page({ id, props, data, query, onNavigate }: PageProps) {
     case "agreements": return <WorkingAgreements />;
     case "extensions": return (
       <div className="flex items-center gap-3">
-        <span className="text-[12.5px] text-[var(--v2-muted)]">Extensions and tools open as their own screen.</span>
+        <span className="text-v2-base text-[var(--v2-muted)]">Extensions and tools open as their own screen.</span>
         <Button onClick={() => onNavigate("extensions")}>Open Extensions</Button>
       </div>
     );

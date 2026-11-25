@@ -32,8 +32,8 @@ function Row({ row, branch, first, tip, last, on, onSelect }: { row: HistoryRow;
       className={`flex w-full items-stretch gap-2 border-0 px-3 text-left ${on ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
       <Lane first={first} last={last} />
       <span className="flex min-w-0 flex-1 flex-col gap-1 py-2">
-        <span className="truncate text-[12.5px] font-medium text-[var(--v2-text)]">{row.subject}</span>
-        <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-[var(--v2-muted)]">
+        <span className="truncate text-v2-base font-medium text-[var(--v2-text)]">{row.subject}</span>
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-v2-small text-[var(--v2-muted)]">
           <Avatar name={who} size={14} />
           <span className="truncate">{seatLabel(who)}</span>
           {row.card !== null && <span className="v2-mono text-[var(--v2-accent)]">#{row.card}</span>}
@@ -66,14 +66,14 @@ export function FileHistoryControl({ project, scope, path }: { project: string; 
       <IconButton label={`File history for ${path}`} title="Commits that touched this file" size={24} aria-pressed={open} onClick={() => setOpen(value => !value)}><Clock size={13} aria-hidden /></IconButton>
       {open && (
         <div role="dialog" aria-label={`File history: ${path}`} className="absolute right-0 top-full z-30 max-h-[360px] w-[380px] overflow-y-auto rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] shadow-xl">
-          <div className="border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] font-semibold text-[var(--v2-text)]">File history <span className="v2-mono font-normal text-[var(--v2-muted)]">{path}</span></div>
-          {loading && <div className="px-3 py-3 text-[11.5px] text-[var(--v2-muted)]">Reading file history</div>}
-          {error && <div role="alert" className="px-3 py-3 text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
-          {!loading && !error && rows.length === 0 && <div className="px-3 py-3 text-[11.5px] text-[var(--v2-muted)]">No commits touch this file.</div>}
+          <div className="border-b border-[var(--v2-edge)] px-3 py-2 text-v2-body font-semibold text-[var(--v2-text)]">File history <span className="v2-mono font-normal text-[var(--v2-muted)]">{path}</span></div>
+          {loading && <div className="px-3 py-3 text-v2-body text-[var(--v2-muted)]">Reading file history</div>}
+          {error && <div role="alert" className="px-3 py-3 text-v2-body text-[var(--v2-bad)]">{error}</div>}
+          {!loading && !error && rows.length === 0 && <div className="px-3 py-3 text-v2-body text-[var(--v2-muted)]">No commits touch this file.</div>}
           {!loading && rows.map(row => (
             <div key={row.sha} className="border-b border-[var(--v2-edge)] px-3 py-2 last:border-b-0">
-              <div className="truncate text-[12px] text-[var(--v2-text)]">{row.subject}</div>
-              <div className="mt-0.5 flex items-center gap-2 text-[10.5px] text-[var(--v2-muted)]"><span>{row.author}</span><span>{row.when}</span><span className="v2-mono">{row.sha.slice(0, 8)}</span></div>
+              <div className="truncate text-v2-body text-[var(--v2-text)]">{row.subject}</div>
+              <div className="mt-0.5 flex items-center gap-2 text-v2-small text-[var(--v2-muted)]"><span>{row.author}</span><span>{row.when}</span><span className="v2-mono">{row.sha.slice(0, 8)}</span></div>
             </div>
           ))}
         </div>
@@ -119,27 +119,27 @@ export function HistoryView({ rows, branch, unlanded, selected, onSelect, seatBa
         <div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2 py-1">
           <Search size={12} aria-hidden className="shrink-0 text-[var(--v2-muted)]" />
           <input id="v2-history-search" value={query} onChange={e => setQuery(e.target.value)} placeholder="text, author:, file:, message:"
-            className="min-w-0 flex-1 border-0 bg-transparent text-[12px] text-[var(--v2-text)] outline-none" />
+            className="min-w-0 flex-1 border-0 bg-transparent text-v2-body text-[var(--v2-text)] outline-none" />
         </div>
-        <div role="group" aria-label="History scope" className="flex shrink-0 text-[11px]">
+        <div role="group" aria-label="History scope" className="flex shrink-0 text-v2-small">
           <button type="button" aria-pressed={all} title="Search every local and remote branch and tag" onClick={() => setAll(true)} className={`rounded-l-md border border-[var(--v2-edge-2)] px-1.5 py-1 ${all ? "bg-[var(--v2-hover)] text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-muted)]"}`}>All</button>
           <button type="button" aria-pressed={!all} title="The checked-out branch" onClick={() => setAll(false)} className={`rounded-r-md border border-l-0 border-[var(--v2-edge-2)] px-1.5 py-1 ${!all ? "bg-[var(--v2-hover)] text-[var(--v2-text)]" : "bg-transparent text-[var(--v2-muted)]"}`}>Current branch</button>
         </div>
       </div>
-      {error && <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-1.5 text-[11px] text-[var(--v2-bad)]">{error}</div>}
+      {error && <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-1.5 text-v2-small text-[var(--v2-bad)]">{error}</div>}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" role="group" aria-label="Commits">
         {!native && seatBacked && unlanded ? (
           <button type="button" onClick={() => onSelect(UNLANDED_KEY)} aria-pressed={selected === UNLANDED_KEY} data-sha={UNLANDED_KEY}
-            className={`border-0 border-b border-[var(--v2-edge)] px-3 py-2 text-left text-[12px] ${selected === UNLANDED_KEY ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
+            className={`border-0 border-b border-[var(--v2-edge)] px-3 py-2 text-left text-v2-body ${selected === UNLANDED_KEY ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
             <span className="font-medium text-[var(--v2-text)]">{unlanded} {unlanded === 1 ? "commit" : "commits"} not on main yet</span>
-            <span className="block text-[11px] text-[var(--v2-muted)]">The whole branch against its merge base</span>
+            <span className="block text-v2-small text-[var(--v2-muted)]">The whole branch against its merge base</span>
           </button>
         ) : null}
-        {loading && <div className="px-3 py-4 text-[12px] text-[var(--v2-muted)]">Reading commits</div>}
-        {!loading && result.length === 0 && <div className="px-3 py-4 text-[12px] text-[var(--v2-muted)]">{sourceRows.length === 0 ? "No commits yet." : "No commits match."}</div>}
+        {loading && <div className="px-3 py-4 text-v2-body text-[var(--v2-muted)]">Reading commits</div>}
+        {!loading && result.length === 0 && <div className="px-3 py-4 text-v2-body text-[var(--v2-muted)]">{sourceRows.length === 0 ? "No commits yet." : "No commits match."}</div>}
         {!loading && result.map((r, i) => <Row key={r.sha} row={r} branch={branch} first={i === 0} tip={isBranchTip(i, native, r, sourceRows)} last={i === result.length - 1} on={selected === r.sha} onSelect={() => onSelect(r.sha)} />)}
       </div>
-      <div className="border-t border-[var(--v2-edge)] px-3 py-1.5 text-[10.5px] text-[var(--v2-muted)]">Latest {sourceRows.length} commits {all ? "across all branches" : "on this branch"}</div>
+      <div className="border-t border-[var(--v2-edge)] px-3 py-1.5 text-v2-small text-[var(--v2-muted)]">Latest {sourceRows.length} commits {all ? "across all branches" : "on this branch"}</div>
     </div>
   );
 }

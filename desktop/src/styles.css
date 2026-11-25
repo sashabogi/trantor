@@ -10,6 +10,15 @@
    The old --color-tr-* names keep working (every view references them); their VALUES moved to
    the neutral system. Status hues are unchanged — they match the cmux sidebar and crew-runner. */
 @theme {
+  /* #14208: the 2.0 type scale. The 2.0 shell may use only these sizes (text-v2-micro … text-v2-display)
+     and the radii rounded-sm, -md, -lg, -xl and -full (4, 6, 8, 12 px); the lint gate refuses anything else. */
+  --text-v2-micro: 10px;
+  --text-v2-small: 11px;
+  --text-v2-body: 12px;
+  --text-v2-base: 13px;
+  --text-v2-title: 15px;
+  --text-v2-heading: 20px;
+  --text-v2-display: 26px;
   --color-tr-bg:      #131316;   /* window backdrop the panel floats on */
   --color-tr-panel:   #1e1e22;   /* cards / raised surfaces */
   --color-tr-edge:    #2a2a30;   /* hairline borders */

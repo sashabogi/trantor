@@ -48,7 +48,7 @@ function ChangeRow({ change, snap, selected, onOpen, onStage, onConflict, onDisc
   const verb = fullyStaged ? "Unstage" : "Stage";
   return (
     <div data-change={change.path} data-selected={selected || undefined}
-      className={`group flex items-center gap-1.5 px-3 py-[3px] text-[12px] ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
+      className={`group flex items-center gap-1.5 px-3 py-[3px] text-v2-body ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
       <button type="button" onClick={() => onOpen(change.path)} title={`Show the diff for ${change.path}`}
         className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left">
         <StatusLetter letter={change.letter} /><PathLabel path={change.path} />
@@ -56,7 +56,7 @@ function ChangeRow({ change, snap, selected, onOpen, onStage, onConflict, onDisc
       {n && <Counts plus={n.plus} minus={n.minus} />}
       {change.conflict && (
         <button type="button" onClick={() => onConflict(change.path)} title="Resolve this conflict"
-          className="rounded bg-[var(--v2-bad-soft)] px-1.5 text-[10px] text-[var(--v2-bad)]">conflict</button>
+          className="rounded bg-[var(--v2-bad-soft)] px-1.5 text-v2-micro text-[var(--v2-bad)]">conflict</button>
       )}
       <span className="flex shrink-0 gap-0.5">
         <IconButton label={`Discard ${change.path}`} title={discardReason ?? "Copy to Trash, then discard"} size={22} disabled={!!discardReason}
@@ -102,8 +102,8 @@ export function ChangesSection({ project, snap, selected, onOpen, onMutated, onO
   return (
     <div className="flex flex-col">
       <CommitBox project={project} snap={snap} staged={staged} onDone={onMutated} onError={setError} />
-      {(error ?? discard.error) && <div role="alert" className="px-3 py-1.5 text-[11.5px] text-[var(--v2-bad)]">{error ?? discard.error}</div>}
-      {rows.length === 0 && <div className="px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">No uncommitted changes.</div>}
+      {(error ?? discard.error) && <div role="alert" className="px-3 py-1.5 text-v2-body text-[var(--v2-bad)]">{error ?? discard.error}</div>}
+      {rows.length === 0 && <div className="px-3 py-1.5 text-v2-body text-[var(--v2-muted)]">No uncommitted changes.</div>}
       {confirmation(null)}
       {rows.map(r => <div key={r.path}>
         <ChangeRow change={r} snap={snap} selected={selected === r.path}

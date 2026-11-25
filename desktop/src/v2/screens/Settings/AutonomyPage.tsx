@@ -56,12 +56,12 @@ export function AutonomyPage({ client, project, query, api = autonomyApi }: Auto
   return (
     <div className="flex flex-col gap-4">
       <ScopeBar scope={scope} project={project} onScope={setScope} />
-      {error && <div role="alert" className="text-[12.5px] text-[var(--v2-bad)]">{error}</div>}
-      {!state && !error && <div className="text-[12.5px] text-[var(--v2-muted)]">reading the dials…</div>}
+      {error && <div role="alert" className="text-v2-base text-[var(--v2-bad)]">{error}</div>}
+      {!state && !error && <div className="text-v2-base text-[var(--v2-muted)]">reading the dials…</div>}
       {state && <Dials state={state} target={target} query={query} busy={busy} onWrite={write} onReset={reset} />}
       <OverseerLadder client={client} project={project} target={target} query={query} />
       {rowMatches(query, "always asks", "force-push", "irreversible", "launch or quit the app") && <AlwaysAsks />}
-      <p className="m-0 text-[11.5px] text-[var(--v2-muted)]">
+      <p className="m-0 text-v2-body text-[var(--v2-muted)]">
         Every change here is written through the trantor CLI, so the rules between dials live in one place.
       </p>
     </div>
@@ -70,7 +70,7 @@ export function AutonomyPage({ client, project, query, api = autonomyApi }: Auto
 
 function ScopeBar({ scope, project, onScope }: { scope: Scope; project: string; onScope: (s: Scope) => void }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 text-[12px] text-[var(--v2-muted)]">
+    <div className="flex flex-wrap items-center gap-2 text-v2-body text-[var(--v2-muted)]">
       Showing
       <Seg label="Scope" value={scope} onChange={onScope} options={[
         { value: "me", label: "Me, all projects", title: "Saved as your default on every project" },
@@ -108,7 +108,7 @@ function Dials({ state, target, query, busy, onWrite, onReset }: DialsProps) {
           note={r.harness === "bypass" ? "Your session will act without asking. It takes effect the next time the session starts." : null}
           onPick={v => onWrite("harness", v)} />
       )}
-      {!rows.length && !showHarness && <div className="px-[14px] py-3 text-[12px] text-[var(--v2-muted)]">No dial matches that search.</div>}
+      {!rows.length && !showHarness && <div className="px-[14px] py-3 text-v2-body text-[var(--v2-muted)]">No dial matches that search.</div>}
     </Section>
   );
 }
@@ -132,8 +132,8 @@ function OverseerLadder({ client, project, target, query }: LadderProps) {
   };
   return (
     <Section title="Overseer level" flush sub="The overseer's ladder for the hub: 1 observe, 2 warn, 3 gate, 4 auto. Shared with your team.">
-      {error && <div role="alert" className="px-[14px] pt-3 text-[12.5px] text-[var(--v2-bad)]">{error}</div>}
-      {!levels && !error && <div className="px-[14px] py-3 text-[12px] text-[var(--v2-muted)]">Policy loads once the hub answers.</div>}
+      {error && <div role="alert" className="px-[14px] pt-3 text-v2-base text-[var(--v2-bad)]">{error}</div>}
+      {!levels && !error && <div className="px-[14px] py-3 text-v2-body text-[var(--v2-muted)]">Policy loads once the hub answers.</div>}
       {levels && (
         <DialRow label={target ? `Overseer: ${project}` : "Overseer: every project"} why="How far the overseer goes on its own before it stops for you."
           choices={LADDER} value={String(level)} changed={key in levels && key !== "*"}

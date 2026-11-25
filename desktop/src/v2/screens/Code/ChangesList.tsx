@@ -29,12 +29,12 @@ function FileRow({ entry, letter, snap, selected, onSelect, action, conflict, on
 }) {
   const n = lineCountFor(snap.counts, entry.path);
   return (
-    <div data-selected={selected || undefined} className={`group flex items-center gap-1.5 px-3 py-[3px] text-[12px] ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
+    <div data-selected={selected || undefined} className={`group flex items-center gap-1.5 px-3 py-[3px] text-v2-body ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
       <button type="button" onClick={onSelect} title={`Show the diff for ${entry.path}`} className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left">
         <StatusLetter letter={letter} /><PathLabel path={entry.path} />
       </button>
       {n && <Counts plus={n.plus} minus={n.minus} />}
-      {conflict && <button type="button" onClick={onConflict} title="Resolve this conflict" className="rounded bg-[var(--v2-bad-soft)] px-1.5 text-[10px] text-[var(--v2-bad)]">conflict</button>}
+      {conflict && <button type="button" onClick={onConflict} title="Resolve this conflict" className="rounded bg-[var(--v2-bad-soft)] px-1.5 text-v2-micro text-[var(--v2-bad)]">conflict</button>}
       <span className="flex shrink-0 gap-0.5">{action}</span>
     </div>
   );
@@ -78,13 +78,13 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
       <input id="v2-commit-msg" value={message} onChange={e => setMessage(e.target.value)}
         onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !reason) commit(); }}
         placeholder={`Message (⌘⏎ to commit to ${target})`}
-        className="w-full rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
-      <div className="flex items-center gap-2 text-[11.5px] text-[var(--v2-text-2)]">
+        className="w-full rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
+      <div className="flex items-center gap-2 text-v2-body text-[var(--v2-text-2)]">
         <label className="flex items-center gap-1.5" title={historyReason ?? "Replace the last commit with its changes plus what is staged"}>
           <Checkbox checked={amend} disabled={busy || !!historyReason} onChange={toggleAmend} />Amend last commit
         </label>
         <span className="flex-1" />
-        <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" disabledReason={busy ? "Working" : historyReason} onClick={undo}><Undo2 size={12} aria-hidden />Undo last commit</Button>
+        <Button variant="quiet" className="!px-2 !py-0.5 !text-v2-small" disabledReason={busy ? "Working" : historyReason} onClick={undo}><Undo2 size={12} aria-hidden />Undo last commit</Button>
       </div>
       {/* #14237: the buttons wrap instead of clipping; alone on its line, each fills the row. */}
       <div className="flex flex-wrap gap-1.5">
@@ -120,9 +120,9 @@ export function ChangesList({ project, snap, selected, onSelect, onMutated, onOp
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
       <CommitBox project={project} snap={snap} staged={buckets.staged.length} onDone={onMutated} onError={setError} />
-      {(error ?? discard.error) && <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-[11.5px] text-[var(--v2-bad)]">{error ?? discard.error}</div>}
+      {(error ?? discard.error) && <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-v2-body text-[var(--v2-bad)]">{error ?? discard.error}</div>}
       <SectionLabel>Staged {buckets.staged.length}</SectionLabel>
-      {buckets.staged.length === 0 && <div className="px-3 py-1 text-[11.5px] text-[var(--v2-muted)]">Nothing staged.</div>}
+      {buckets.staged.length === 0 && <div className="px-3 py-1 text-v2-body text-[var(--v2-muted)]">Nothing staged.</div>}
       {buckets.staged.map(e => <div key={`s-${e.path}`}>
         <FileRow entry={e} letter={fileChipLabel(e.x)} snap={snap} selected={selected === e.path} onSelect={() => onSelect(e.path)}
           conflict={blocked(e)} onConflict={() => onOpenConflict?.(e.path)}
@@ -141,7 +141,7 @@ export function ChangesList({ project, snap, selected, onSelect, onMutated, onOp
           onClick={() => stage(stageableChanges(snap.status), false)}><Plus size={12} aria-hidden /></IconButton>
       </div>
       {confirmation(null)}
-      {changes.length === 0 && <div className="px-3 py-1 text-[11.5px] text-[var(--v2-muted)]">No uncommitted changes.</div>}
+      {changes.length === 0 && <div className="px-3 py-1 text-v2-body text-[var(--v2-muted)]">No uncommitted changes.</div>}
       {changes.map(({ entry, letter }) => {
         const full = snap.status.find(s => s.path === entry.path);
         const isConflict = !!full && blocked(full);

@@ -37,7 +37,7 @@ function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<
     <div className="relative">
       <button type="button" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(o => !o)}
         title="Switch project"
-        className="v2-hover inline-flex items-center gap-2 rounded-md border-0 bg-transparent px-1.5 py-1 text-[13px] font-semibold text-[var(--v2-text)]">
+        className="v2-hover inline-flex items-center gap-2 rounded-md border-0 bg-transparent px-1.5 py-1 text-v2-base font-semibold text-[var(--v2-text)]">
         {project ? <ProjectTile name={project} size={22} /> : null}
         {project || "No project"}
         <ChevronDown size={12} aria-hidden />
@@ -51,7 +51,7 @@ function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<
             <ProjectTile name={p} size={20} />{p}
           </MenuItem>
         ))}
-        {!projects.length && <div className="px-2 py-1.5 text-[12px] text-[var(--v2-muted)]">No projects pinned. Run trantor hub set</div>}
+        {!projects.length && <div className="px-2 py-1.5 text-v2-body text-[var(--v2-muted)]">No projects pinned. Run trantor hub set</div>}
       </Popover>
     </div>
   );
@@ -66,7 +66,7 @@ function AccountMenu({ me, onNavigate, onBackToClassic }: Pick<TopBarProps, "me"
         <Avatar name={me || "?"} size={30} />
       </button>
       <Popover open={open} onClose={() => setOpen(false)} label="Account" align="right">
-        <div className="px-2 py-1.5 text-[12px] text-[var(--v2-muted)]">Signed as <span className="text-[var(--v2-text)]">{me || "unknown"}</span></div>
+        <div className="px-2 py-1.5 text-v2-body text-[var(--v2-muted)]">Signed as <span className="text-[var(--v2-text)]">{me || "unknown"}</span></div>
         <MenuItem onSelect={() => { setOpen(false); onNavigate("settings"); }}>Settings</MenuItem>
         <MenuItem onSelect={onBackToClassic} title="Switch back to the classic app">Back to classic</MenuItem>
       </Popover>
@@ -80,7 +80,7 @@ export function TopBar(p: TopBarProps) {
       <ProjectSwitcher projects={p.projects} project={p.project} onProject={p.onProject} onStartProject={p.onStartProject} />
       <Seg label="Mode" options={MODES} value={p.mode} onChange={p.onMode} />
       <button type="button" onClick={p.onSearch} title="Search cards, messages and files (⌘K)"
-        className="flex max-w-[480px] flex-[1_1_280px] items-center gap-2 rounded-[9px] border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-left text-[12px] text-[var(--v2-muted)]">
+        className="flex max-w-[480px] flex-[1_1_280px] items-center gap-2 rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-left text-v2-body text-[var(--v2-muted)]">
         <Search size={14} aria-hidden />
         <span className="flex-1 truncate">Search {p.project || "everything"}: text, #id, @assignee</span>
         <Kbd>⌘K</Kbd>
