@@ -1,5 +1,5 @@
 // Top bar from the Workspace/Dashboard artboards: project switcher, mode, search, bell, account (#v2-F).
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Bell, ChevronDown, Code2, Network, Plus, Search, SplitSquareHorizontal } from "lucide-react";
 import { Seg, type SegOption } from "../ui/Seg";
 import { IconButton } from "../ui/IconButton";
@@ -27,6 +27,7 @@ export type TopBarProps = {
   onNavigate: Navigate;
   onStartProject: () => void;
   onBackToClassic: () => void;
+  notice?: ReactNode;
 };
 
 function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<TopBarProps, "projects" | "project" | "onProject" | "onStartProject">) {
@@ -83,6 +84,7 @@ export function TopBar(p: TopBarProps) {
         <span className="flex-1 truncate">Search {p.project || "everything"}: text, #id, @assignee</span>
         <Kbd>⌘K</Kbd>
       </button>
+      {p.notice}
       <div className="ml-auto flex items-center gap-1.5">
         <IconButton label={p.needsYou ? `Notifications, ${p.needsYou} need you` : "Notifications"} title="Notifications: decisions waiting on you"
           variant="outline" size={32} badge={p.needsYou} onClick={() => p.onNavigate("inbox")}>

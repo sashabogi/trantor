@@ -21,7 +21,7 @@ import { AgentsScreen } from "./screens/Agents";
 import { ExtensionsScreen } from "./screens/Extensions";
 import { SettingsScreen } from "./screens/Settings";
 import { StartProjectSheet } from "./screens/Projects/StartProjectSheet";
-import { WakeLine, WakeToast } from "./screens/Projects/WakeStatus";
+import { WakeLine, WakeNotice } from "./screens/Projects/WakeStatus";
 import { useStartProject, type StartProjectDeps } from "./screens/Projects/useStartProject";
 
 /** ⌘K anywhere opens the search palette, as in classic. */
@@ -85,7 +85,8 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
       <TopBar projects={data.projects} project={data.active} onProject={p => onNavigate(isLensScreen(screen) ? screen : "workspace", p)}
         mode={mode} onMode={m => { setMode(m); saveMode(m); }}
         onSearch={() => setPalette(data.active ? { kind: "project", project: data.active } : { kind: "global" })}
-        needsYou={data.needsYou} me={data.me} onNavigate={onNavigate} onStartProject={start.startProject} onBackToClassic={backToClassic} />
+        needsYou={data.needsYou} me={data.me} onNavigate={onNavigate} onStartProject={start.startProject} onBackToClassic={backToClassic}
+        notice={<WakeNotice wakes={start.wakes} wakeStarts={start.wakeStarts} activeProject={data.active} />} />
       <AgentCliBanner />
       <div className="flex min-h-0 flex-1">
         <Rail screen={screen} project={data.active} live={data.live} unread={data.unread} needsYou={data.needsYou} onNavigate={onNavigate} />
@@ -96,7 +97,6 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
         </main>
       </div>
       <BottomBar client={data.client} onOpenUsage={() => onNavigate("usage")} />
-      <WakeToast wakes={start.wakes} />
       {start.open && (
         <StartProjectSheet devRoot={start.devRoot} deps={start.deps} onClose={start.close} onMade={start.onMade} onCreated={start.onCreated} />
       )}

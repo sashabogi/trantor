@@ -169,7 +169,7 @@ describe("Start a project in the 2.0 shell", () => {
     await mount();
     await createProject("fresh-one");
     expect(status()).toContain("Opening the orchestrator…");
-    expect(host.textContent).toContain("fresh-one · Opening the orchestrator…");
+    expect(host.querySelector('[aria-live="polite"]')).toBeNull();
     await act(async () => { emitWake({ project: "fresh-one", phase: "waiting_idle", detail: null }); });
     expect(status()).toContain("Waiting for it to take its first prompt");
     await act(async () => { emitWake({ project: "fresh-one", phase: "kickoff_landed", detail: "prompt delivered" }); finish("kickoff sent into idle pane w1:p1"); });

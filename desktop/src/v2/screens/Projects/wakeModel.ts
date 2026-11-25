@@ -34,7 +34,7 @@ export function wakeStatusLine(state: WakeRowState | undefined, elapsedSeconds?:
 }
 
 /** The shell notice: the same status without the failure detail the Workspace line carries. */
-export function wakeToastText(state: WakeRowState | undefined): string | null {
+export function wakeNoticeText(state: WakeRowState | undefined): string | null {
   const line = wakeStatusLine(state);
   if (!line) return null;
   return state?.phase === "outcome" && state.kind === "error" ? "Could not open the orchestrator" : line.text;

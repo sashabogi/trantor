@@ -1,7 +1,7 @@
 // The wake, said plainly: a Workspace status line and a one-line shell notice (#13984).
 import { useEffect, useState } from "react";
 import type { WakeRowState } from "../../../features/genesis/wakeRow";
-import { PLAN_HINT, wakeInFlight, wakeStatusLine, wakeToastText } from "./wakeModel";
+import { PLAN_HINT, wakeInFlight, wakeNoticeText, wakeStatusLine } from "./wakeModel";
 
 const TONE = { muted: "text-[var(--v2-muted)]", ok: "text-[var(--v2-ok)]", danger: "text-[var(--v2-bad)]" } as const;
 
@@ -45,15 +45,33 @@ export function WakeLine({ project, state, startedAt, hint, onRetry, onDismiss, 
   );
 }
 
-/** One line, bottom of the shell, for the newest wake still talking. */
-export function WakeToast({ wakes }: { wakes: Map<string, WakeRowState> }) {
+export const WAKE_NOTICE_MS = 8_000;
+
+/** The top-bar event for the newest wake; the Workspace owns its persistent state line. */
+export function WakeNotice({ wakes, wakeStarts, activeProject }: {
+  wakes: Map<string, WakeRowState>; wakeStarts: Map<string, number>; activeProject: string;
+}) {
   const [project, state] = [...wakes.entries()].pop() ?? ["", undefined];
-  const text = wakeToastText(state);
-  if (!text) return null;
+  const startedAt = wakeStarts.get(project) ?? 0;
+  const wakeKey = `${project}:${startedAt}`;
+  const [dismissed, setDismissed] = useState("");
+  const [expired, setExpired] = useState("");
+  const text = wakeNoticeText(state);
+  const completed = state?.phase === "outcome" && (state.kind === "sent" || state.kind === "woken");
+  useEffect(() => {
+    if (!completed || !project) return;
+    const timer = setTimeout(() => setExpired(wakeKey), WAKE_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [completed, project, wakeKey]);
+  if (!text || project === activeProject || dismissed === wakeKey || expired === wakeKey) return null;
   return (
-    <div role="status" aria-live="polite"
-      className="pointer-events-none fixed bottom-12 right-4 z-40 max-w-[360px] truncate rounded-[9px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-1.5 text-[12px] text-[var(--v2-text-2)] shadow-[0_8px_24px_rgba(0,0,0,0.4)]">
-      <span className="font-semibold text-[var(--v2-text)]">{project}</span> · {text}
+    <div role="status" aria-live="polite" title={`${project} · ${text}`}
+      className="flex min-w-0 max-w-[360px] flex-[1_1_220px] items-center gap-1 overflow-hidden rounded-[9px] border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-1.5 text-[12px] text-[var(--v2-text-2)]">
+      <span className="min-w-0 flex-1 truncate">
+        <span className="font-semibold text-[var(--v2-text)]">{project}</span> · {text}
+      </span>
+      <button type="button" aria-label="Dismiss the wake notice" title="Dismiss the wake notice" onClick={() => setDismissed(wakeKey)}
+        className="shrink-0 border-0 bg-transparent px-1 text-[13px] text-[var(--v2-muted)] hover:text-[var(--v2-text)]">×</button>
     </div>
   );
 }
