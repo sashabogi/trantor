@@ -5,8 +5,7 @@ import { matchesCard } from "../../../features/search/match";
 import { dictGet } from "../../../shared/dict";
 import { seatLabel } from "../../ui/identity";
 
-/** The hub keeps `drill` on slim rows too, but the shared Card type does not declare it yet. */
-export type BoardCard = Card & { drill?: string };
+export type BoardCard = Card;
 
 export const FLOW = ["todo", "doing", "testing", "done"] as const;
 export const EXCEPTION_LANES = ["failed", "blocked", "stale"] as const;
@@ -163,6 +162,31 @@ export function seatGroups(all: Card[], presence: Map<string, PresenceState>): S
     by.set(label, g);
   }
   return [...by.values()].sort((a, b) => Number(b.live) - Number(a.live) || a.label.localeCompare(b.label));
+}
+
+export type SeatRow = { seat: string; label: string; cards: Card[] };
+
+export function groupBySeat(cards: Card[]): SeatRow[] {
+  const rows = new Map<string, SeatRow>();
+  for (const card of cards) {
+    const seat = card.workedBy || card.assignee || "";
+    const row = rows.get(seat) ?? { seat, label: seat ? seatLabel(seat) : "Unassigned", cards: [] };
+    row.cards.push(card);
+    rows.set(seat, row);
+  }
+  return [...rows.values()].sort((a, b) => Number(!a.seat) - Number(!b.seat) || a.label.localeCompare(b.label));
+}
+
+export type DependencyRow = { card: Card; waitsOn: Card[]; blocks: Card[] };
+
+export function dependencyRows(cards: Card[]): DependencyRow[] {
+  const open = cards.filter(c => OPEN.has(c.status || "todo"));
+  const byId = new Map(open.map(c => [c.id, c]));
+  return open.map(card => {
+    const waitsOn = (card.deps ?? []).map(id => byId.get(id)).filter((c): c is Card => !!c);
+    const blocks = open.filter(other => (other.deps ?? []).includes(card.id));
+    return { card, waitsOn, blocks };
+  }).filter(row => row.waitsOn.length > 0 || row.blocks.length > 0).sort((a, b) => a.card.id - b.card.id);
 }
 
 export type DrillState = "owed" | "none" | "set" | null;

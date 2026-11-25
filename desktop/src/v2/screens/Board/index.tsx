@@ -5,9 +5,11 @@ import { presenceMap, usePeers } from "../../../shared/presence";
 import type { ScreenProps } from "../../routes";
 import { NotWired } from "../../shell/ClassicLenses";
 import { CardFace, type NextStep } from "./CardFace";
+import { DependenciesView, SeatView } from "./BoardViews";
 import { Drawer } from "./Drawer";
 import { Lanes } from "./Lanes";
 import { ListView } from "./ListView";
+import { NewCardSheet } from "./NewCardSheet";
 import { buildBoard, countBy, isBusy, isFiltering, NO_FILTERS, seatGroups, type Filters } from "./model";
 import { Toolbar, type View } from "./Toolbar";
 
@@ -34,17 +36,22 @@ function useBoardCards(client: HubClient, project: string) {
   }, [client, project]);
   // A card moved from the drawer refetches in place; resetting to null would unmount the drawer.
   const reload = useCallback(() => loadRef.current(), []);
-  return { cards, error, reload };
+  const created = useCallback((card: Card) => {
+    setCards(current => [...(current ?? []).filter(c => c.id !== card.id), card]);
+  }, []);
+  return { cards, error, reload, created };
 }
 
 export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
   const [view, setView] = useState<View>("lanes");
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [open, setOpen] = useState<number | null>(null);
-  const { cards, error, reload } = useBoardCards(client, project);
+  const [newCard, setNewCard] = useState(false);
+  const { cards, error, reload, created } = useBoardCards(client, project);
   const { peers } = usePeers(client);
   const presence = useMemo(() => presenceMap(peers), [peers]);
-  useEffect(() => { setOpen(null); setFilters(NO_FILTERS); }, [project]);
+  const projectPeers = useMemo(() => (peers ?? []).filter(p => !p.project || p.project === project), [peers, project]);
+  useEffect(() => { setOpen(null); setNewCard(false); setFilters(NO_FILTERS); }, [project]);
   const all = cards ?? [];
   const model = useMemo(() => buildBoard(all, filters, presence), [cards, filters, presence]); // eslint-disable-line react-hooks/exhaustive-deps
   const counts = useMemo(() => countBy(all, presence), [cards, presence]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -71,7 +78,7 @@ export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <Toolbar view={view} onView={setView} filters={filters} onFilters={setFilters} seats={seatGroups(all, presence)} counts={counts} />
+      <Toolbar view={view} onView={setView} filters={filters} onFilters={setFilters} seats={seatGroups(all, presence)} counts={counts} onNewCard={() => setNewCard(true)} />
       <div className="px-5 pb-2 text-[11.5px] text-[var(--v2-muted)]">
         {all.length === 0 ? "No cards on this board yet." : `${all.filter(c => c.status === "done").length} of ${all.length} done${filtering ? ` · showing ${model.shown}` : ""}`}
       </div>
@@ -79,11 +86,13 @@ export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
         <div className="flex min-w-0 flex-1 flex-col">
           {view === "lanes" && <Lanes model={model} filtering={filtering} renderCard={renderCard} onOpen={setOpen} />}
           {view === "list" && <ListView cards={flat} presence={presence} selected={open} onOpen={setOpen} />}
-          {view === "dependencies" && <NotWired title="Dependencies" line="Card dependencies are not wired yet: the hub does not store them." />}
-          {view === "seat" && <NotWired title="By seat" line="The per-seat rows are not wired yet." />}
+          {view === "dependencies" && <DependenciesView cards={flat} onOpen={setOpen} />}
+          {view === "seat" && <SeatView cards={flat} renderCard={renderCard} />}
         </div>
         {open !== null && <Drawer client={client} id={open} onClose={() => setOpen(null)} onOpen={setOpen} onMoved={reload} />}
       </div>
+      {newCard && <NewCardSheet client={client} project={project} peers={projectPeers} onClose={() => setNewCard(false)}
+        onCreated={card => { created(card); setNewCard(false); setView("lanes"); }} />}
     </div>
   );
 }

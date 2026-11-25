@@ -20,6 +20,7 @@ export type ToolbarProps = {
   onFilters: (f: Filters) => void;
   seats: SeatGroup[];
   counts: { needsYou: number; drillOwed: number };
+  onNewCard: () => void;
 };
 
 function QuickChip({ label, count, on, onClick, title, disabledReason }: {
@@ -35,7 +36,7 @@ function QuickChip({ label, count, on, onClick, title, disabledReason }: {
   );
 }
 
-export function Toolbar({ view, onView, filters, onFilters, seats, counts }: ToolbarProps) {
+export function Toolbar({ view, onView, filters, onFilters, seats, counts, onNewCard }: ToolbarProps) {
   const set = (patch: Partial<Filters>) => onFilters({ ...filters, ...patch });
   const [more, setMore] = useState(false);
   const isOn = (g: SeatGroup) => g.ids.some(id => filters.seats.includes(id));
@@ -70,11 +71,10 @@ export function Toolbar({ view, onView, filters, onFilters, seats, counts }: Too
         title="Testing cards nobody is driving, and anything failed or blocked" />
       <QuickChip label="Drill owed" count={counts.drillOwed} on={filters.drillOwed} onClick={() => set({ drillOwed: !filters.drillOwed })}
         title="Every card in testing: done is refused until its drill has run" />
-      <QuickChip label="Has a PR" on={false} disabledReason="The hub does not report pull requests on cards yet" />
       <QuickChip label="Sub-agents nested" on={filters.nested} onClick={() => set({ nested: !filters.nested })}
         title="Sub-agent cards roll up under the card that spawned them" />
       <span className="flex-1" />
-      <Button variant="primary" disabledReason="Adding a card from the app is not wired yet: file it from a seat with relay_task_add">New card</Button>
+      <Button variant="primary" onClick={onNewCard}>New card</Button>
     </div>
   );
 }

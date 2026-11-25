@@ -24,19 +24,27 @@ const CARDS: Row[] = [
 ];
 const PEERS: Peer[] = [{ session: "codex-8", project: "p", lastSeen: Date.now() }, { session: "glm-5", project: "p", lastSeen: Date.now() - 120_000 }];
 
-type Reply = { tasks: Row[] } | { peers: Peer[] } | { task: Row | Partial<Row> | undefined; events: []; messages: [] } | { ok: boolean; task?: Row } | Record<string, never>;
+type Reply = { tasks: Row[] } | { peers: Peer[] } | { task: Row } | { task: Row | Partial<Row> | undefined; events: []; messages: [] } | { ok: boolean; task?: Row } | Record<string, never>;
 type Call ={ method: string; path: string; body: unknown };
 /** A REAL HubClient over a fake transport: only the event stream is stubbed (it needs Tauri). */
 class TestHub extends HubClient {
   streamEvents() { return () => {}; }
 }
 
-function fakeClient(over: { full?: Partial<Row> } = {}) {
+function fakeClient(over: { full?: Partial<Row>; createError?: string } = {}) {
   const calls: Call[] = [];
+  const tasks = [...CARDS];
   const transport = async ({ method, path, body }: { method: string; path: string; body: string | null }) => {
     calls.push({ method, path, body: body ? JSON.parse(body) : null });
     const ok = (v: Reply) => ({ status: 200, body: JSON.stringify(v) });
-    if (path.startsWith("/tasks")) return ok({ tasks: CARDS });
+    if (path.startsWith("/tasks")) return ok({ tasks });
+    if (path === "/task") {
+      if (over.createError) return { status: 400, body: JSON.stringify({ error: over.createError }) };
+      const input = JSON.parse(body ?? "{}");
+      const task: Row = { ...input, id: 100, project: "p", title: String(input.title), status: "todo" };
+      tasks.push(task);
+      return ok({ task });
+    }
     if (path.startsWith("/peers")) return ok({ peers: PEERS });
     if (path.startsWith("/card?id=")) {
       const id = Number(path.split("=")[1]);
@@ -63,8 +71,9 @@ async function mount(client: HubClient) {
 const q = (sel: string) => host.querySelector<HTMLElement>(sel);
 const buttonByText = (t: string) => [...host.querySelectorAll("button")].find(b => b.textContent?.trim().startsWith(t));
 const click = (el: Element | undefined | null) => act(async () => { el?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-const type = (el: HTMLInputElement, v: string) => act(async () => {
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(el, v);
+const type = (el: HTMLInputElement | HTMLTextAreaElement, v: string) => act(async () => {
+  const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, v);
   el.dispatchEvent(new Event("input", { bubbles: true }));
 });
 
@@ -93,12 +102,43 @@ describe("BoardScreen lanes", () => {
     expect(q('[data-card="3"]')?.textContent).toContain("drill");
   });
 
-  it("leaves New card disabled with its reason, and Has a PR disabled", async () => {
-    await mount(fakeClient().client);
-    const nc = buttonByText("New card");
-    expect(nc?.disabled).toBe(true);
-    expect(nc?.title).toMatch(/not wired/i);
-    expect(buttonByText("Has a PR")?.disabled).toBe(true);
+  it("opens New card, posts its required fields, and puts the created card in todo", async () => {
+    const { client, posted } = fakeClient();
+    await mount(client);
+    expect(buttonByText("Has a PR")).toBeUndefined();
+    await click(buttonByText("New card"));
+    const dialog = q('[role="dialog"][aria-label="New card"]')!;
+    expect(dialog).not.toBeNull();
+    await type(dialog.querySelector<HTMLInputElement>("input")!, "Ship the board");
+    await type(dialog.querySelector<HTMLTextAreaElement>("textarea")!, "Open the board and see the new card");
+    await click([...dialog.querySelectorAll("button")].find(b => b.textContent === "Create card"));
+    await flush();
+    expect(posted("/task")).toEqual([{ project: "p", title: "Ship the board", drill: "Open the board and see the new card", assignee: "", difficulty: "medium" }]);
+    expect(q('section[aria-label="To do"] [data-card="100"]')?.textContent).toContain("Ship the board");
+    expect(q('[role="dialog"][aria-label="New card"]')).toBeNull();
+  });
+
+  it("keeps the sheet open with the hub's refusal text", async () => {
+    const { client } = fakeClient({ createError: "title and drill required" });
+    await mount(client);
+    await click(buttonByText("New card"));
+    await type(host.querySelector<HTMLInputElement>('[role="dialog"] input')!, "Bad card");
+    await type(host.querySelector<HTMLTextAreaElement>('[role="dialog"] textarea')!, "Run it");
+    await click(buttonByText("Create card"));
+    await flush();
+    expect(q('[role="dialog"] [role="alert"]')?.textContent).toContain("title and drill required");
+    expect(q('[role="dialog"][aria-label="New card"]')).not.toBeNull();
+  });
+
+  it("groups By seat with workedBy first and Unassigned last", async () => {
+    CARDS[1].workedBy = "kimi-9:p";
+    try {
+      await mount(fakeClient().client);
+      await click(buttonByText("By seat"));
+      const sections = [...host.querySelectorAll("section[aria-label$='cards']")];
+      expect(sections.map(s => s.getAttribute("aria-label"))).toEqual(["codex-8 cards", "glm-5 cards", "kimi-9 cards", "Unassigned cards"]);
+      expect(q('section[aria-label="kimi-9 cards"] [data-card="2"]')).not.toBeNull();
+    } finally { delete CARDS[1].workedBy; }
   });
 });
 
@@ -140,12 +180,20 @@ describe("BoardScreen filters", () => {
     } finally { CARDS.length -= many.length; }
   });
 
-  it("List works as a table and Dependencies shows not wired", async () => {
-    await mount(fakeClient().client);
-    await click(buttonByText("List"));
-    expect(host.querySelectorAll("tr[data-row]").length).toBe(CARDS.length);
-    await click(buttonByText("Dependencies"));
-    expect(host.textContent).toMatch(/not wired/i);
+  it("List works as a table and Dependencies draws both directions between open cards", async () => {
+    const linked = [row(20, "todo", { title: "foundation" }), row(21, "doing", { title: "follow-up", deps: [20] }), row(22, "done", { title: "old", deps: [20] })];
+    CARDS.push(...linked);
+    try {
+      await mount(fakeClient().client);
+      await click(buttonByText("List"));
+      expect(host.querySelectorAll("tr[data-row]").length).toBe(CARDS.length);
+      await click(buttonByText("Dependencies"));
+      expect(q('section[aria-label="Dependencies for card 20"]')?.textContent).toContain("Unblocks");
+      expect(q('section[aria-label="Dependencies for card 20"]')?.textContent).toContain("follow-up");
+      expect(q('section[aria-label="Dependencies for card 21"]')?.textContent).toContain("foundation");
+      expect(q('section[aria-label="Dependencies for card 22"]')).toBeNull();
+      expect(host.textContent).not.toMatch(/not wired/i);
+    } finally { CARDS.length -= linked.length; }
   });
 });
 

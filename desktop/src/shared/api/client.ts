@@ -16,6 +16,8 @@ export type Card = {
    *  `assignee` is only intent. A card filed by the orchestrator and built by a seat wears the
    *  seat's face because of this field. */
   workedBy?: string;
+  drill?: string;
+  deps?: number[];
   phase?: string; costUsd?: number; created?: number; updated?: number;
   /** Creation stamp as the hub serves it — tasks are born `ts === updated`, and the CARDLOG boot
    * backfill fills it for cards minted before it existed. The tile age badge reads `updated || ts`. */
@@ -171,7 +173,14 @@ export class HubClient {
       throw new HubTransportError(describeTransportFailure(raw, this.baseUrl), raw);
     }
     if (res.status === 401) throw new HubAuthError(`not enrolled on ${this.baseUrl}`);
-    if (res.status >= 400) throw new Error(`${method} ${path} → ${res.status}`);
+    if (res.status >= 400) {
+      let detail = "";
+      try {
+        const parsed = JSON.parse(res.body);
+        if (parsed.error) detail = `: ${String(parsed.error)}`;
+      } catch { detail = ""; }
+      throw new Error(`${method} ${path} → ${res.status}${detail}`);
+    }
     // The return type carries the contract; JSON.parse's `any` result flows into it without a
     // cast the same way it already does for doctor()/cardCode() below.
     return JSON.parse(res.body);
@@ -195,6 +204,9 @@ export class HubClient {
    *  (#6800) cites its screenshot there; the board's own drag/drop moves stay silent. */
   moveCard(id: number, status: string, note?: string) {
     return this.request("POST", "/task/update", note === undefined ? { id, status } : { id, status, note });
+  }
+  addCard(input: { project: string; title: string; drill: string; assignee?: string; difficulty?: string }) {
+    return this.request<{ task: Card }, typeof input>("POST", "/task", input).then(r => r.task);
   }
 
   /** #5624: tick one acceptance item; returns the updated card. Index-addressed — the hub 400s a

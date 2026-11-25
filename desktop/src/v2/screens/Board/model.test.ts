@@ -1,7 +1,7 @@
 // #13989: the board's pure rules: testing split, nesting, filters, the drill line, moves.
 import { describe, expect, it } from "vitest";
 import type { PresenceState } from "../../../shared/presence";
-import { allowedMoves, buildBoard, buildNesting, drillLine, drillState, NO_FILTERS, seatGroups, splitTesting, type BoardCard } from "./model";
+import { allowedMoves, buildBoard, buildNesting, dependencyRows, drillLine, drillState, groupBySeat, NO_FILTERS, seatGroups, splitTesting, type BoardCard } from "./model";
 
 const NOW = 1_800_000_000_000;
 const DAY = 864e5;
@@ -53,6 +53,24 @@ describe("buildBoard", () => {
     expect(m.doing.subagents.map(c => c.id)).toEqual([12]);
     expect(buildBoard(all, { ...NO_FILTERS, query: "scout" }, presence, NOW).doing.cards.map(c => c.id)).toEqual([10]);
     expect(buildBoard(all, { ...NO_FILTERS, nested: false }, presence, NOW).doing.cards).toHaveLength(3);
+  });
+});
+
+describe("alternate board views", () => {
+  it("groups by workedBy before assignee, with Unassigned last", () => {
+    const rows = groupBySeat([
+      card(1, "todo", { assignee: "codex-8:p" }),
+      card(2, "doing", { assignee: "codex-8:p", workedBy: "kimi-9:p" }),
+      card(3, "done"),
+    ]);
+    expect(rows.map(r => [r.label, r.cards.map(c => c.id)])).toEqual([["codex-8", [1]], ["kimi-9", [2]], ["Unassigned", [3]]]);
+  });
+
+  it("joins open dependencies in both directions and omits done cards", () => {
+    const rows = dependencyRows([card(1, "done"), card(2, "todo"), card(3, "doing", { deps: [1, 2] }), card(4, "done", { deps: [2] })]);
+    expect(rows.map(r => r.card.id)).toEqual([2, 3]);
+    expect(rows[0].blocks.map(c => c.id)).toEqual([3]);
+    expect(rows[1].waitsOn.map(c => c.id)).toEqual([2]);
   });
 });
 
