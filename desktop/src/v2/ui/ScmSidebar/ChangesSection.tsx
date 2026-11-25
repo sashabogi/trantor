@@ -1,7 +1,7 @@
 // The Changes section of the source control sidebar (#14044): the commit box, then EVERY changed
 // file in one flat list, staged and unstaged together, each row its letter, counts and
-// stage/unstage. Staging and committing reuse the Code screen's scope git bridge; no push, no
-// discard, on either checkout (#13988 rules).
+// stage/unstage. Every mutation reuses the Code screen's scoped git bridge; discard confirms and
+// copies to the Trash before restoring or removing anything.
 import { useState } from "react";
 import { Minus, Plus, Undo2 } from "lucide-react";
 import { isUnmerged, lineCountFor, stageableChanges, type GitStatusEntry } from "../../../features/code/gitApi";
@@ -10,10 +10,11 @@ import { IconButton } from "../IconButton";
 import { CommitBox } from "../../screens/Code/ChangesList";
 import { fileChipLabel, type Letter } from "../../screens/Code/model";
 import { Counts, PathLabel, StatusLetter } from "../../screens/Code/parts";
-import { CHECKOUT_REFUSAL, scopeStage } from "../../screens/Code/scopeGitApi";
+import { checkoutMutationRefusal, scopeStage } from "../../screens/Code/scopeGitApi";
+import { DiscardConfirmation, useDiscard } from "../../screens/Code/DiscardControls";
+import { useShellMode } from "../../shell/shellMode";
 import type { ScopeSnapshot } from "../../screens/Code/useScopeGit";
 
-const NO_DISCARD = "Discard needs a git restore command that copies to Trash first. Not wired yet.";
 const CONFLICT_REASON = "Staging would erase git's conflict record. Resolve it first.";
 
 export type FlatChange = {
@@ -37,9 +38,10 @@ export function flatChanges(status: GitStatusEntry[]): FlatChange[] {
   }));
 }
 
-function ChangeRow({ change, snap, selected, onOpen, onStage, onConflict }: {
+function ChangeRow({ change, snap, selected, onOpen, onStage, onConflict, onDiscard, discardReason }: {
   change: FlatChange; snap: ScopeSnapshot; selected: boolean; onOpen: (path: string) => void;
   onStage: (path: string, unstage: boolean) => void; onConflict: (path: string) => void;
+  onDiscard: (path: string) => void; discardReason: string | null;
 }) {
   const n = lineCountFor(snap.counts, change.path);
   const fullyStaged = change.staged && !change.unstaged;
@@ -57,7 +59,8 @@ function ChangeRow({ change, snap, selected, onOpen, onStage, onConflict }: {
           className="rounded bg-[var(--v2-bad-soft)] px-1.5 text-[10px] text-[var(--v2-bad)]">conflict</button>
       )}
       <span className="flex shrink-0 gap-0.5">
-        <IconButton label={`Discard ${change.path}`} title={snap.seatBacked ? NO_DISCARD : CHECKOUT_REFUSAL} size={22} disabled>
+        <IconButton label={`Discard ${change.path}`} title={discardReason ?? "Copy to Trash, then discard"} size={22} disabled={!!discardReason}
+          onClick={() => onDiscard(change.path)}>
           <Undo2 size={12} aria-hidden />
         </IconButton>
         <IconButton label={`${verb} ${change.path}`} title={change.conflict ? CONFLICT_REASON : verb} size={22}
@@ -81,9 +84,15 @@ export type ChangesSectionProps = {
 
 export function ChangesSection({ project, snap, selected, onOpen, onMutated, onOpenConflict }: ChangesSectionProps) {
   const [error, setError] = useState<string | null>(null);
+  const mode = useShellMode();
+  const discard = useDiscard(project, snap.scope, onMutated);
+  const refusal = checkoutMutationRefusal(snap.scope, mode);
   const rows = flatChanges(snap.status);
   const staged = rows.filter(r => r.staged).length;
   const stageAll = stageableChanges(snap.status);
+  const allReason = refusal ?? (rows.some(r => r.conflict) ? "Resolve conflicts before discarding all changes" : null);
+  const confirmation = (path: string | null) => discard.target?.path === path
+    ? <DiscardConfirmation target={discard.target} busy={discard.busy} onConfirm={discard.confirm} onCancel={() => discard.setTarget(null)} /> : null;
   const stage = (paths: string[], unstage: boolean) => {
     if (paths.length === 0) return;
     scopeStage(project, snap.scope, paths, unstage)
@@ -93,18 +102,23 @@ export function ChangesSection({ project, snap, selected, onOpen, onMutated, onO
   return (
     <div className="flex flex-col">
       <CommitBox project={project} snap={snap} staged={staged} onDone={onMutated} onError={setError} />
-      {error && <div role="alert" className="px-3 py-1.5 text-[11.5px] text-[var(--v2-bad)]">{error}</div>}
+      {(error ?? discard.error) && <div role="alert" className="px-3 py-1.5 text-[11.5px] text-[var(--v2-bad)]">{error ?? discard.error}</div>}
       {rows.length === 0 && <div className="px-3 py-1.5 text-[11.5px] text-[var(--v2-muted)]">No uncommitted changes.</div>}
-      {rows.map(r => (
-        <ChangeRow key={r.path} change={r} snap={snap} selected={selected === r.path}
-          onOpen={onOpen} onStage={(path, unstage) => stage([path], unstage)} onConflict={p => onOpenConflict?.(p)} />
-      ))}
+      {confirmation(null)}
+      {rows.map(r => <div key={r.path}>
+        <ChangeRow change={r} snap={snap} selected={selected === r.path}
+          onOpen={onOpen} onStage={(path, unstage) => stage([path], unstage)} onConflict={p => onOpenConflict?.(p)}
+          onDiscard={path => discard.setTarget({ path })} discardReason={refusal ?? (r.conflict ? "Resolve this conflict before discarding" : null)} />
+        {confirmation(r.path)}
+      </div>)}
       {rows.length > 0 && (
         <div className="px-3 pb-1.5 pt-1">
-          <Button variant="quiet" icon={<Plus size={12} aria-hidden />} disabledReason={stageAll.length === 0 ? "Nothing left to stage (conflicted files stay out)" : null}
-            onClick={() => stage(stageAll, false)} title={`Stage every non-conflicted change in one batch`}>
-            Stage all
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="quiet" icon={<Plus size={12} aria-hidden />} disabledReason={stageAll.length === 0 ? "Nothing left to stage (conflicted files stay out)" : null}
+              onClick={() => stage(stageAll, false)} title="Stage every non-conflicted change in one batch">Stage all</Button>
+            <Button variant="quiet" icon={<Undo2 size={12} aria-hidden />} disabledReason={allReason}
+              onClick={() => discard.setTarget({ path: null })} title="Copy every change to Trash, then discard all">Discard all</Button>
+          </div>
         </div>
       )}
     </div>

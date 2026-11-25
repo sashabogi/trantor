@@ -553,24 +553,6 @@ pub(crate) async fn git_commit(
     git_commit_at(&dir, &message).await
 }
 
-/// Seat-only by design (#13988 drill): pushing the main checkout goes through the orchestrator.
-#[tauri::command]
-pub(crate) async fn git_push(project: String, agent: String) -> Result<String, String> {
-    let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;
-    git_mutation_guard(&agent).await?;
-    let branch = run_git_text_io(&worktree, &["branch", "--show-current"])
-        .await?
-        .trim()
-        .to_string();
-    if branch.is_empty() {
-        return Err("detached HEAD — there is no branch name to push".into());
-    }
-    // -u so the first push also SETS the upstream: every later panel read then measures
-    // ahead/behind against the real thing instead of falling back to the merge base.
-    git_run(&worktree, &["push", "-u", "origin", &branch]).await?;
-    Ok(branch)
-}
-
 #[cfg(test)]
 mod git_panel_tests {
     use super::*;

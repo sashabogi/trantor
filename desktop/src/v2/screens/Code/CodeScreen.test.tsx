@@ -3,10 +3,11 @@
 // picker, and reads history and changes from the classic git commands.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
 import { CodeScreen } from "./index";
+import { MODE_KEY } from "../../shell/shellMode";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -28,7 +29,7 @@ const SHOW = {
   files: [{ path: "src/landed.ts", status: "M", plus: 1, minus: 1 }],
   patch: "diff --git a/src/landed.ts b/src/landed.ts\n--- a/src/landed.ts\n+++ b/src/landed.ts\n@@ -1,1 +1,1 @@\n-before\n+after landing\n",
 };
-type IpcArgs = { project?: string; agent?: string; scope?: string; sha?: string; paths?: string[]; unstage?: boolean; message?: string };
+type IpcArgs = { project?: string; agent?: string; scope?: string; sha?: string; paths?: string[]; unstage?: boolean; message?: string; strategy?: string; reference?: string; action?: string };
 type Call = { command: string; args: IpcArgs };
 let calls: Call[] = [];
 
@@ -41,6 +42,11 @@ let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   calls = [];
+  const mem = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
+    removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
+  });
   mockIPC((command, args) => {
     // SAFETY: mockIPC types args as unknown; the git commands are invoked with an object of named args.
     const named = (args ?? {}) as IpcArgs;
@@ -49,6 +55,10 @@ beforeEach(() => {
     if (command === "git_panel") return JSON.stringify(agent === "codex-8" ? PANEL : named.scope === "project" ? CHECKOUT : null);
     if (command === "git_show") return JSON.stringify(SHOW);
     if (command === "git_stage" || command === "git_commit") return named.scope === "project" ? "1234abc" : null;
+    if (command === "git_push") return "main";
+    if (command === "git_discard") return "/Trash/Trantor discard test";
+    if (command === "git_pull") return JSON.stringify(named.strategy === "ff" ? { status: "diverged", reason: "Branches diverged. Choose Merge or Rebase." } : { status: "pulled", reason: "Integrated" });
+    if (command === "git_stash_list") return "[]";
     if (command === "file_diff") return "diff --git a/bin/a.mjs b/bin/a.mjs\n--- a/bin/a.mjs\n+++ b/bin/a.mjs\n@@ -1,1 +1,1 @@\n-old\n+new\n";
     if (command === "seat_diff") return JSON.stringify({ branch: "seat/codex-8", base: "deadbee", files: [], patch: "", truncated: false });
     if (command === "plugin:event|listen") return 1;
@@ -58,7 +68,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.unstubAllGlobals(); });
 
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
 const mount = async () => { await act(async () => { root.render(<CodeScreen client={client} project="trantor" onNavigate={() => undefined} />); }); await flush(); await flush(); };
@@ -122,6 +132,7 @@ describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
     expect(host.querySelector('button[title="Switch branch"]')?.textContent).toContain("main");
     expect(host.querySelector('[data-testid="checkout-ahead"]')?.textContent).toContain("↑2 ↓1");
     expect(host.querySelector('[data-testid="checkout-ahead"] [data-main-checkout]')).not.toBeNull();
+    await click('button[title="Fetch, pull or push this checkout"]');
     const push = button("Push ↑2");
     expect(push?.disabled).toBe(true);
     expect(push?.title).toBe("On the main checkout, pushing and discarding go through the orchestrator");
@@ -130,6 +141,31 @@ describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
     expect(discard?.title).toBe("On the main checkout, pushing and discarding go through the orchestrator");
     expect(calls.find(c => c.command === "git_panel")?.args).toEqual({ project: "trantor", scope: "project" });
     expect(calls.some(c => c.command === "git_push")).toBe(false);
+  });
+
+  it("allows clicked push and confirmed Trash-backed discard in Developer mode", async () => {
+    localStorage.setItem(MODE_KEY, "developer");
+    await mount();
+    await click('button[title="Fetch, pull or push this checkout"]');
+    await act(async () => { button("Push ↑2")?.click(); });
+    await flush();
+    expect(calls.find(c => c.command === "git_push")?.args).toEqual({ project: "trantor", scope: "project" });
+    await click('button[aria-label="Discard bin/a.mjs"]');
+    expect(host.querySelector('[data-discard-confirm="bin/a.mjs"]')?.textContent).toContain("untracked files are removed");
+    expect(calls.some(c => c.command === "git_discard")).toBe(false);
+    await click('[data-discard-confirm="bin/a.mjs"] button[data-variant="danger"]');
+    expect(calls.find(c => c.command === "git_discard")?.args).toEqual({ project: "trantor", scope: "project", paths: ["bin/a.mjs"] });
+  });
+
+  it("offers Merge and Rebase only after a fast-forward pull reports divergence", async () => {
+    await mount();
+    await click('button[title="Fetch, pull or push this checkout"]');
+    await act(async () => { button("Pull")?.click(); });
+    await flush();
+    expect(host.querySelector('[role="menu"]')?.textContent).toContain("Branches diverged");
+    await act(async () => { button("Rebase")?.click(); });
+    await flush();
+    expect(calls.filter(c => c.command === "git_pull").map(c => c.args.strategy)).toEqual(["ff", "rebase"]);
   });
 
   it("stages, unstages and commits on the checkout by scope, never by an agent", async () => {

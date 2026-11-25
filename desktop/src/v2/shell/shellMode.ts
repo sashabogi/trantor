@@ -14,6 +14,8 @@ export type ModeConfig = {
   railKey: string;
   /** The project header shrinks to the lens tabs row, so the editor gets the height. */
   compactHeader: boolean;
+  /** Push and discard may act on the operator's own checkout, not only seat worktrees. */
+  ownCheckoutMutations: boolean;
   /** Why the mode cannot be picked yet; absent when it can. */
   unavailable?: string;
 };
@@ -23,6 +25,7 @@ const ORCHESTRATOR: ModeConfig = {
   lenses: ["workspace", "code", "graph", "board", "feed", "bus"],
   railKey: "trantor.v2.rail.expanded",
   compactHeader: false,
+  ownCheckoutMutations: false,
 };
 
 const MIXED: ModeConfig = { ...ORCHESTRATOR, unavailable: "Mixed mode comes next: it needs keep or undo per change and approval rules on the hub" };
@@ -32,6 +35,7 @@ const DEVELOPER: ModeConfig = {
   lenses: ["code", "workspace", "graph", "board", "feed", "bus"],
   railKey: "trantor.v2.rail.expanded.developer",
   compactHeader: true,
+  ownCheckoutMutations: true,
 };
 
 export const MODE_CONFIG = { orchestrator: ORCHESTRATOR, mixed: MIXED, developer: DEVELOPER } satisfies Record<Mode, ModeConfig>;

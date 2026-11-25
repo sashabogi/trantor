@@ -1,14 +1,15 @@
-// The source-control toolbar (#13988): branch pill and picker, Fetch, Push with its ahead count,
+// The source-control toolbar (#13988): branch pill and picker, the Fetch/Pull/Push Sync menu,
 // how long ago git was read, and the Changes / History switch.
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, ChevronDown, GitBranch, RefreshCw } from "lucide-react";
-import { aheadLabel, gitPush } from "../../../features/code/gitApi";
+import { aheadLabel } from "../../../features/code/gitApi";
 import { Button } from "../../ui/Button";
 import { Seg } from "../../ui/Seg";
 import { BranchPicker, type PickerActions } from "./BranchPicker";
 import { readAgo, type SeatInfo } from "./model";
 import { MainCheckoutMark } from "./parts";
-import { CHECKOUT_REFUSAL, scopeFetch } from "./scopeGitApi";
+import { checkoutMutationRefusal, scopeFetch, scopePull, scopePush, type GitPullStrategy } from "./scopeGitApi";
+import { useShellMode } from "../../shell/shellMode";
 import type { ScopeSnapshot } from "./useScopeGit";
 
 export type ScmView = "changes" | "history";
@@ -26,26 +27,47 @@ function useDismiss(open: boolean, onClose: () => void) {
   return ref;
 }
 
-function PushButton({ project, snap, onDone, onError }: { project: string; snap: ScopeSnapshot | null; onDone: () => void; onError: (m: string) => void }) {
-  const [busy, setBusy] = useState(false);
+function SyncMenu({ project, snap, scope, onDone, onError }: {
+  project: string; snap: ScopeSnapshot | null; scope: string | null; onDone: () => void; onError: (m: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<"fetch" | "pull" | "push" | null>(null);
+  const [diverged, setDiverged] = useState<string | null>(null);
+  const ref = useDismiss(open, () => setOpen(false));
+  const mode = useShellMode();
   const ahead = snap?.ahead ?? 0;
-  const reason = !snap ? "Reading git" : !snap.seatBacked ? CHECKOUT_REFUSAL : ahead === 0 ? "Nothing to push" : busy ? "Pushing" : null;
-  const push = () => {
-    if (!snap?.scope) return;
-    setBusy(true);
-    gitPush(project, snap.scope).then(onDone).catch(e => onError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
+  const finish = (promise: Promise<unknown>) => {
+    promise.then(() => { setOpen(false); setDiverged(null); onDone(); })
+      .catch(e => onError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(null));
   };
-  return <Button variant="ghost" icon={<ArrowUp size={12} aria-hidden />} disabledReason={reason} onClick={push} title={`Push ${snap?.branch ?? ""} to origin`}>Push ↑{ahead}</Button>;
-}
-
-function FetchButton({ project, scope, onDone, onError }: { project: string; scope: string | null; onDone: () => void; onError: (m: string) => void }) {
-  const [busy, setBusy] = useState(false);
-  const fetch = () => {
-    setBusy(true);
-    scopeFetch(project, scope).then(onDone).catch(e => onError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
+  const fetch = () => { setBusy("fetch"); finish(scopeFetch(project, scope)); };
+  const push = () => { setBusy("push"); finish(scopePush(project, scope)); };
+  const pull = (strategy: GitPullStrategy) => {
+    setBusy("pull");
+    scopePull(project, scope, strategy).then(result => {
+      if (result.status === "diverged") { setDiverged(result.reason); return; }
+      setOpen(false); setDiverged(null); onDone();
+    }).catch(e => onError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(null));
   };
-  return <Button variant="ghost" icon={<RefreshCw size={12} aria-hidden className={busy ? "animate-spin" : undefined} />}
-    disabledReason={busy ? "Fetching from origin" : null} onClick={fetch} title="Fetch origin with prune">Fetch</Button>;
+  const pushReason = !snap ? "Reading git" : checkoutMutationRefusal(scope, mode) ?? (ahead === 0 ? "Nothing to push" : busy ? "Sync in progress" : null);
+  return (
+    <div ref={ref} className="relative">
+      <Button variant="ghost" icon={<RefreshCw size={12} aria-hidden className={busy ? "animate-spin" : undefined} />}
+        disabledReason={busy ? "Sync in progress" : null} onClick={() => setOpen(o => !o)} title="Fetch, pull or push this checkout">
+        Sync<ChevronDown size={12} aria-hidden />
+      </Button>
+      {open && <div role="menu" aria-label="Sync checkout" className="absolute left-0 top-8 z-30 flex w-64 flex-col gap-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] p-1.5 shadow-xl">
+        <Button variant="quiet" className="justify-start" disabledReason={busy ? "Sync in progress" : null} onClick={fetch}>Fetch</Button>
+        <Button variant="quiet" className="justify-start" disabledReason={!snap ? "Reading git" : busy ? "Sync in progress" : null} onClick={() => pull("ff")}>Pull</Button>
+        <Button variant="quiet" icon={<ArrowUp size={12} aria-hidden />} className="justify-start" disabledReason={pushReason} onClick={push}
+          title={`Push ${snap?.branch ?? ""} to origin`}>Push ↑{ahead}</Button>
+        {diverged && <div role="alert" className="border-t border-[var(--v2-edge)] px-2 pt-2 text-[11.5px] text-[var(--v2-warn)]">
+          <p>{diverged}</p><div className="mt-2 flex gap-2"><Button onClick={() => pull("merge")}>Merge</Button><Button onClick={() => pull("rebase")}>Rebase</Button></div>
+        </div>}
+      </div>}
+    </div>
+  );
 }
 
 export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMutated, onError }: {
@@ -74,8 +96,7 @@ export function Toolbar({ project, snap, seats, scope, acts, view, onView, onMut
           {aheadLabel(snap)}<MainCheckoutMark />
         </span>
       )}
-      <FetchButton project={project} scope={scope} onDone={onMutated} onError={onError} />
-      <PushButton project={project} snap={snap} onDone={onMutated} onError={onError} />
+      <SyncMenu project={project} snap={snap} scope={scope} onDone={onMutated} onError={onError} />
       {snap && <span className="text-[11.5px] text-[var(--v2-muted)]" title="When git was last read for this view">read {readAgo(snap.readAt, now)}</span>}
       <span className="flex-1" />
       <Seg label="View" value={view} onChange={onView} options={[{ value: "changes", label: "Changes" }, { value: "history", label: "History" }]} />

@@ -15,7 +15,7 @@ export type ScopeSnapshot = {
   status: GitStatusEntry[];
   counts: GitLineCount[];
   log: GitLogEntry[];
-  /** a seat's worktree; false is the main checkout, which reads, stages and commits but never pushes. */
+  /** a seat's worktree; false is the main checkout, whose push/discard policy comes from the shell mode. */
   seatBacked: boolean;
   readAt: number;
 };

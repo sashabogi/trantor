@@ -34,13 +34,14 @@ const SEATS: SeatInfo[] = [
   { seat: "kimi-9", presence: "offline", branch: null, ahead: null, machine: "netcup", hasWorktree: false },
 ];
 
-type IpcArgs = { project?: string; agent?: string; scope?: string; paths?: string[]; unstage?: boolean; message?: string };
+type IpcArgs = { project?: string; agent?: string; scope?: string; paths?: string[]; unstage?: boolean; message?: string; reference?: string; action?: string };
 type Call = { command: string; args: IpcArgs };
 let calls: Call[];
 type Opened = { file: string[]; change: string[]; commit: string[] };
 const opened: Opened = { file: [], change: [], commit: [] };
 let picked: (string | null)[];
 let fetchReply: (() => void | Promise<void>) | null;
+let stashReply: string;
 let mutations: number;
 
 let host: HTMLDivElement;
@@ -51,6 +52,7 @@ beforeEach(() => {
   opened.file = []; opened.change = []; opened.commit = [];
   picked = [];
   fetchReply = null;
+  stashReply = "[]";
   mutations = 0;
   state = { kind: "ok", snap: SEAT_SNAP };
   const mem = new Map<string, string>();
@@ -67,6 +69,9 @@ beforeEach(() => {
     if (command === "git_stage") return null;
     if (command === "git_commit") return "newsha";
     if (command === "git_fetch") return fetchReply?.();
+    if (command === "git_discard") return "/Trash/Trantor discard test";
+    if (command === "git_stash_list") return stashReply;
+    if (command === "git_stash_save" || command === "git_stash_change") return null;
     if (command === "plugin:event|listen") return 1;
     return null;
   });
@@ -145,13 +150,22 @@ describe("the sidebar", () => {
     expect(host.querySelector("[data-count]")?.textContent).toBe("4");
   });
 
-  it("keeps the conflict row protected and discard refused everywhere", async () => {
+  it("keeps conflict actions protected and offers discard on a seat", async () => {
     await render();
     expect(byLabel("Stage src/c.ts")?.disabled).toBe(true);
     expect(byLabel("Stage src/c.ts")?.title).toContain("conflict record");
     expect(host.querySelector('[data-change="src/c.ts"] button[title="Resolve this conflict"]')).not.toBeNull();
-    expect(byLabel("Discard bin/a.mjs")?.disabled).toBe(true);
-    expect(byLabel("Discard bin/a.mjs")?.title).toContain("git restore");
+    expect(byLabel("Discard bin/a.mjs")?.disabled).toBe(false);
+    expect(byLabel("Discard src/c.ts")?.disabled).toBe(true);
+  });
+
+  it("confirms a discard by path before copying to Trash and restoring", async () => {
+    await render();
+    await click(byLabel("Discard bin/a.mjs"));
+    expect(host.querySelector('[data-discard-confirm="bin/a.mjs"]')?.textContent).toContain("dated Trash folder");
+    expect(calls.some(c => c.command === "git_discard")).toBe(false);
+    await click(host.querySelector('[data-discard-confirm="bin/a.mjs"] button[data-variant="danger"]'));
+    expect(calls.find(c => c.command === "git_discard")?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["bin/a.mjs"] });
   });
 
   it("stages and unstages per row through the scope git bridge", async () => {
@@ -214,7 +228,8 @@ describe("the sidebar", () => {
     expect(sectionBody("changes")?.textContent).toContain("No uncommitted changes.");
     expect(sectionBody("commits")?.textContent).toContain("No commits yet.");
     expect([...host.querySelectorAll("button")].find(b => b.textContent === "Stage all")).toBeUndefined();
-    for (const stub of ["Graph", "Pull requests", "Stashes"]) expect(host.textContent).not.toContain(stub);
+    expect(host.textContent).toContain("No stashes.");
+    for (const stub of ["Graph", "Pull requests"]) expect(host.textContent).not.toContain(stub);
   });
 
   it("waits while git loads and surfaces an error without sections crashing", async () => {
@@ -276,11 +291,31 @@ describe("Fetch (#14056)", () => {
   });
 });
 
+describe("Stashes (#14099)", () => {
+  it("saves with a message and pops the selected stash through the scoped bridge", async () => {
+    stashReply = JSON.stringify([{ name: "stash@{0}", sha: "abcdef123456", created_at: 1_700_000_000, message: "work in progress" }]);
+    await render();
+    expect(host.querySelector('[data-stash="stash@{0}"]')?.textContent).toContain("work in progress");
+    const input = host.querySelector<HTMLInputElement>("#v2-stash-message");
+    await act(async () => {
+      if (!input) return;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "new stash");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Stash") ?? null);
+    await flush();
+    expect(calls.find(c => c.command === "git_stash_save")?.args).toEqual({ project: "trantor", agent: "glm-5", message: "new stash" });
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Pop") ?? null);
+    await flush();
+    expect(calls.find(c => c.command === "git_stash_change")?.args).toEqual({ project: "trantor", agent: "glm-5", reference: "stash@{0}", action: "pop" });
+  });
+});
+
 describe("Branches and seats (#14047)", () => {
   it("comes after Recent commits with the row count in the badge", async () => {
     await render();
     expect([...host.querySelectorAll("section")].map(s => s.getAttribute("data-section")))
-      .toEqual(["changes", "files", "commits", "branches"]);
+      .toEqual(["changes", "files", "commits", "stashes", "branches"]);
     const badge = host.querySelector('section[data-section="branches"] [data-count]');
     expect(badge?.textContent).toBe("3");
   });
@@ -312,7 +347,7 @@ describe("headers always on screen (#14058)", () => {
     expect(column?.className).toContain("overflow-y-auto");
     expect(host.querySelector('section[data-section="files"]')?.className).toContain("min-h-[150px]");
     expect(host.querySelector('section[data-section="commits"]')?.className).toContain("min-h-[64px]");
-    for (const s of ["changes", "files", "commits", "branches"]) {
+    for (const s of ["changes", "files", "commits", "stashes", "branches"]) {
       expect(sectionBody(s)?.className).toContain("overflow-y-auto");
     }
   });
@@ -331,7 +366,7 @@ describe("headers always on screen (#14058)", () => {
   it("Files takes the remaining space; the other three stop at 40% of the column", async () => {
     await render();
     expect(host.querySelector('section[data-section="files"]')?.className).toContain("flex-1");
-    for (const s of ["changes", "commits", "branches"]) {
+    for (const s of ["changes", "commits", "stashes", "branches"]) {
       expect(host.querySelector(`section[data-section="${s}"]`)?.className).toContain("max-h-[40%]");
     }
   });

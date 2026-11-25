@@ -71,5 +71,7 @@ describe("routes", () => {
     expect(MODE_CONFIG.mixed.unavailable).toContain("Mixed mode comes next");
     expect(MODE_CONFIG.developer.landing).toBe("code");
     expect(MODE_CONFIG.developer.lenses[0]).toBe("code");
+    expect(MODE_CONFIG.developer.ownCheckoutMutations).toBe(true);
+    expect(MODE_CONFIG.orchestrator.ownCheckoutMutations).toBe(false);
   });
 });

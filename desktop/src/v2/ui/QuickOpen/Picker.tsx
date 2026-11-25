@@ -28,7 +28,7 @@ export function Picker({ label, placeholder, query, onQuery, onKeyDown, onClose,
       <div role="dialog" aria-label={label} className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] shadow-2xl">
         <div className="flex items-center gap-2.5 border-b border-[var(--v2-edge)] px-4 py-3">
           <Search size={14} aria-hidden className="shrink-0 text-[var(--v2-muted)]" />
-          <input ref={input} aria-label={label} value={query} onChange={e => onQuery(e.target.value)} onKeyDown={onKeyDown}
+          <input ref={input} aria-label={label} value={query} onChange={e => onQuery(e.target.value)} onKeyDown={onKeyDown} autoCorrect="off" autoCapitalize="off" spellCheck={false}
             placeholder={placeholder} className="w-full border-0 bg-transparent text-[13.5px] text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
           <Kbd>esc</Kbd>
         </div>

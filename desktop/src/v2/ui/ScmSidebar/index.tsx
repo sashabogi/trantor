@@ -1,7 +1,7 @@
 // The source control sidebar (#14044): the one column the Workspace's left side and Code's sidebar
-// share: Changes (flat list with the commit box), Files, Recent commits, every section collapsible
-// and remembered in localStorage; stage/commit reuse the Code screen's git bridge (no push, no
-// discard). #14047: ahead/behind + seats rows. #14058: every header stays on screen, bodies scroll alone.
+// share: Changes (flat list with the commit box), Files, Recent commits, Stashes, every section collapsible
+// and remembered in localStorage; every git mutation reuses the Code screen's scoped bridge.
+// #14047: ahead/behind + seats rows. #14058: every header stays on screen, bodies scroll alone.
 import { useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import { ago } from "../../../shared/time";
@@ -15,6 +15,7 @@ import { BranchesSection } from "./BranchesSection";
 import { ChangesSection } from "./ChangesSection";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { CommitsSection } from "./CommitsSection";
+import { StashesSection } from "./StashesSection";
 
 export type ScmSidebarProps = {
   project: string;
@@ -120,6 +121,9 @@ export function ScmSidebar(p: ScmSidebarProps) {
         </CollapsibleSection>
         <CollapsibleSection section="commits" title="Recent commits" badge={snap ? <CountBadge n={snap.log.length} /> : undefined}>
           {snap ? <CommitsSection log={snap.log} onOpen={p.onOpenCommit} /> : <Pending state={p.state} />}
+        </CollapsibleSection>
+        <CollapsibleSection section="stashes" title="Stashes">
+          {snap ? <StashesSection project={p.project} scope={p.scope} onMutated={p.onMutated} /> : <Pending state={p.state} />}
         </CollapsibleSection>
         <CollapsibleSection section="branches" title="Branches and seats" badge={<CountBadge n={1 + p.seats.length} />}>
           <BranchesSection project={p.project} scope={p.scope} seats={p.seats} onPickScope={p.onPickScope} />

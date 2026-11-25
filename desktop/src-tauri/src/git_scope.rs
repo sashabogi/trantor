@@ -3,8 +3,8 @@ use super::*;
 
 // ── git scope (#13988 drill) ───────────────────────────────────────────────────────────────────
 // The git panel's commands act on ONE checkout: a seat's worktree (the original surface) or the
-// project's main checkout. The project scope reads everything and may stage and commit, but push,
-// discard, reset, checkout and branch delete stay seat-only: those go through the orchestrator.
+// project's main checkout. Mode policy lives in the UI bridge; native commands resolve exactly one
+// checkout and keep the seat mutation guard on every write.
 
 /// Which checkout a git command acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
