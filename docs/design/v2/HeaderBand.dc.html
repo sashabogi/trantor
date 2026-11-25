@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Project header band</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0F12}
+a{color:#8AA8FF;text-decoration:none}a:hover{color:#B3C6FF}
+@keyframes hb-grow{from{width:14px}to{width:58px}}
+@keyframes hb-spin{to{transform:rotate(360deg)}}
+@keyframes hb-pulse{0%,70%,100%{box-shadow:0 0 0 0 rgba(242,181,68,0)}78%{box-shadow:0 0 0 6px rgba(242,181,68,0.25)}}
+@keyframes hb-slide{0%,15%{left:7%;opacity:0}20%{opacity:1}55%,100%{left:36%;opacity:0}}
+@keyframes hb-tick{0%,8%{transform:translateY(100%);opacity:0}14%,80%{transform:translateY(0);opacity:1}88%,100%{transform:translateY(-100%);opacity:0}}
+@keyframes hb-count{0%,50%{opacity:1}55%{opacity:0.2}60%,100%{opacity:1}}
+.hb-live{animation:hb-grow 8s linear infinite alternate}
+.hb-spin{animation:hb-spin 1.1s linear infinite}
+.hb-pulse{animation:hb-pulse 4.5s ease-out infinite}
+.hb-dot{animation:hb-slide 4.5s ease-in-out infinite}
+.hb-ticker{animation:hb-tick 6s ease-in-out infinite}
+.hb-count{animation:hb-count 4.5s ease-in-out infinite}
+.hb-hov{position:relative}
+.hb-hov .hb-tip{opacity:0;pointer-events:none;transition:opacity 120ms ease}
+.hb-hov:hover .hb-tip{opacity:1}
+.hb-bar{transition:filter 120ms ease}
+.hb-bar:hover{filter:brightness(1.35)}
+@media (prefers-reduced-motion: reduce){.hb-live,.hb-spin,.hb-pulse,.hb-dot,.hb-ticker,.hb-count{animation:none}}
+</style>
+</helmet>
+<div style="min-height: 1560px; background: #0E0F12; color: #E7E9EC; font-family: Inter, system-ui, sans-serif; font-size: 13px; padding: 40px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 28px;">
+
+  <div style="max-width: 980px;">
+    <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #9AA0A8;">PROPOSAL · THE EMPTY BAND BESIDE THE PROJECT TITLE · NOTHING HERE IS BUILT YET</div>
+    <h1 style="margin: 8px 0 0; font-size: 26px; font-weight: 650; letter-spacing: -0.01em;">What this project is doing, who is working, and whether it is safe</h1>
+    <p style="margin: 8px 0 0; color: #9AA0A8; font-size: 13px; line-height: 1.55;">The first block is the recommended mix, drawn in place. Below it every widget is shown on its own, bigger, with what moves and what a click does, then two other mixes. Everything here is data the app already has. Things move when something changes; only a running turn moves on its own. Hover the bars, chips and the ticker.</p>
+  </div>
+
+  <!-- ===================== A · IN PLACE ===================== -->
+  <section style="display: flex; flex-direction: column; gap: 10px;">
+    <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #8AA8FF;">A · RECOMMENDED MIX, IN PLACE</div>
+    <div style="background: #0B0C0F; border: 1px solid #22252B; border-radius: 12px; padding: 18px 20px 0; display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: stretch; gap: 20px;">
+        <div style="display: flex; align-items: center; gap: 12px; flex-shrink: 0; width: 230px;">
+          <span style="width: 36px; height: 36px; border-radius: 8px; background: linear-gradient(135deg,#4A5FA8,#2E3A6E); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;">TR</span>
+          <div>
+            <div style="font-size: 20px; font-weight: 650;">trantor</div>
+            <div style="font-size: 12px; color: #9AA0A8;">4 seats live · 145 open cards</div>
+          </div>
+        </div>
+
+        <div style="flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 10px;">
+          <!-- phase goal -->
+          <button type="button" class="hb-hov" title="Phase goal" style="flex: 0 0 250px; display: flex; align-items: center; gap: 10px; background: #121317; border: 1px solid #22252B; border-radius: 8px; padding: 8px 12px; color: inherit; text-align: left; cursor: pointer;">
+            <svg width="34" height="34" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="#2A2E36" stroke-width="4"></circle><circle cx="18" cy="18" r="14" fill="none" stroke="#8AA8FF" stroke-width="4" stroke-linecap="round" stroke-dasharray="68.4 88" transform="rotate(-90 18 18)"></circle></svg>
+            <span style="min-width: 0;">
+              <span style="display: block; font-size: 11px; color: #9AA0A8;">Phase goal · 7 of 9</span>
+              <span style="display: block; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">2.0 UI pass against Ember</span>
+            </span>
+            <span class="hb-tip" style="position: absolute; top: calc(100% + 8px); left: 0; z-index: 5; width: 260px; background: #16181C; border: 1px solid #2A2E36; border-radius: 8px; padding: 10px 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.45);">
+              <span style="display: block; font-size: 11px; color: #9AA0A8; margin-bottom: 6px;">Open</span>
+              <span style="display: block; font-size: 12px; color: #C4C8CE;">Merge the near-twin colour tokens</span>
+              <span style="display: block; font-size: 12px; color: #C4C8CE; margin-top: 4px;">Code screen panels, a look on the built app</span>
+            </span>
+          </button>
+
+          <!-- seat lanes -->
+          <div style="flex: 1; min-width: 0; background: #121317; border: 1px solid #22252B; border-radius: 8px; padding: 6px 12px; display: flex; flex-direction: column; justify-content: center; gap: 3px;">
+            <div style="display: flex; align-items: center; gap: 8px; height: 11px;">
+              <span style="width: 74px; font-size: 10px; color: #C4C8CE; flex-shrink: 0;">orchestrator</span>
+              <span style="flex: 1; position: relative; height: 6px; display: flex; align-items: center; gap: 3px;">
+                <span class="hb-bar" style="width: 22px; height: 6px; border-radius: 4px; background: #3E4A7A;"></span>
+                <span class="hb-bar" style="width: 40px; height: 6px; border-radius: 4px; background: #3E4A7A;"></span>
+                <span class="hb-bar" style="width: 12px; height: 6px; border-radius: 4px; background: #3E4A7A;"></span>
+                <span style="flex: 1;"></span>
+                <span class="hb-live" style="height: 6px; border-radius: 4px; background: #8AA8FF;"></span>
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; height: 11px;">
+              <span style="width: 74px; font-size: 10px; color: #C4C8CE; flex-shrink: 0;">glm-5</span>
+              <span style="flex: 1; display: flex; align-items: center; gap: 3px;">
+                <span style="width: 30%;"></span>
+                <span class="hb-bar" style="width: 64px; height: 6px; border-radius: 4px; background: #24402F;"></span>
+                <span class="hb-bar" style="width: 70px; height: 6px; border-radius: 4px; background: #24402F;"></span>
+                <span style="flex: 1;"></span>
+                <span style="font-size: 10px; color: #9AA0A8;">idle</span>
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; height: 11px;">
+              <span style="width: 74px; font-size: 10px; color: #C4C8CE; flex-shrink: 0;">kimi-9</span>
+              <span style="flex: 1; display: flex; align-items: center; gap: 3px;">
+                <span class="hb-bar" style="width: 44px; height: 6px; border-radius: 4px; background: #24402F;"></span>
+                <span class="hb-bar" style="width: 4px; height: 6px; border-radius: 4px; background: #E58A8A;"></span>
+                <span class="hb-bar" style="width: 4px; height: 6px; border-radius: 4px; background: #E58A8A;"></span>
+                <span style="flex: 1;"></span>
+                <span style="font-size: 10px; color: #E58A8A;">parked, api error</span>
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; height: 11px; opacity: 0.55;">
+              <span style="width: 74px; font-size: 10px; color: #C4C8CE; flex-shrink: 0;">codex-8</span>
+              <span style="flex: 1; display: flex; align-items: center;">
+                <span style="flex: 1; height: 1px; background: #2A2E36;"></span>
+                <span style="font-size: 10px; color: #9AA0A8; margin-left: 6px;">parked to Dec 20</span>
+              </span>
+            </div>
+          </div>
+
+          <!-- main health -->
+          <div style="flex: 0 0 auto; display: flex; flex-direction: column; justify-content: center; gap: 6px; background: #121317; border: 1px solid #22252B; border-radius: 8px; padding: 8px 12px;">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 12px;">
+              <span style="font-family: 'JetBrains Mono', monospace; color: #C4C8CE;">main</span>
+              <span style="font-size: 11px; color: #9AA0A8;">in sync</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <button type="button" class="hb-hov" style="display: inline-flex; align-items: center; gap: 5px; border: 1px solid #2A2E36; background: transparent; color: #C4C8CE; border-radius: 6px; padding: 2px 7px; font-size: 11px; cursor: pointer;">
+                <span class="hb-spin" style="width: 9px; height: 9px; border-radius: 999px; border: 2px solid #3E4A7A; border-top-color: #8AA8FF; box-sizing: border-box;"></span>CI
+                <span class="hb-tip" style="position: absolute; top: calc(100% + 8px); right: 0; z-index: 5; width: 200px; background: #16181C; border: 1px solid #2A2E36; border-radius: 8px; padding: 8px 10px; text-align: left; box-shadow: 0 12px 32px rgba(0,0,0,0.45); font-size: 11px; color: #C4C8CE;">b797a55a running, 4m in. The last run was green.</span>
+              </button>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">app-v2.0.5</span>
+            </div>
+          </div>
+
+          <!-- needs you -->
+          <button type="button" class="hb-pulse" title="Open the question" style="flex: 0 0 auto; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 2px; background: rgba(242,181,68,0.10); border: 1px solid #3A3220; border-radius: 8px; padding: 8px 14px; color: inherit; cursor: pointer;">
+            <span style="font-size: 20px; font-weight: 650; color: #F2B544; line-height: 1;">1</span>
+            <span style="font-size: 11px; color: #C4C8CE;">needs you</span>
+          </button>
+        </div>
+      </div>
+      <div style="display: flex; gap: 18px; border-top: 1px solid #22252B; padding: 10px 0 10px; font-size: 13px; color: #9AA0A8;">
+        <span style="color: #E7E9EC; border-bottom: 2px solid #8AA8FF; padding-bottom: 8px; margin-bottom: -11px;">Workspace</span><span>Code</span><span>Graph</span><span>Board 145</span><span>Feed</span><span>Bus</span>
+      </div>
+    </div>
+    <div style="font-size: 12px; color: #9AA0A8;">The band stays one row tall, the height it has today. At a narrow window the phase goal folds to its ring alone and the lanes take the room.</div>
+  </section>
+
+  <!-- ===================== B · EACH WIDGET ===================== -->
+  <section style="display: flex; flex-direction: column; gap: 12px;">
+    <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #8AA8FF;">B · EACH WIDGET ON ITS OWN, BIGGER</div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;">
+
+      <!-- 1 lanes -->
+      <article style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px;"><h2 style="margin: 0; font-size: 15px; font-weight: 600;">1 · Seat heartbeat lanes</h2><span style="font-size: 11px; color: #9AA0A8;">last 60 minutes</span></div>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="width: 90px; font-size: 12px;">orchestrator</span>
+            <span style="flex: 1; display: flex; align-items: center; gap: 4px; height: 14px;">
+              <span class="hb-bar hb-hov" style="width: 40px; height: 10px; border-radius: 4px; background: #3E4A7A;"><span class="hb-tip" style="position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 5; width: 170px; background: #16181C; border: 1px solid #2A2E36; border-radius: 6px; padding: 6px 8px; font-size: 11px; color: #C4C8CE;">#14208 · 6m · done</span></span>
+              <span class="hb-bar" style="width: 80px; height: 10px; border-radius: 4px; background: #3E4A7A;"></span>
+              <span class="hb-bar" style="width: 24px; height: 10px; border-radius: 4px; background: #3E4A7A;"></span>
+              <span style="flex: 1;"></span>
+              <span class="hb-live" style="height: 10px; border-radius: 4px; background: #8AA8FF;"></span>
+            </span>
+            <span style="width: 70px; text-align: right; font-size: 11px; color: #8AA8FF;">working</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="width: 90px; font-size: 12px;">glm-5</span>
+            <span style="flex: 1; display: flex; align-items: center; gap: 4px; height: 14px;">
+              <span style="width: 25%;"></span>
+              <span class="hb-bar hb-hov" style="width: 120px; height: 10px; border-radius: 4px; background: #24402F;"><span class="hb-tip" style="position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 5; width: 190px; background: #16181C; border: 1px solid #2A2E36; border-radius: 6px; padding: 6px 8px; font-size: 11px; color: #C4C8CE;">#14250 · 29m · committed 2</span></span>
+              <span style="flex: 1;"></span>
+            </span>
+            <span style="width: 70px; text-align: right; font-size: 11px; color: #9AA0A8;">idle 30m</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="width: 90px; font-size: 12px;">kimi-9</span>
+            <span style="flex: 1; display: flex; align-items: center; gap: 4px; height: 14px;">
+              <span class="hb-bar" style="width: 60px; height: 10px; border-radius: 4px; background: #24402F;"></span>
+              <span class="hb-bar hb-hov" style="width: 5px; height: 10px; border-radius: 4px; background: #E58A8A;"><span class="hb-tip" style="position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 5; width: 210px; background: #16181C; border: 1px solid #2A2E36; border-radius: 6px; padding: 6px 8px; font-size: 11px; color: #C4C8CE;">#14237 · 4s · exit 1, the provider refused the prompt</span></span>
+              <span class="hb-bar" style="width: 5px; height: 10px; border-radius: 4px; background: #E58A8A;"></span>
+              <span style="flex: 1;"></span>
+            </span>
+            <span style="width: 70px; text-align: right; font-size: 11px; color: #E58A8A;">parked</span>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8; line-height: 1.5;">A bar is one turn, its length the time it ran; green ended well, red exited badly, blue is the running turn and grows as it runs. Hover a bar for the card and the outcome; a click opens that seat's tab. Answers "is anyone working, or stuck" without a terminal.</div>
+      </article>
+
+      <!-- 2 ribbon -->
+      <article style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px;"><h2 style="margin: 0; font-size: 15px; font-weight: 600;">2 · Card flow ribbon</h2><span style="font-size: 11px; color: #9AA0A8;">this project's board</span></div>
+        <div style="position: relative; display: flex; height: 26px; border-radius: 6px; overflow: hidden; font-size: 11px; font-weight: 500;">
+          <button type="button" style="flex: 0 0 9%; border: 0; background: #2A2E36; color: #C4C8CE; cursor: pointer;">6</button>
+          <button type="button" style="flex: 0 0 8%; border: 0; background: #3E4A7A; color: #E7E9EC; cursor: pointer;">3</button>
+          <button type="button" style="flex: 0 0 41%; border: 0; background: #3A3220; color: #F2B544; cursor: pointer;"><span class="hb-count">115</span> testing</button>
+          <button type="button" style="flex: 1; border: 0; background: #24402F; color: #7CC49A; cursor: pointer;">130 done</button>
+          <span class="hb-dot" aria-hidden="true" style="position: absolute; top: 9px; width: 8px; height: 8px; border-radius: 999px; background: #E7E9EC;"></span>
+        </div>
+        <div style="display: flex; gap: 14px; font-size: 11px; color: #9AA0A8;"><span>todo 6</span><span>doing 3</span><span style="color: #F2B544;">drill owed 115</span><span>done 130</span></div>
+        <div style="font-size: 12px; color: #9AA0A8; line-height: 1.5;">When a card moves, a dot slides from one segment to the next and the counts change. A click on a segment opens the Board filtered to it. It would also make the honest number visible: most cards here wait on a drill.</div>
+      </article>
+
+      <!-- 3 health -->
+      <article style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px;"><h2 style="margin: 0; font-size: 15px; font-weight: 600;">3 · Main health</h2><span style="font-size: 11px; color: #9AA0A8;">is it safe to build on main</span></div>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+          <span style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #2A2E36; border-radius: 6px; padding: 5px 10px; font-size: 12px;"><span style="font-family: 'JetBrains Mono', monospace;">main</span><span style="color: #9AA0A8;">↑0 ↓0</span></span>
+          <span style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #2A2E36; border-radius: 6px; padding: 5px 10px; font-size: 12px;"><span class="hb-spin" style="width: 10px; height: 10px; border-radius: 999px; border: 2px solid #3E4A7A; border-top-color: #8AA8FF; box-sizing: border-box;"></span>CI running, 4m</span>
+          <span style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #24402F; border-radius: 6px; padding: 5px 10px; font-size: 12px; color: #7CC49A;">✓ last run green</span>
+          <span style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #2A2E36; border-radius: 6px; padding: 5px 10px; font-size: 12px; color: #C4C8CE;">released app-v2.0.5 · 12m ago</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #4A2A2A; background: rgba(229,138,138,0.12); border-radius: 6px; padding: 5px 10px; font-size: 12px; color: #E58A8A;">✕ CI red · test-contracts.mjs</span>
+          <span style="font-size: 11px; color: #9AA0A8;">the red state, as it looked this afternoon</span>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8; line-height: 1.5;">The spinner turns only while CI runs; green settles into a quiet check. Red names the failing test and a click opens the run. Today's two flaky runs would have been visible here.</div>
+      </article>
+
+      <!-- 4 needs you -->
+      <article style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px;"><h2 style="margin: 0; font-size: 15px; font-weight: 600;">4 · Needs you</h2><span style="font-size: 11px; color: #9AA0A8;">questions, permissions, file holds, for this project</span></div>
+        <div style="display: flex; gap: 10px; align-items: stretch;">
+          <button type="button" class="hb-pulse" style="display: flex; flex-direction: column; align-items: flex-start; gap: 2px; background: rgba(242,181,68,0.10); border: 1px solid #3A3220; border-radius: 8px; padding: 10px 16px; color: inherit; cursor: pointer;">
+            <span style="font-size: 26px; font-weight: 650; color: #F2B544; line-height: 1;">1</span><span style="font-size: 11px; color: #C4C8CE;">needs you</span>
+          </button>
+          <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 4px; background: #121317; border: 1px solid #22252B; border-radius: 8px; padding: 8px 12px;">
+            <span style="font-size: 11px; color: #9AA0A8;">glm-5 asks · 3m</span>
+            <span style="font-size: 13px;">Merge the colour tokens now, or wait for the next pass?</span>
+          </div>
+          <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border: 1px dashed #2A2E36; border-radius: 8px; padding: 10px 16px;">
+            <span style="font-size: 20px; color: #9AA0A8; line-height: 1;">0</span><span style="font-size: 11px; color: #9AA0A8;">calm state</span>
+          </div>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8; line-height: 1.5;">It pulses once when something new arrives, then stays still; no repeat pulses for the same question. A click opens the first one. At zero it shrinks to a quiet outline.</div>
+      </article>
+
+      <!-- 5 phase goal -->
+      <article style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px;"><h2 style="margin: 0; font-size: 15px; font-weight: 600;">5 · Phase goal</h2><span style="font-size: 11px; color: #9AA0A8;">why we are doing this</span></div>
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <svg width="56" height="56" viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="14" fill="none" stroke="#2A2E36" stroke-width="3.5"></circle><circle cx="18" cy="18" r="14" fill="none" stroke="#8AA8FF" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="68.4 88" transform="rotate(-90 18 18)"></circle><text x="18" y="21" text-anchor="middle" font-size="9" fill="#E7E9EC" font-family="Inter, sans-serif">7/9</text></svg>
+          <div style="display: flex; flex-direction: column; gap: 4px;">
+            <span style="font-size: 15px; font-weight: 600;">2.0 UI pass against Ember</span>
+            <span style="font-size: 12px; color: #9AA0A8;">set by the orchestrator · 11-25</span>
+          </div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px;">
+          <span style="color: #7CC49A;">✓ Controls from primitives · ✓ Update notices · ✓ Pane chrome · ✓ Panels and gaps · ✓ Type scale</span>
+          <span style="color: #C4C8CE;">○ Merge the near-twin colour tokens</span>
+          <span style="color: #C4C8CE;">○ Code screen panels, a look on the built app</span>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8; line-height: 1.5;">The arc fills when a checklist item is ticked. Hover lists what is open; a click opens the brief.</div>
+      </article>
+
+      <!-- 6 latest event -->
+      <article style="background: #15171B; border: 1px solid #22252B; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; align-items: baseline; gap: 8px;"><h2 style="margin: 0; font-size: 15px; font-weight: 600;">6 · Latest event</h2><span style="font-size: 11px; color: #9AA0A8;">reports, never warns</span></div>
+        <div class="hb-hov" style="height: 34px; overflow: hidden; background: #121317; border: 1px solid #22252B; border-radius: 8px; padding: 0 12px; display: flex; align-items: center;">
+          <span class="hb-ticker" style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
+            <span style="width: 6px; height: 6px; border-radius: 999px; background: #7CC49A;"></span>
+            <span>Released app-v2.0.5, one type scale across the 2.0 shell</span>
+            <span style="font-size: 11px; color: #9AA0A8;">just now</span>
+          </span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #9AA0A8;">
+          <span>b0a7e6ce committed by the orchestrator · 14m</span>
+          <span>#14250 moved to done · 16m</span>
+          <span>glm-5 committed 7ffa072e · 1h</span>
+        </div>
+        <div style="font-size: 12px; color: #9AA0A8; line-height: 1.5;">One line slides in when something meaningful happens: a commit lands, a card moves to testing or done, a release goes out. Ten in a row roll up into one ("4 commits by glm-5"). Hover shows the last ten.</div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ===================== C · OTHER MIXES ===================== -->
+  <section style="display: flex; flex-direction: column; gap: 12px;">
+    <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #8AA8FF;">C · TWO OTHER MIXES FOR THE SAME BAND</div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="font-size: 12px; color: #C4C8CE;">The board view: card flow, latest event, main health</div>
+      <div style="display: flex; align-items: stretch; gap: 10px; background: #0B0C0F; border: 1px solid #22252B; border-radius: 12px; padding: 12px 16px;">
+        <div style="flex: 0 0 380px; display: flex; flex-direction: column; justify-content: center; gap: 4px;">
+          <div style="position: relative; display: flex; height: 18px; border-radius: 4px; overflow: hidden; font-size: 10px; font-weight: 500;">
+            <span style="flex: 0 0 9%; background: #2A2E36; color: #C4C8CE; display: flex; align-items: center; justify-content: center;">6</span>
+            <span style="flex: 0 0 8%; background: #3E4A7A; display: flex; align-items: center; justify-content: center;">3</span>
+            <span style="flex: 0 0 41%; background: #3A3220; color: #F2B544; display: flex; align-items: center; justify-content: center;">115</span>
+            <span style="flex: 1; background: #24402F; color: #7CC49A; display: flex; align-items: center; justify-content: center;">130</span>
+            <span class="hb-dot" aria-hidden="true" style="position: absolute; top: 5px; width: 8px; height: 8px; border-radius: 999px; background: #E7E9EC;"></span>
+          </div>
+          <span style="font-size: 10px; color: #9AA0A8;">todo · doing · testing, drill owed · done</span>
+        </div>
+        <div style="flex: 1; min-width: 0; height: 40px; overflow: hidden; display: flex; align-items: center; background: #121317; border: 1px solid #22252B; border-radius: 8px; padding: 0 12px;">
+          <span class="hb-ticker" style="display: flex; align-items: center; gap: 8px; font-size: 12px; white-space: nowrap;"><span style="width: 6px; height: 6px; border-radius: 999px; background: #7CC49A;"></span>Released app-v2.0.5<span style="font-size: 11px; color: #9AA0A8;">just now</span></span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span style="display: inline-flex; align-items: center; gap: 5px; border: 1px solid #2A2E36; border-radius: 6px; padding: 4px 8px; font-size: 11px;"><span class="hb-spin" style="width: 9px; height: 9px; border-radius: 999px; border: 2px solid #3E4A7A; border-top-color: #8AA8FF; box-sizing: border-box;"></span>CI</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #9AA0A8;">main ↑0 ↓0</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="font-size: 12px; color: #C4C8CE;">The crew view: wide heartbeat lanes and needs you, nothing else</div>
+      <div style="display: flex; align-items: stretch; gap: 10px; background: #0B0C0F; border: 1px solid #22252B; border-radius: 12px; padding: 10px 16px;">
+        <div style="flex: 1; min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 20px; row-gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 74px; font-size: 11px;">orchestrator</span><span style="flex: 1; display: flex; gap: 3px; align-items: center;"><span style="width: 30px; height: 7px; border-radius: 4px; background: #3E4A7A;"></span><span style="width: 50px; height: 7px; border-radius: 4px; background: #3E4A7A;"></span><span style="flex: 1;"></span><span class="hb-live" style="height: 7px; border-radius: 4px; background: #8AA8FF;"></span></span></div>
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 74px; font-size: 11px;">glm-5</span><span style="flex: 1; display: flex; gap: 3px; align-items: center;"><span style="width: 20%;"></span><span style="width: 90px; height: 7px; border-radius: 4px; background: #24402F;"></span><span style="flex: 1;"></span><span style="font-size: 10px; color: #9AA0A8;">idle</span></span></div>
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="width: 74px; font-size: 11px;">kimi-9</span><span style="flex: 1; display: flex; gap: 3px; align-items: center;"><span style="width: 40px; height: 7px; border-radius: 4px; background: #24402F;"></span><span style="width: 4px; height: 7px; border-radius: 4px; background: #E58A8A;"></span><span style="width: 4px; height: 7px; border-radius: 4px; background: #E58A8A;"></span><span style="flex: 1;"></span><span style="font-size: 10px; color: #E58A8A;">parked</span></span></div>
+          <div style="display: flex; align-items: center; gap: 8px; opacity: 0.55;"><span style="width: 74px; font-size: 11px;">codex-8</span><span style="flex: 1; height: 1px; background: #2A2E36;"></span><span style="font-size: 10px; color: #9AA0A8;">parked to Dec 20</span></div>
+        </div>
+        <button type="button" class="hb-pulse" style="display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 2px; background: rgba(242,181,68,0.10); border: 1px solid #3A3220; border-radius: 8px; padding: 6px 14px; color: inherit; cursor: pointer;"><span style="font-size: 20px; font-weight: 650; color: #F2B544; line-height: 1;">1</span><span style="font-size: 11px; color: #C4C8CE;">needs you</span></button>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
