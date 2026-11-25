@@ -19,9 +19,14 @@ function Lane({ first, last }: { first: boolean; last: boolean }) {
   );
 }
 
-function Row({ row, branch, first, last, on, onSelect }: { row: HistoryRow; branch: string | null; first: boolean; last: boolean; on: boolean; onSelect: () => void }) {
+/** Only the real tip of the checked out branch may borrow its name; a filtered or git-read list brings its own refs. */
+export function isBranchTip(index: number, native: boolean, row: HistoryRow, source: HistoryRow[]): boolean {
+  return index === 0 && !native && row === source[0];
+}
+
+function Row({ row, branch, first, tip, last, on, onSelect }: { row: HistoryRow; branch: string | null; first: boolean; tip: boolean; last: boolean; on: boolean; onSelect: () => void }) {
   const who = row.seat ?? row.author;
-  const refs = row.refs.length > 0 ? row.refs : first && branch ? [branch] : [];
+  const refs = row.refs.length > 0 ? row.refs : tip && branch ? [branch] : [];
   return (
     <button type="button" onClick={onSelect} aria-pressed={on} data-sha={row.sha}
       className={`flex w-full items-stretch gap-2 border-0 px-3 text-left ${on ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
@@ -132,7 +137,7 @@ export function HistoryView({ rows, branch, unlanded, selected, onSelect, seatBa
         ) : null}
         {loading && <div className="px-3 py-4 text-[12px] text-[var(--v2-muted)]">Reading commits</div>}
         {!loading && result.length === 0 && <div className="px-3 py-4 text-[12px] text-[var(--v2-muted)]">{sourceRows.length === 0 ? "No commits yet." : "No commits match."}</div>}
-        {!loading && result.map((r, i) => <Row key={r.sha} row={r} branch={branch} first={i === 0} last={i === result.length - 1} on={selected === r.sha} onSelect={() => onSelect(r.sha)} />)}
+        {!loading && result.map((r, i) => <Row key={r.sha} row={r} branch={branch} first={i === 0} tip={isBranchTip(i, native, r, sourceRows)} last={i === result.length - 1} on={selected === r.sha} onSelect={() => onSelect(r.sha)} />)}
       </div>
       <div className="border-t border-[var(--v2-edge)] px-3 py-1.5 text-[10.5px] text-[var(--v2-muted)]">Latest {sourceRows.length} commits {all ? "across all branches" : "on this branch"}</div>
     </div>

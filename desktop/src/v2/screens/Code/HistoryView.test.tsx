@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { FileHistoryControl, HistoryView } from "./HistoryView";
+import { FileHistoryControl, HistoryView, isBranchTip } from "./HistoryView";
 import { toRow } from "./model";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
@@ -77,4 +77,12 @@ it("lists a file's commits from the reusable header control", async () => {
   expect(calls[calls.length - 1]).toMatchObject({ command: "git_history", args: { all: false, file: "src/a.ts" } });
   expect(host.querySelector('[role="dialog"]')?.textContent).toContain("branch work");
   expect(host.querySelector('[role="dialog"]')?.textContent).toContain("bbb2222".slice(0, 8));
+});
+
+it("lends the branch name only to the real tip of the checked out branch", () => {
+  const older = { ...current, sha: "ccc3333" };
+  expect(isBranchTip(0, false, current, [current, older])).toBe(true);
+  expect(isBranchTip(0, false, older, [current, older])).toBe(false);
+  expect(isBranchTip(0, true, current, [current, older])).toBe(false);
+  expect(isBranchTip(1, false, older, [current, older])).toBe(false);
 });
