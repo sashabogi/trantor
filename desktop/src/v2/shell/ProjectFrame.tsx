@@ -7,7 +7,7 @@ import { useTasks } from "../../shared/tasks";
 import { ProjectTile } from "../ui/ProjectTile";
 import { LENS_LABEL, LENS_SCREENS, type LensScreen, type Navigate } from "../routes";
 import { MODE_CONFIG, useShellMode } from "./shellMode";
-import { HeaderBand } from "./HeaderBand";
+import { CompactHeaderBand, HeaderBand } from "./HeaderBand";
 
 const LENS_ICON = {
   workspace: <LayoutPanelLeft size={13} aria-hidden />,
@@ -43,7 +43,7 @@ export function LensTabs({ lens, openCards, onNavigate, order = LENS_SCREENS, co
           </button>
         );
       })}
-      {summary != null && <span className="ml-auto whitespace-nowrap pl-3 text-v2-body text-[var(--v2-muted)]">{summary}</span>}
+      {summary != null && <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap pl-3 text-v2-body text-[var(--v2-muted)]">{summary}</div>}
     </div>
   );
 }
@@ -82,7 +82,7 @@ export function ProjectFrame({ client, project, lens, onNavigate, actions, notic
         </div>
       )}
       <LensTabs lens={lens} openCards={open} onNavigate={onNavigate} order={lenses} compact={compactHeader}
-        summary={compactHeader ? <>{summary}{actions}</> : actions} />
+        summary={compactHeader ? <><CompactHeaderBand key={`${client.baseUrl}:${project}`} client={client} project={project} onNavigate={onNavigate} />{actions}</> : actions} />
       {notice}
       <div className="flex min-h-0 flex-1 flex-col overflow-auto">{children}</div>
     </div>

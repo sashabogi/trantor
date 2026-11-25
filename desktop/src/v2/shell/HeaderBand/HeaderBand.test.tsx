@@ -7,6 +7,8 @@ import { HubClient, type HubEvent } from "../../../shared/api/client";
 import { HeaderBand } from "./index";
 import { NeedsYou } from "./NeedsYou";
 import { PhaseGoal } from "./PhaseGoal";
+import { ProjectFrame } from "../ProjectFrame";
+import { SeatLanes } from "./SeatLanes";
 import { CiChip } from "./MainHealth";
 import type { CiStatus } from "./useBandData";
 import { hold, phase, proposal, turn } from "./testFixtures";
@@ -19,6 +21,8 @@ let ci: CiStatus;
 let proposals = [proposal(1), proposal(2, "other")];
 let holds = [hold(1)];
 let turns = [turn()];
+let peers = [{ session: "codex-8:trantor", project: "trantor", online: true, status: "working · card" }];
+let gitFails = false;
 let calls: { command: string; args: unknown }[];
 let listeners: ((event: HubEvent) => void)[];
 let client: HubClient;
@@ -28,12 +32,14 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(3_600_000);
   vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => undefined, removeItem: () => undefined });
-  ci = { sha: "abcdef", tag: "app-v2", ci: { state: "running", url: "https://github.com/test/actions/runs/1" } };
+  ci = { sha: "abcdef", tag: "app-v2", hasRemote: true, localCheckout: true, tagPublishedAt: "1970-01-01T00:00:00Z", ci: { state: "running", url: "https://github.com/test/actions/runs/1" } };
   proposals = [proposal(1), proposal(2, "other")]; holds = [hold(1)]; turns = [turn()];
-  calls = []; listeners = []; paths = [];
+  calls = []; listeners = []; paths = []; gitFails = false;
+  peers = [{ session: "codex-8:trantor", project: "trantor", online: true, status: "working · card" }];
   mockIPC((command, args) => {
     calls.push({ command, args });
     if (command === "ci_status") return JSON.stringify(ci);
+    if (command === "git_panel" && gitFails) throw new Error("unavailable");
     if (command === "git_panel") return JSON.stringify({ branch: "main", upstream: "origin/main", ahead: 2, behind: 1, status: [], counts: [], log: [] });
     return null;
   });
@@ -41,9 +47,9 @@ beforeEach(() => {
     paths.push(args.path);
     const path = args.path.split("?")[0];
     const body = path === "/phases" ? { brief: "Project", phases: [phase("P1", ["done", "todo"], "Build the band")] }
-      : path === "/peers" ? { peers: [{ session: "codex-8:trantor", project: "trantor", online: true, status: "working · card" }] }
+      : path === "/peers" ? { peers }
       : path === "/telemetry/turns" ? { rows: turns }
-      : path === "/proposals" ? { proposals } : { holds };
+      : path === "/tasks" ? { tasks: [] } : path === "/proposals" ? { proposals } : { holds };
     return { status: 200, body: JSON.stringify(body) };
   });
   vi.spyOn(client, "streamEvents").mockImplementation(listener => { listeners.push(listener); return () => undefined; });
@@ -151,4 +157,79 @@ it("hides phases without cards and lists at most three open titles on hover", as
   await act(async () => { root.render(<PhaseGoal data={{ brief: "", phases: [phase("P1", ["todo", "todo", "todo", "todo"])] }} onOpen={vi.fn()} />); });
   expect(host.querySelector('[role="tooltip"]')?.textContent).toContain("Card 2");
   expect(host.querySelector('[role="tooltip"]')?.textContent).not.toContain("Card 3");
+});
+
+it.each([["done"], ["done", "done"], ["done", "todo"], ["todo"]])("draws the ring for statuses %j", async (...statuses: string[]) => {
+  await act(async () => { root.render(<PhaseGoal data={{ brief: "", phases: [phase("live", statuses)] }} onOpen={vi.fn()} />); });
+  const arc = host.querySelector("circle[data-fraction]");
+  const circumference = 2 * Math.PI * 14;
+  const fraction = statuses.filter(s => s === "done").length / statuses.length;
+  expect(arc?.getAttribute("stroke-dasharray")).toBe(`${circumference} ${circumference}`);
+  expect(Number(arc?.getAttribute("stroke-dashoffset"))).toBeCloseTo(circumference * (1 - fraction));
+});
+
+it("grows the orchestrator bar from its working transition and shows its idle track", async () => {
+  turns = [];
+  peers = [{ session: "MacBook:trantor", project: "trantor", online: true, status: "idle" }];
+  await act(async () => { root.render(<HeaderBand client={client} project="trantor" onNavigate={vi.fn()} />); });
+  expect(host.textContent).toContain("No turns in the last hour");
+  peers = [{ ...peers[0], status: "working" }];
+  await advance(15_000);
+  expect(host.querySelector('[aria-label="orchestrator, working, open Workspace"]')).not.toBeNull();
+  await advance(5_000);
+  const bar = host.querySelector<HTMLElement>("[data-running-bar]");
+  expect(parseFloat(bar?.style.width ?? "0")).toBeCloseTo(5_000 / 3_600_000 * 100);
+  turns = [turn()]; peers = [{ ...peers[0], status: "idle" }];
+  await advance(10_000);
+  expect(host.querySelector('[aria-label="orchestrator, idle, open Workspace"]')).not.toBeNull();
+  expect(host.querySelector('[data-running-bar]')).toBeNull();
+});
+
+it("shows a quiet line for idle seats and expired turns, with no empty tracks", async () => {
+  await act(async () => { root.render(<SeatLanes project="trantor" peers={[{ session: "a:trantor", online: true, status: "idle" }]}
+    turns={[turn({ ts: 0 })]} now={3_600_000} workingSince={{}} onOpen={vi.fn()} />); });
+  expect(host.textContent).toBe("No turns in the last hour");
+  expect(host.querySelector("button")).toBeNull();
+});
+
+it("limits four active seats to three lanes with room for every label", async () => {
+  const seats = ["a", "b", "c", "d"].map(name => ({ session: `${name}:trantor`, online: true, status: "working" }));
+  await act(async () => { root.render(<SeatLanes project="trantor" peers={seats} turns={[]} now={3_600_000} workingSince={{}} onOpen={vi.fn()} />); });
+  const lanes = [...host.querySelectorAll("button")];
+  expect(lanes).toHaveLength(3);
+  for (const lane of lanes) expect(lane.className).toContain("min-h-4");
+});
+
+it("shows release age and hides both remote facts when no remote exists", async () => {
+  await act(async () => { root.render(<HeaderBand client={client} project="trantor" onNavigate={vi.fn()} />); });
+  expect(host.textContent).toContain("released app-v2 · 1h ago");
+  ci = { ...ci, hasRemote: false, ci: null };
+  await advance(60_000);
+  expect(host.textContent).not.toContain("app-v2");
+  expect(host.querySelector('[aria-label^="CI"]')).toBeNull();
+});
+
+it("shows no local checkout after git fails instead of reading forever", async () => {
+  gitFails = true;
+  ci = { ...ci, localCheckout: false, hasRemote: false, sha: null, tag: null, ci: null };
+  await act(async () => { root.render(<HeaderBand client={client} project="trantor" onNavigate={vi.fn()} />); });
+  expect(host.textContent).toContain("No local checkout");
+  expect(host.textContent).not.toContain("Reading git");
+  expect(host.querySelector('[aria-label^="CI"]')).toBeNull();
+});
+
+it("mounts a single line band with only lanes and CI to the right of developer lens tabs", async () => {
+  vi.stubGlobal("localStorage", { getItem: () => "developer", setItem: () => undefined });
+  const navigate = vi.fn();
+  await act(async () => { root.render(<ProjectFrame client={client} project="trantor" lens="code" onNavigate={navigate}><div>Editor</div></ProjectFrame>); });
+  const tabs = host.querySelector('[role="tablist"]');
+  const band = tabs?.querySelector('[aria-label="Project overview"]');
+  expect(band).not.toBeNull();
+  expect(host.querySelectorAll('[aria-label="Project overview"]')).toHaveLength(1);
+  expect(band?.querySelector('[aria-label="CI running"]')).not.toBeNull();
+  expect(band?.querySelector('[aria-label*="open Workspace"]')).not.toBeNull();
+  expect(band?.querySelector('[aria-label="Seat activity, last 60 minutes"]')?.className).not.toContain("flex-col");
+  expect(band?.textContent).not.toMatch(/Phase goal|needs you|released/);
+  await act(async () => { band?.querySelector<HTMLButtonElement>('[aria-label*="open Workspace"]')?.click(); });
+  expect(navigate).toHaveBeenCalledWith("workspace", "trantor");
 });

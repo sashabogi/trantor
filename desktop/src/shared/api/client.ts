@@ -156,7 +156,7 @@ export type TurnRow = {
 };
 
 // #14256: phase cards arrive in two groups, both of which contribute to progress.
-export type PhaseCard = Pick<Card, "id" | "title" | "status">;
+export type PhaseCard = Pick<Card, "id" | "title" | "status" | "ts" | "updated">;
 export type ProjectPhase = { key: string; goal: string; crew: PhaseCard[]; orchestrators: PhaseCard[] };
 export type ProjectPhases = { brief: string; phases: ProjectPhase[] };
 

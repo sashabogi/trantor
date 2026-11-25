@@ -1,14 +1,22 @@
-// #14256: the most recent unfinished phase gives the header its immediate goal.
-import type { ProjectPhase, ProjectPhases } from "../../../shared/api/client";
+// #14268: current work follows card activity, independent of phase ordering.
+import type { PhaseCard, ProjectPhase, ProjectPhases } from "../../../shared/api/client";
 import { Button } from "../../ui/Button";
+
+const CLOSED = new Set(["done", "archived", "cancelled", "rejected"]);
+const priority = (card: PhaseCard) => card.status === "doing" ? 3 : card.status === "testing" ? 2 : card.status === "todo" ? 1 : 0;
+const activity = (card: PhaseCard) => Math.max(card.updated ?? 0, card.ts ?? 0);
+const CIRCUMFERENCE = 2 * Math.PI * 14;
 
 export function phaseProgress(phases: ProjectPhase[]) {
   const populated = phases.map(phase => ({ phase, cards: [...phase.crew, ...phase.orchestrators] })).filter(p => p.cards.length);
-  const current = [...populated].reverse().find(p => p.cards.some(c => c.status !== "done")) ?? populated[populated.length - 1];
+  const open = populated.flatMap(group => group.cards.filter(c => !CLOSED.has(c.status)).map(card => ({ group, card })))
+    .sort((a, b) => priority(b.card) - priority(a.card) || activity(b.card) - activity(a.card));
+  const recent = [...populated].sort((a, b) => Math.max(...b.cards.map(activity)) - Math.max(...a.cards.map(activity)));
+  const current = open[0]?.group ?? recent[0];
   if (!current) return null;
-  const done = current.cards.filter(c => c.status === "done").length;
+  const done = current.cards.filter(c => CLOSED.has(c.status)).length;
   return { goal: current.phase.goal || current.phase.key, done, total: current.cards.length,
-    fraction: done / current.cards.length, open: current.cards.filter(c => c.status !== "done").slice(0, 3) };
+    fraction: done / current.cards.length, open: current.cards.filter(c => !CLOSED.has(c.status)).slice(0, 3) };
 }
 
 export function PhaseGoal({ data, onOpen }: { data: ProjectPhases | null; onOpen: () => void }) {
@@ -20,7 +28,7 @@ export function PhaseGoal({ data, onOpen }: { data: ProjectPhases | null; onOpen
       <svg width="34" height="34" viewBox="0 0 36 36" className="shrink-0" aria-hidden="true">
         <circle cx="18" cy="18" r="14" fill="none" stroke="var(--v2-track)" strokeWidth="4" />
         <circle data-fraction={progress.fraction} cx="18" cy="18" r="14" fill="none" stroke="var(--v2-accent)" strokeWidth="4"
-          pathLength="1" strokeDasharray={`${progress.fraction} 1`} transform="rotate(-90 18 18)" />
+          strokeDasharray={`${CIRCUMFERENCE} ${CIRCUMFERENCE}`} strokeDashoffset={CIRCUMFERENCE * (1 - progress.fraction)} transform="rotate(-90 18 18)" />
       </svg>
       <span className="v2-band-goal min-w-0">
         <span className="block text-v2-small text-[var(--v2-muted)]">{label}</span>

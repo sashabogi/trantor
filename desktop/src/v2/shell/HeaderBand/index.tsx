@@ -3,7 +3,7 @@ import type { HubClient } from "../../../shared/api/client";
 import type { Navigate } from "../../routes";
 import { PhaseGoal } from "./PhaseGoal";
 import { SeatLanes } from "./SeatLanes";
-import { MainHealth } from "./MainHealth";
+import { CiChip, MainHealth } from "./MainHealth";
 import { NeedsYou } from "./NeedsYou";
 import { useHealthData, useLaneData, useNeedsData, usePhaseData } from "./useBandData";
 
@@ -18,6 +18,18 @@ export function HeaderBand({ client, project, onNavigate }: { client: HubClient;
       <SeatLanes project={project} {...lanes} onOpen={() => onNavigate("workspace", project)} />
       <MainHealth {...health} />
       <NeedsYou key={project} ids={ids} onOpen={() => onNavigate("inbox", project)} />
+    </div>
+  );
+}
+
+// #14268: developer mode retains live seats and CI beside the lens tabs.
+export function CompactHeaderBand({ client, project, onNavigate }: { client: HubClient; project: string; onNavigate: Navigate }) {
+  const lanes = useLaneData(client, project);
+  const { status } = useHealthData(project);
+  return (
+    <div className="flex shrink-0 items-center gap-2" aria-label="Project overview">
+      <SeatLanes compact project={project} {...lanes} onOpen={() => onNavigate("workspace", project)} />
+      <CiChip status={status} />
     </div>
   );
 }

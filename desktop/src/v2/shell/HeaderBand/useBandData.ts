@@ -10,6 +10,7 @@ import { laneRows } from "./SeatLanes";
 
 export type CiStatus = {
   sha: string | null; tag: string | null;
+  hasRemote: boolean; localCheckout: boolean; tagPublishedAt: string | null;
   ci: { state: "running" | "green" | "red" | null; failing?: string; url?: string } | null;
 };
 
@@ -46,7 +47,7 @@ export function useLaneData(client: HubClient, project: string) {
   const [now, setNow] = useState(Date.now);
   const [workingSince, setWorkingSince] = useState<Record<string, number>>({});
   useEffect(() => {
-    const working = laneRows(peers ?? [], turns ?? [], project).filter(lane => lane.status === "working");
+    const working = laneRows(peers ?? [], turns ?? [], project, Date.now()).filter(lane => lane.status === "working");
     setWorkingSince(previous => Object.fromEntries(working.map(lane => [lane.persona, previous[lane.persona] ?? Date.now()])));
   }, [peers, turns, project]);
   useEffect(() => {
@@ -59,7 +60,7 @@ export function useLaneData(client: HubClient, project: string) {
 export function useHealthData(project: string) {
   const { state } = useScopeGit(project, null);
   const status = usePoll(useCallback(async (): Promise<CiStatus> => JSON.parse(await invoke<string>("ci_status", { project })), [project]), ciPollDelay);
-  return { snap: state.kind === "ok" ? state.snap : null, status };
+  return { snap: state.kind === "ok" ? state.snap : null, status, gitFailed: state.kind === "error" };
 }
 
 export function pendingIds(project: string, proposals: Proposal[], holds: FileHold[]): string[] {
