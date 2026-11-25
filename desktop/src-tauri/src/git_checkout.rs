@@ -63,11 +63,12 @@ pub(crate) async fn git_pull(
 }
 
 pub(crate) async fn git_push_at(dir: &Path) -> Result<String, String> {
+    let remote = require_sync_remote(dir).await?;
     let branch = run_git_text_io(dir, &["branch", "--show-current"]).await?.trim().to_string();
     if branch.is_empty() {
         return Err("detached HEAD — there is no branch name to push".into());
     }
-    git_run(dir, &["push", "-u", "origin", &branch]).await?;
+    git_run(dir, &["push", "-u", "--", &remote, &branch]).await?;
     Ok(branch)
 }
 

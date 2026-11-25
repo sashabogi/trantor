@@ -19,7 +19,7 @@ let done: ReturnType<typeof vi.fn>;
 let errors: ReturnType<typeof vi.fn>;
 
 const snap: ScopeSnapshot = {
-  scope: null, branch: "main", upstream: "origin/main", ahead: 1, behind: 0,
+  scope: null, branch: "main", upstream: "origin/main", remote: "origin", ahead: 1, behind: 0,
   status: [], counts: [], log: [{ sha: "abc1234", author: "Tess", when: "now", subject: "previous subject" }], seatBacked: false, readAt: 1,
 };
 

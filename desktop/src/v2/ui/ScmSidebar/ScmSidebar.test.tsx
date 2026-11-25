@@ -25,9 +25,9 @@ const LOG = [
   { sha: "abc1234def", author: "glm-5", when: "2 hours ago", subject: "#14044 Flat changes list" },
   { sha: "fedcba9876", author: "orchestrator", when: "5 hours ago", subject: "Land the sidebar" },
 ];
-const PANEL = { branch: "seat/glm-5", upstream: null, ahead: 2, behind: null, status: STATUS, counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }], log: LOG };
-const SEAT_SNAP: ScopeSnapshot = { scope: "glm-5", branch: "seat/glm-5", upstream: null, ahead: 2, behind: null, status: STATUS, counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }], log: LOG, seatBacked: true, readAt: Date.now() };
-const CHECKOUT_SNAP: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, status: STATUS, counts: [], log: LOG, seatBacked: false, readAt: Date.now() };
+const PANEL = { branch: "seat/glm-5", upstream: null, remote: "origin", ahead: 2, behind: null, status: STATUS, counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }], log: LOG };
+const SEAT_SNAP: ScopeSnapshot = { scope: "glm-5", branch: "seat/glm-5", upstream: null, remote: "origin", ahead: 2, behind: null, status: STATUS, counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }], log: LOG, seatBacked: true, readAt: Date.now() };
+const CHECKOUT_SNAP: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin/main", remote: "origin", ahead: 0, behind: 0, status: STATUS, counts: [], log: LOG, seatBacked: false, readAt: Date.now() };
 const ROOTS = JSON.stringify([{ name: "README.md", path: "README.md", dir: false, status: "M" }]);
 const SEATS: SeatInfo[] = [
   { seat: "glm-5", presence: "working", branch: "seat/glm-5", ahead: 2, machine: null, hasWorktree: true },
@@ -279,12 +279,12 @@ describe("Fetch (#14056)", () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it("shows git's failure and leaves the counts and fetch time alone", async () => {
-    fetchReply = () => { throw new Error("fatal: could not resolve host"); };
+  it("shows a plain git failure and leaves the counts and fetch time alone", async () => {
+    fetchReply = () => { throw new Error("fatal: Remote is unavailable\nDiagnostic detail"); };
     await render("fetch-error");
     await click(byLabel("Fetch from origin"));
     await flush();
-    expect(host.querySelector('[role="alert"]')?.textContent).toBe("fatal: could not resolve host");
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe("Remote is unavailable");
     expect(host.querySelector("[data-ahead]")?.textContent).toBe("2 unlanded");
     expect(host.querySelector("[data-ahead]")?.getAttribute("title")).not.toContain("fetched");
     expect(mutations).toBe(0);

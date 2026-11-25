@@ -221,3 +221,64 @@ async fn stash_requires_a_message_a_change_and_a_real_stash_reference() {
     assert!(git_stash_change_at(&f.repo, "stash@{0}", "force").await.is_err());
     let _ = std::fs::remove_dir_all(&f.tmp);
 }
+
+#[tokio::test]
+async fn sync_without_a_remote_reports_the_same_reason_as_the_snapshot() {
+    let f = fixture("sync-no-remote");
+    git(&f.repo, &["remote", "remove", "origin"]);
+    let panel = git_panel_at(&f.repo, 1).await.unwrap();
+    assert_eq!(panel.remote, None);
+    assert_eq!(serde_json::to_value(&panel).unwrap()["remote"], serde_json::Value::Null);
+    assert_eq!(git_fetch_at(&f.repo).await.unwrap_err(), "This repository has no remote");
+    assert_eq!(git_pull_at(&f.repo, PullStrategy::FastForward).await.unwrap_err(), "This repository has no remote");
+    assert_eq!(git_push_at(&f.repo).await.unwrap_err(), "This repository has no remote");
+    let _ = std::fs::remove_dir_all(&f.tmp);
+}
+
+#[tokio::test]
+async fn sync_uses_the_named_remote_for_snapshot_fetch_pull_and_push() {
+    let f = fixture("sync-named-remote");
+    git(&f.repo, &["remote", "rename", "origin", "upstream"]);
+    let panel = git_panel_at(&f.repo, 1).await.unwrap();
+    assert_eq!(panel.remote.as_deref(), Some("upstream"));
+    assert_eq!(serde_json::to_value(&panel).unwrap()["remote"], "upstream");
+    let other = second_clone(&f, "other");
+    commit_file(&other, "remote.txt", "remote\n", "remote commit");
+    git(&other, &["push", "-q"]);
+    git_fetch_at(&f.repo).await.unwrap();
+    assert_eq!(git(&f.repo, &["rev-parse", "upstream/main"]).trim(), head(&f.remote));
+    assert_eq!(git_pull_at(&f.repo, PullStrategy::FastForward).await.unwrap().status, "pulled");
+    assert_eq!(head(&f.repo), head(&f.remote));
+    commit_file(&f.repo, "local.txt", "local\n", "local commit");
+    git_push_at(&f.repo).await.unwrap();
+    assert_eq!(head(&f.repo), head(&f.remote));
+    let _ = std::fs::remove_dir_all(&f.tmp);
+}
+
+#[tokio::test]
+async fn sync_remote_prefers_the_branch_remote_then_origin_then_the_first_remote() {
+    let f = fixture("sync-remote-selection");
+    git(&f.repo, &["remote", "add", "upstream", f.remote.to_str().unwrap()]);
+    git(&f.repo, &["config", "branch.main.remote", "upstream"]);
+    assert_eq!(sync_remote(&f.repo).await.unwrap().as_deref(), Some("upstream"));
+    git(&f.repo, &["config", "--unset", "branch.main.remote"]);
+    assert_eq!(sync_remote(&f.repo).await.unwrap().as_deref(), Some("origin"));
+    git(&f.repo, &["remote", "remove", "origin"]);
+    assert_eq!(sync_remote(&f.repo).await.unwrap().as_deref(), Some("upstream"));
+    git(&f.repo, &["config", "branch.main.remote", "."]);
+    assert_eq!(sync_remote(&f.repo).await.unwrap().as_deref(), Some("upstream"));
+    git(&f.repo, &["checkout", "-q", "--detach"]);
+    assert_eq!(sync_remote(&f.repo).await.unwrap().as_deref(), Some("upstream"));
+    let _ = std::fs::remove_dir_all(&f.tmp);
+}
+
+#[tokio::test]
+async fn a_worktree_snapshot_sees_the_shared_remote_configuration() {
+    let f = fixture("sync-worktree");
+    let worktree = f.tmp.join("seat");
+    git(&f.repo, &["worktree", "add", "-qb", "seat", worktree.to_str().unwrap()]);
+    assert_eq!(git_panel_at(&worktree, 1).await.unwrap().remote.as_deref(), Some("origin"));
+    git(&f.repo, &["remote", "remove", "origin"]);
+    assert_eq!(git_panel_at(&worktree, 1).await.unwrap().remote, None);
+    let _ = std::fs::remove_dir_all(&f.tmp);
+}

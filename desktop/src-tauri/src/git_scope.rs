@@ -100,8 +100,28 @@ pub(crate) async fn git_commit_at(dir: &Path, message: &str) -> Result<String, S
         .map(|s| s.trim().to_string())
 }
 
-pub(crate) fn fetch_args() -> [&'static str; 3] {
-    ["fetch", "--prune", "origin"]
+// #14268: the snapshot and sync commands must agree even when the remote is not named origin.
+pub(crate) async fn sync_remote(dir: &Path) -> Result<Option<String>, String> {
+    let remotes = run_git_text_io(dir, &["remote"]).await?;
+    let names: Vec<&str> = remotes.lines().map(str::trim).filter(|name| !name.is_empty()).collect();
+    if names.is_empty() {
+        return Ok(None);
+    }
+    let branch = run_git_text_io(dir, &["branch", "--show-current"]).await?;
+    let configured = run_git_text_io(dir, &["config", "--get", &format!("branch.{}.remote", branch.trim())])
+        .await.unwrap_or_default();
+    let selected = names.iter().find(|name| **name == configured.trim())
+        .or_else(|| names.iter().find(|name| **name == "origin"))
+        .or_else(|| names.first());
+    Ok(selected.map(|name| (*name).to_string()))
+}
+
+pub(crate) async fn require_sync_remote(dir: &Path) -> Result<String, String> {
+    sync_remote(dir).await?.ok_or_else(|| "This repository has no remote".to_string())
+}
+
+pub(crate) fn fetch_args(remote: &str) -> [&str; 4] {
+    ["fetch", "--prune", "--", remote]
 }
 
 pub(crate) fn fetch_error(stderr: &str) -> String {
@@ -109,11 +129,12 @@ pub(crate) fn fetch_error(stderr: &str) -> String {
 }
 
 pub(crate) async fn git_fetch_at(dir: &Path) -> Result<(), String> {
+    let remote = require_sync_remote(dir).await?;
     let mut command = tokio::process::Command::new("git");
     command
         .arg("-C")
         .arg(dir)
-        .args(fetch_args())
+        .args(fetch_args(&remote))
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);

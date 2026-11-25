@@ -38,7 +38,7 @@ afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); saveMo
 
 it("resolves and stages a conflict on the project checkout", async () => {
   const snap: ScopeSnapshot = {
-    scope: null, branch: "main", upstream: null, ahead: 0, behind: 0,
+    scope: null, branch: "main", upstream: null, remote: "origin", ahead: 0, behind: 0,
     status: [{ path: "a.txt", x: "U", y: "U" }], counts: [], log: [], seatBacked: false, readAt: Date.now(),
   };
   await act(async () => { root.render(<ConflictView project="trantor" snap={snap} path="a.txt" onPick={() => undefined} onResolved={() => undefined} />); });
@@ -54,7 +54,7 @@ it("resolves and stages a conflict on the project checkout", async () => {
 
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
 const resolvedSnap = (): ScopeSnapshot => ({
-  scope: null, branch: "main", upstream: null, ahead: 0, behind: 0,
+  scope: null, branch: "main", upstream: null, remote: "origin", ahead: 0, behind: 0,
   status: [], counts: [], log: [], seatBacked: false, readAt: Date.now(),
 });
 const findButton = (text: string) => [...host.querySelectorAll("button")].find(button => button.textContent === text);

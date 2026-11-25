@@ -3,7 +3,7 @@ import { statusSignature } from "./SourceControlTab";
 import type { ScopeSnapshot } from "./useScopeGit";
 
 const snap = (plus: number, minus: number): ScopeSnapshot => ({
-  scope: null, branch: "main", upstream: "origin/main", ahead: 1, behind: 0,
+  scope: null, branch: "main", upstream: "origin/main", remote: "origin", ahead: 1, behind: 0,
   status: [{ path: "src/a.ts", x: " ", y: "M" }], counts: [{ path: "src/a.ts", plus, minus }],
   log: [], seatBacked: false, readAt: 0,
 });

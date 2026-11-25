@@ -194,6 +194,7 @@ pub(crate) struct GitLogEntry {
 pub(crate) struct GitPanel {
     pub(crate) branch: String,
     pub(crate) upstream: Option<String>,
+    pub(crate) remote: Option<String>,
     /// commits ahead of the upstream — or, with no upstream, ahead of the merge base with main
     /// (the seat's unlanded work). behind only exists against an upstream; without one the seat
     /// branched from main and "behind" is a claim we have not measured.
@@ -459,6 +460,7 @@ pub(crate) async fn git_panel_at(worktree: &Path, limit: u32) -> Result<GitPanel
     Ok(GitPanel {
         branch,
         upstream,
+        remote: sync_remote(worktree).await?,
         ahead: upstream_status.ahead,
         behind: upstream_status.behind,
         status,

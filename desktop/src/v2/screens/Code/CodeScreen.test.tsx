@@ -13,13 +13,13 @@ import { MODE_KEY } from "../../shell/shellMode";
 
 const PEERS = { peers: [{ session: "codex-8:trantor", project: "trantor", lastSeen: Date.now(), machine: "netcup" }] };
 const PANEL = {
-  branch: "seat/codex-8", upstream: null, ahead: 3, behind: null, status: [], counts: [],
+  branch: "seat/codex-8", upstream: null, remote: "origin", ahead: 3, behind: null, status: [], counts: [],
   log: [{ sha: "abc1234", author: "sashabogi", when: "2 hours ago", subject: "#13970 Restore opted-in projects" }],
 };
 
 // #13988 drill: the main checkout answers git_panel by scope "project", with real staging.
 const CHECKOUT = {
-  branch: "main", upstream: "origin/main", ahead: 2, behind: 1,
+  branch: "main", upstream: "origin/main", remote: "origin", ahead: 2, behind: 1,
   status: [{ path: "bin/a.mjs", x: " ", y: "M" }, { path: "src/staged.ts", x: "M", y: " " }],
   counts: [{ path: "bin/a.mjs", plus: 4, minus: 1 }],
   log: [{ sha: "fedcba9", author: "orchestrator", when: "5 minutes ago", subject: "#13988 Land the checkout panel" }],
@@ -250,7 +250,8 @@ describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
     await click('button[title="Fetch, pull or push this checkout"]');
     await act(async () => { button("Pull")?.click(); });
     await flush();
-    expect(host.querySelector('[role="menu"]')?.textContent).toContain("Branches diverged");
+    expect(host.querySelector('[role="menu"]')).toBeNull();
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Branches diverged");
     await act(async () => { button("Rebase")?.click(); });
     await flush();
     expect(calls.filter(c => c.command === "git_pull").map(c => c.args.strategy)).toEqual(["ff", "rebase"]);

@@ -30,7 +30,7 @@ const branches = [
 ];
 const seats: SeatInfo[] = [{ seat: "dev", presence: "ready", branch: "seat/dev", ahead: 1, machine: null, hasWorktree: true }];
 const acts: PickerActions = { onCheckout: vi.fn(), onSeat: vi.fn(), onCompare: vi.fn(), onMessage: vi.fn(), onCopy: vi.fn() };
-const snapshot: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, status: [], counts: [], log: [], seatBacked: false, readAt: Date.now() };
+const snapshot: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin/main", remote: "origin", ahead: 0, behind: 0, status: [], counts: [], log: [], seatBacked: false, readAt: Date.now() };
 
 beforeEach(() => {
   calls = [];

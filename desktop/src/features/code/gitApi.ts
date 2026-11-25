@@ -95,6 +95,7 @@ export function mergedCountFor(
 
 export type GitPanelSnapshot = {
   branch: string;
+  remote: string | null;
   upstream: string | null;
   /** commits ahead of the upstream — or of the merge base with main when no upstream is set */
   ahead: number | null;

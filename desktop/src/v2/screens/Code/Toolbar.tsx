@@ -33,38 +33,40 @@ function SyncMenu({ project, snap, scope, onDone, onError }: {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<"fetch" | "pull" | "push" | null>(null);
   const [diverged, setDiverged] = useState<string | null>(null);
-  const ref = useDismiss(open, () => setOpen(false));
+  const ref = useDismiss(open || !!diverged, () => { setOpen(false); setDiverged(null); });
   const mode = useShellMode();
   const ahead = snap?.ahead ?? 0;
   const finish = (promise: Promise<unknown>) => {
-    promise.then(() => { setOpen(false); setDiverged(null); onDone(); })
+    promise.then(() => { onDone(); })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(null));
   };
-  const fetch = () => { setBusy("fetch"); finish(scopeFetch(project, scope)); };
-  const push = () => { setBusy("push"); finish(scopePush(project, scope)); };
+  const start = (action: "fetch" | "pull" | "push") => { setOpen(false); setDiverged(null); setBusy(action); };
+  const fetch = () => { start("fetch"); finish(scopeFetch(project, scope)); };
+  const push = () => { start("push"); finish(scopePush(project, scope)); };
   const pull = (strategy: GitPullStrategy) => {
-    setBusy("pull");
+    start("pull");
     scopePull(project, scope, strategy).then(result => {
       if (result.status === "diverged") { setDiverged(result.reason); return; }
       setOpen(false); setDiverged(null); onDone();
     }).catch(e => onError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(null));
   };
-  const pushReason = !snap ? "Reading git" : checkoutMutationRefusal(scope, mode) ?? (ahead === 0 ? "Nothing to push" : busy ? "Sync in progress" : null);
+  const syncReason = !snap ? "Reading git" : !snap.remote ? "This repository has no remote" : busy ? "Sync in progress" : null;
+  const pushReason = syncReason ?? checkoutMutationRefusal(scope, mode) ?? (ahead === 0 ? "Nothing to push" : null);
   return (
     <div ref={ref} className="relative">
       <Button variant="ghost" icon={<RefreshCw size={12} aria-hidden className={busy ? "animate-spin" : undefined} />}
-        disabledReason={busy ? "Sync in progress" : null} onClick={() => setOpen(o => !o)} title="Fetch, pull or push this checkout">
+        disabledReason={busy ? "Sync in progress" : null} onClick={() => { setDiverged(null); setOpen(o => !o); }} title={syncReason ?? "Fetch, pull or push this checkout"}>
         Sync<ChevronDown size={12} aria-hidden />
       </Button>
       {open && <div role="menu" aria-label="Sync checkout" className="absolute left-0 top-8 z-30 flex w-64 flex-col gap-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] p-1.5 shadow-xl">
-        <Button variant="quiet" className="justify-start" disabledReason={busy ? "Sync in progress" : null} onClick={fetch}>Fetch</Button>
-        <Button variant="quiet" className="justify-start" disabledReason={!snap ? "Reading git" : busy ? "Sync in progress" : null} onClick={() => pull("ff")}>Pull</Button>
+        <Button variant="quiet" className="justify-start" disabledReason={syncReason} onClick={fetch}>Fetch</Button>
+        <Button variant="quiet" className="justify-start" disabledReason={syncReason} onClick={() => pull("ff")}>Pull</Button>
         <Button variant="quiet" icon={<ArrowUp size={12} aria-hidden />} className="justify-start" disabledReason={pushReason} onClick={push}
-          title={`Push ${snap?.branch ?? ""} to origin`}>Push ↑{ahead}</Button>
-        {diverged && <div role="alert" className="border-t border-[var(--v2-edge)] px-2 pt-2 text-v2-body text-[var(--v2-warn)]">
-          <p>{diverged}</p><div className="mt-2 flex gap-2"><Button onClick={() => pull("merge")}>Merge</Button><Button onClick={() => pull("rebase")}>Rebase</Button></div>
-        </div>}
+          title={`Push ${snap?.branch ?? ""} to ${snap?.remote ?? ""}`}>Push ↑{ahead}</Button>
+      </div>}
+      {diverged && <div role="alert" className="absolute left-0 top-8 z-30 w-64 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel)] p-2 text-v2-body text-[var(--v2-warn)] shadow-xl">
+        <p>{diverged}</p><div className="mt-2 flex gap-2"><Button disabledReason={syncReason} onClick={() => pull("merge")}>Merge</Button><Button disabledReason={syncReason} onClick={() => pull("rebase")}>Rebase</Button></div>
       </div>}
     </div>
   );

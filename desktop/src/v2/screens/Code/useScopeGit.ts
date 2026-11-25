@@ -10,6 +10,7 @@ export type ScopeSnapshot = {
   /** null only on a detached HEAD. */
   branch: string | null;
   upstream: string | null;
+  remote: string | null;
   ahead: number | null;
   behind: number | null;
   status: GitStatusEntry[];
@@ -29,7 +30,7 @@ const POLL_MS = 6_000;
 
 async function read(project: string, scope: string | null): Promise<ScopeSnapshot> {
   const p = await scopePanel(project, scope);
-  return { scope, branch: p.branch || null, upstream: p.upstream, ahead: p.ahead, behind: p.behind,
+  return { scope, branch: p.branch || null, upstream: p.upstream, remote: p.remote, ahead: p.ahead, behind: p.behind,
     status: p.status, counts: p.counts, log: p.log, seatBacked: scope !== null, readAt: Date.now() };
 }
 

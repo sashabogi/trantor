@@ -86,8 +86,8 @@ async fn project_panel_reads_branch_status_counts_and_log() {
 }
 
 #[test]
-fn fetch_prunes_origin_and_returns_only_the_first_error_line() {
-    assert_eq!(fetch_args(), ["fetch", "--prune", "origin"]);
+fn fetch_prunes_the_selected_remote_and_returns_only_the_first_error_line() {
+    assert_eq!(fetch_args("upstream"), ["fetch", "--prune", "--", "upstream"]);
     assert_eq!(fetch_error("fatal: could not read from remote\nmore detail\n"), "fatal: could not read from remote");
     assert_eq!(fetch_error("\n  fatal: offline  \ndetail"), "fatal: offline");
     assert_eq!(fetch_error(""), "git fetch failed");

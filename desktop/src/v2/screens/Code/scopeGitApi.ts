@@ -47,8 +47,22 @@ export async function scopeApplyPatch(project: string, agent: GitScopeArg, path:
   return invoke<string>("git_apply_patch", { project, ...scopeArgs(agent), path, patch, action });
 }
 
+// #14268: sync failures show one useful line without git's command or severity prefixes.
+export function syncError(raw: string): string {
+  const line = raw.split(/\r?\n/).map(part => part.trim()).find(Boolean) ?? "";
+  return line.replace(/^git\s+.+?\s+failed:\s*/i, "").replace(/^(?:(?:fatal|error):\s*)+/i, "").trim() || "Git sync failed";
+}
+
+async function syncInvoke<T>(command: "git_fetch" | "git_pull" | "git_push", args: PanelArgs & { strategy?: GitPullStrategy }): Promise<T> {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    throw new Error(syncError(error instanceof Error ? error.message : String(error ?? "")));
+  }
+}
+
 export async function scopeFetch(project: string, agent: GitScopeArg): Promise<void> {
-  await invoke("git_fetch", { project, ...scopeArgs(agent) });
+  await syncInvoke("git_fetch", { project, ...scopeArgs(agent) });
 }
 
 /** One file a commit touched: git's name-status letter, numstat counts (null when binary). */
@@ -139,7 +153,7 @@ export type GitPullStrategy = "ff" | "merge" | "rebase";
 export type GitPullResult = { status: "pulled" | "upToDate" | "diverged"; reason: string };
 
 export async function scopePull(project: string, agent: GitScopeArg, strategy: GitPullStrategy = "ff"): Promise<GitPullResult> {
-  return JSON.parse(await invoke<string>("git_pull", { project, ...scopeArgs(agent), strategy }));
+  return JSON.parse(await syncInvoke<string>("git_pull", { project, ...scopeArgs(agent), strategy }));
 }
 
 export type GitStash = { name: string; sha: string; created_at: number; message: string };
@@ -183,7 +197,7 @@ export function checkoutMutationRefusal(agent: GitScopeArg, mode: Mode = readMod
 export async function scopePush(project: string, agent: GitScopeArg): Promise<string> {
   const refusal = checkoutMutationRefusal(agent);
   if (refusal) throw new Error(refusal);
-  return invoke<string>("git_push", { project, ...scopeArgs(agent) });
+  return syncInvoke<string>("git_push", { project, ...scopeArgs(agent) });
 }
 
 /** Omit paths to discard every change. Rust copies every existing path to the Trash first. */
