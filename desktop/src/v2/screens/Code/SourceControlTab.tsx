@@ -13,6 +13,7 @@ import { fileChipLabel, pickChange, toRow, type HistoryRow } from "./model";
 import { useFileDiff, useSeatDiff } from "./usePatch";
 import type { ScmView } from "./Toolbar";
 import type { ScopeSnapshot } from "./useScopeGit";
+import { scopeApplyPatch } from "./scopeGitApi";
 
 export type ChatActs = { addToChat: (text: string) => void; copy: (text: string) => void; branchRefusal: string | null };
 
@@ -38,12 +39,16 @@ function ChangesBody(p: { project: string; snap: ScopeSnapshot; acts: ChatActs; 
   const [picked, setPicked] = useState<string | null>(null);
   const selected = pickChange(chips.map(c => c.path), picked, p.focusPath);
   const patch = useFileDiff(p.project, p.snap.scope, selected, statusSignature(p.snap));
+  const apply = async (text: string, action: "stage" | "unstage" | "discard", path: string) => {
+    try { await scopeApplyPatch(p.project, p.snap.scope, path, text, action); }
+    finally { p.onMutated(); }
+  };
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
       <div className="flex w-[320px] shrink-0 flex-col border-r border-[var(--v2-edge)]">
         <ChangesList project={p.project} snap={p.snap} selected={selected} onSelect={setPicked} onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
       </div>
-      <DiffPane chips={chips} selected={selected} onSelect={setPicked} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile}
+      <DiffPane chips={chips} selected={selected} onSelect={setPicked} patch={patch} onAddToChat={p.acts.addToChat} onOpenFile={p.onOpenFile} onApply={apply}
         empty={chips.length === 0 ? "Nothing has changed on this checkout." : "Git shows no text diff for this file."} />
     </div>
   );

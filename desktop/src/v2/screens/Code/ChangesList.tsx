@@ -7,7 +7,7 @@ import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
 import { Counts, MainCheckoutMark, PathLabel, SectionLabel, StatusLetter } from "./parts";
 import { fileChipLabel, type Letter } from "./model";
-import { checkoutMutationRefusal, scopeCommit, scopeStage } from "./scopeGitApi";
+import { checkoutMutationRefusal, historyMutationRefusal, scopeAmend, scopeCommit, scopePush, scopeStage, scopeUndo } from "./scopeGitApi";
 import { DiscardConfirmation, useDiscard } from "./DiscardControls";
 import { useShellMode } from "../../shell/shellMode";
 import type { ScopeSnapshot } from "./useScopeGit";
@@ -43,15 +43,33 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
   project: string; snap: ScopeSnapshot; staged: number; onDone: () => void; onError: (m: string) => void;
 }) {
   const [message, setMessage] = useState("");
+  const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
   const target = snap.branch ?? "this checkout";
-  const reason = staged === 0 ? "Nothing is staged yet" : !message.trim() ? "Write a commit message first" : busy ? "Committing" : null;
-  const commit = () => {
+  const mode = useShellMode();
+  const pushRefusal = checkoutMutationRefusal(snap.scope, mode);
+  const pushed = !!snap.upstream && snap.ahead === 0;
+  const noCommit = snap.log.length === 0;
+  const historyReason = historyMutationRefusal(snap.scope, mode) ?? (noCommit ? "There is no commit to change" : pushed ? "The last commit is already pushed" : null);
+  const reason = !amend && staged === 0 ? "Nothing is staged yet" : !message.trim() ? "Write a commit message first" : amend && historyReason ? historyReason : busy ? "Working" : null;
+  const commit = (push = false) => {
     setBusy(true);
-    scopeCommit(project, snap.scope, message)
-      .then(() => { setMessage(""); onDone(); })
+    void (amend ? scopeAmend(project, snap.scope, message) : scopeCommit(project, snap.scope, message))
+      .then(() => push ? scopePush(project, snap.scope) : undefined)
+      .then(() => { setMessage(""); setAmend(false); onDone(); })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
+  };
+  const undo = () => {
+    setBusy(true);
+    void scopeUndo(project, snap.scope)
+      .then(previous => { setMessage(previous); setAmend(false); onDone(); })
+      .catch(e => onError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  };
+  const toggleAmend = () => {
+    setAmend(value => !value);
+    setMessage(amend ? "" : (snap.log[0]?.subject ?? ""));
   };
   return (
     <div className="flex flex-col gap-1.5 border-b border-[var(--v2-edge)] px-3 py-2.5">
@@ -60,10 +78,20 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
         onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !reason) commit(); }}
         placeholder={`Message (⌘⏎ to commit to ${target})`}
         className="w-full rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-[12px] text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
-      <Button variant="primary" onClick={commit} disabledReason={reason} className="justify-center">
-        Commit {staged} {staged === 1 ? "file" : "files"} to {target}
-        {!snap.seatBacked && <MainCheckoutMark />}
-      </Button>
+      <div className="flex items-center gap-2 text-[11.5px] text-[var(--v2-text-2)]">
+        <label className="flex items-center gap-1.5" title={historyReason ?? "Replace the last commit with its changes plus what is staged"}>
+          <input type="checkbox" checked={amend} disabled={busy || !!historyReason} onChange={toggleAmend} />Amend last commit
+        </label>
+        <span className="flex-1" />
+        <Button variant="quiet" className="!px-2 !py-0.5 !text-[11px]" disabledReason={busy ? "Working" : historyReason} onClick={undo}><Undo2 size={12} aria-hidden />Undo last commit</Button>
+      </div>
+      <div className="flex gap-1.5">
+        <Button variant="primary" onClick={() => commit()} disabledReason={reason} className="flex-1 justify-center">
+          {amend ? "Amend commit" : `Commit ${staged} ${staged === 1 ? "file" : "files"}`} to {target}
+          {!snap.seatBacked && <MainCheckoutMark />}
+        </Button>
+        <Button onClick={() => commit(true)} disabledReason={reason ?? pushRefusal} className="justify-center">Commit and push</Button>
+      </div>
     </div>
   );
 }

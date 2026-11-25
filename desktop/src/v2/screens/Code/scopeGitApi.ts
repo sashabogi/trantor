@@ -28,6 +28,24 @@ export async function scopeCommit(project: string, agent: GitScopeArg, message: 
   return invoke<string>("git_commit", { project, ...scopeArgs(agent), message });
 }
 
+export async function scopeAmend(project: string, agent: GitScopeArg, message: string): Promise<string> {
+  return invoke<string>("git_commit_amend", { project, ...scopeArgs(agent), message });
+}
+
+export async function scopeUndo(project: string, agent: GitScopeArg): Promise<string> {
+  return invoke<string>("git_commit_undo", { project, ...scopeArgs(agent) });
+}
+
+export type GitPatchAction = "stage" | "unstage" | "discard";
+
+export async function scopeApplyPatch(project: string, agent: GitScopeArg, path: string, patch: string, action: GitPatchAction): Promise<string> {
+  if (action === "discard") {
+    const refusal = checkoutMutationRefusal(agent);
+    if (refusal) throw new Error(refusal);
+  }
+  return invoke<string>("git_apply_patch", { project, ...scopeArgs(agent), path, patch, action });
+}
+
 export async function scopeFetch(project: string, agent: GitScopeArg): Promise<void> {
   await invoke("git_fetch", { project, ...scopeArgs(agent) });
 }
@@ -107,6 +125,13 @@ export async function scopeStashChange(project: string, agent: GitScopeArg, refe
 
 /** The one reason the main checkout gives when the mode does not offer a mutation. */
 export const CHECKOUT_REFUSAL = "On the main checkout, pushing and discarding go through the orchestrator";
+
+export const HISTORY_REFUSAL = "On the main checkout, changing a commit goes through the orchestrator. Developer mode allows it.";
+
+/** Amend and undo rewrite a commit, so they follow the same mode rule as push and discard. */
+export function historyMutationRefusal(agent: GitScopeArg, mode: Mode = readMode()): string | null {
+  return agent || MODE_CONFIG[mode].ownCheckoutMutations ? null : HISTORY_REFUSAL;
+}
 
 export const BRANCH_REFUSAL = "On the main checkout, branch changes go through the orchestrator. Developer mode allows them.";
 

@@ -73,3 +73,39 @@ export function hunkText(file: DiffFile, hunk: DiffHunk): string {
   const sign = { ctx: " ", add: "+", del: "-" } as const;
   return [`${file.path}`, hunk.header, ...hunk.lines.map(l => `${sign[l.kind]}${l.text}`)].join("\n");
 }
+
+const SIGN = { ctx: " ", add: "+", del: "-" } as const;
+const HUNK_NUMBERS = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+
+function filePatchHeader(file: DiffFile): string[] {
+  const mode = file.status === "A" ? "new file mode 100644" : file.status === "D" ? "deleted file mode 100644" : null;
+  return [
+    `diff --git a/${file.path} b/${file.path}`,
+    ...(mode ? [mode] : []),
+    `--- ${file.status === "A" ? "/dev/null" : `a/${file.path}`}`,
+    `+++ ${file.status === "D" ? "/dev/null" : `b/${file.path}`}`,
+  ];
+}
+
+export function patchForHunk(file: DiffFile, hunk: DiffHunk): string {
+  return [...filePatchHeader(file), hunk.header, ...hunk.lines.map(line => `${SIGN[line.kind]}${line.text}`), ""].join("\n");
+}
+
+/** `reverse` is for unstage and discard: the patch then lands on the new side, so what is left out must match that side. */
+export function patchForLines(file: DiffFile, hunk: DiffHunk, selected: ReadonlySet<number>, reverse = false): string {
+  const lines = hunk.lines.flatMap((line, index) => {
+    if (line.kind === "ctx") return [` ${line.text}`];
+    if (selected.has(index)) return [`${SIGN[line.kind]}${line.text}`];
+    return line.kind === (reverse ? "add" : "del") ? [` ${line.text}`] : [];
+  });
+  if (!lines.some(line => line.startsWith("+") || line.startsWith("-"))) throw new Error("Select at least one changed line");
+  const match = HUNK_NUMBERS.exec(hunk.header);
+  if (!match) throw new Error("This hunk header cannot be applied");
+  const oldStart = Number(reverse ? match[3] : match[1]);
+  const oldCount = lines.filter(line => line.startsWith(" ") || line.startsWith("-")).length;
+  const newCount = lines.filter(line => line.startsWith(" ") || line.startsWith("+")).length;
+  const newStart = newCount === 0 ? Math.max(0, oldStart - 1) : oldStart === 0 ? 1 : oldStart;
+  const suffix = hunk.header.slice(hunk.header.indexOf("@@", 2) + 2);
+  const header = `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@${suffix}`;
+  return [...filePatchHeader(file), header, ...lines, ""].join("\n");
+}
