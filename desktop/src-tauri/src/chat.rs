@@ -68,6 +68,11 @@ pub(crate) struct ChatBlock {
     /// surprise input falls back to the plain tool row rather than a broken card.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) ask: Option<Vec<AskQuestion>>,
+    /// The file an edit-family call targets (Edit/Write/MultiEdit/NotebookEdit), from the tool's
+    /// own `file_path` input; the prompt timeline's changed-files line reads it (#14084). None
+    /// for every other block.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +126,10 @@ pub(crate) fn parse_ask_questions(input: &serde_json::Value) -> Option<Vec<AskQu
 pub(crate) struct ChatTurn {
     pub(crate) role: String,
     pub(crate) blocks: Vec<ChatBlock>,
+    /// When the transcript row that opened this turn was recorded, epoch ms (#14084). A row with
+    /// no readable timestamp stays None and the timeline renders no send time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ts: Option<u64>,
     /// A message the operator sent while the agent was mid-turn: recorded, not yet seen. Three
     /// states exist (sent, queued, seen) and the middle one must show; a dequeue marker clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -715,7 +724,9 @@ where
                                     tool: None,
                                     tool_id: None,
                                     ask: None,
+                                    path: None,
                                 }],
+                                ts: None,
                                 queued: None,
                             });
                         }
@@ -736,7 +747,9 @@ where
                                     tool: None,
                                     tool_id: None,
                                     ask: None,
+                                    path: None,
                                 }],
+                                ts: crate::transcript_facts::row_ts(&v),
                                 queued: Some(true),
                             });
                         }
@@ -761,7 +774,9 @@ where
                             tool: None,
                             tool_id: None,
                             ask: None,
+                            path: None,
                         }],
+                        ts: None,
                         queued: None,
                     });
                     continue;
@@ -813,7 +828,9 @@ where
                         tool: None,
                         tool_id: None,
                         ask: None,
+                        path: None,
                     }],
+                    ts: None,
                     queued: None,
                 });
                 continue;
@@ -830,6 +847,7 @@ where
                     tool: None,
                     tool_id: None,
                     ask: None,
+                    path: None,
                 })
             }
             serde_json::Value::Array(items) => {
@@ -848,6 +866,7 @@ where
                                 tool: None,
                                 tool_id: None,
                                 ask: None,
+                                path: None,
                             });
                         }
                         Some("thinking") => {
@@ -865,18 +884,21 @@ where
                                 tool: None,
                                 tool_id: None,
                                 ask: None,
+                                path: None,
                             });
                         }
                         Some("tool_use") => {
                             let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
                             let empty = serde_json::Value::Null;
                             let input = b.get("input").unwrap_or(&empty);
+                            let cwd = v.get("cwd").and_then(|c| c.as_str()).unwrap_or("");
                             blocks.push(ChatBlock {
                                 kind: "tool".into(),
                                 text: tool_summary(name, input),
                                 tool: Some(name.to_string()),
                                 tool_id: b.get("id").and_then(|i| i.as_str()).map(String::from),
                                 ask: if name == "AskUserQuestion" { parse_ask_questions(input) } else { None },
+                                path: crate::transcript_facts::edit_target_path(name, input, cwd),
                             });
                         }
                         Some("tool_result") => {
@@ -898,6 +920,7 @@ where
                             tool: None,
                             tool_id: None,
                             ask: None,
+                            path: None,
                         }),
                         _ => {}
                     }
@@ -911,6 +934,7 @@ where
         turns.push(ChatTurn {
             role: role.to_string(),
             blocks,
+            ts: crate::transcript_facts::row_ts(&v),
             queued: None,
         });
     }
@@ -1104,6 +1128,93 @@ mod request_row_tests {
             !skippable_big_row(r#"{"type":"api_request"}"#),
             "short rows take the normal path"
         );
+    }
+}
+
+#[cfg(test)]
+mod timeline_facts_tests {
+    use super::*;
+
+    fn user_row(text: &str, ts: Option<&str>) -> String {
+        let mut row = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": text },
+        });
+        if let Some(ts) = ts {
+            row["timestamp"] = serde_json::json!(ts);
+        }
+        row.to_string()
+    }
+
+    fn tool_row(name: &str, file_path: &str, cwd: Option<&str>) -> String {
+        let mut row = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    { "type": "tool_use", "id": "t1", "name": name,
+                      "input": { "file_path": file_path } },
+                ],
+            },
+        });
+        if let Some(cwd) = cwd {
+            row["cwd"] = serde_json::json!(cwd);
+        }
+        row.to_string()
+    }
+
+    /// The row that opens a turn hands its timestamp to the turn (#14084); a row without one,
+    /// or with an unreadable one, leaves it absent so the timeline renders no send time.
+    #[test]
+    fn a_turn_opens_with_its_row_timestamp_and_stays_absent_without_one() {
+        let snap = decode_chat_lines_with_context_window(
+            [
+                user_row("hello", Some("2026-11-24T18:22:41.123Z")),
+                user_row("again", Some("not a timestamp")),
+                user_row("third", None),
+            ],
+            3,
+            200_000,
+        );
+        assert_eq!(snap.turns[0].ts, Some(1_795_544_561_123));
+        assert_eq!(snap.turns[1].ts, None, "an unparseable timestamp is absent, never guessed");
+        assert_eq!(snap.turns[2].ts, None);
+    }
+
+    /// An edit-family tool block keeps the file it targeted (#14084), checkout-relative when the
+    /// row's cwd places it; a read keeps None and a path the row cannot place stays as recorded.
+    #[test]
+    fn edit_tool_blocks_keep_their_target_path() {
+        let snap = decode_chat_lines_with_context_window(
+            [
+                tool_row("Edit", "/repo/desktop/src/a.ts", Some("/repo")),
+                tool_row("MultiEdit", "/tmp/outside.ts", Some("/repo")),
+                tool_row("Read", "/repo/desktop/src/a.ts", Some("/repo")),
+                tool_row("Write", "/repo/b.md", None),
+            ],
+            4,
+            200_000,
+        );
+        assert_eq!(snap.turns[0].blocks[0].path.as_deref(), Some("desktop/src/a.ts"));
+        assert_eq!(snap.turns[1].blocks[0].path.as_deref(), Some("/tmp/outside.ts"));
+        assert_eq!(snap.turns[2].blocks[0].path, None, "a read is not an edit");
+        assert_eq!(snap.turns[3].blocks[0].path.as_deref(), Some("/repo/b.md"));
+    }
+
+    /// A mid-turn queue message is an operator message too: its row's timestamp reaches the turn.
+    #[test]
+    fn a_queued_message_carries_its_row_timestamp() {
+        let row = serde_json::json!({
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "content": "while you work",
+            "timestamp": "2026-11-25T09:00:00.000Z",
+        })
+        .to_string();
+        let snap = decode_chat_lines_with_context_window([row], 1, 200_000);
+        assert_eq!(snap.turns[0].role, "user");
+        assert_eq!(snap.turns[0].queued, Some(true));
+        assert_eq!(snap.turns[0].ts, Some(1_795_597_200_000));
     }
 }
 

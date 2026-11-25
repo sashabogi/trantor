@@ -21,7 +21,7 @@ import {
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
 } from "./prefs";
 import {
-  applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat, isDividerTurn,
+  applyBackfill, applyRows, applySessionChanged, bannerVisible, changedFiles, emptyChat, isDividerTurn,
   lastToolLabel, sessionLiveness, tickerText,
   type AskQuestion, type Backfill, type Block, type ChatState, type OpenQuestion, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
@@ -106,7 +106,7 @@ function group(turns: Turn[]): Turn[] {
     // A queued turn never merges into a seen one (or vice versa) — merging would erase the one
     // flag that tells the operator "the session has not read this yet".
     if (last && last.role === t.role && !!last.queued === !!t.queued) last.blocks = [...last.blocks, ...t.blocks];
-    else out.push({ role: t.role, blocks: [...t.blocks], queued: t.queued });
+    else out.push({ role: t.role, blocks: [...t.blocks], queued: t.queued, ts: t.ts });
   }
   return out;
 }
@@ -1165,6 +1165,11 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   if (!hosted && side) rootStyle.width = `${panel.width ?? 420}px`;
   if (!hosted && !side) rootStyle.height = `${panel.height ?? 340}px`;
 
+  // #14084: the prompt timeline reads the turns as rendered, so its per-prompt changed-files
+  // answer is computed on the same grouped list the transcript below draws.
+  const grouped = group(chat.turns);
+  const changed = changedFiles(grouped);
+
   return (
     <div
       ref={root}
@@ -1274,7 +1279,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
               : "Nothing said yet. Type below and it reaches the session exactly as if you had typed it in the terminal."}
           </div>
         )}
-        {group(chat.turns).map((t, i) =>
+        {grouped.map((t, i) =>
           // Bookkeeping, not speech (#5502): a /compact record or a harness caveat renders as a
           // centered quiet mono line with no speaker label — never a bubble, never "you".
           isDividerTurn(t) ? (
@@ -1309,6 +1314,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
                   <div
                     key={j}
                     data-prompt-id={t.role === "user" ? `${i}.${j}` : undefined}
+                    data-prompt-ts={t.role === "user" && t.ts !== undefined ? t.ts : undefined}
+                    data-prompt-files={t.role === "user" && changed[i].length ? JSON.stringify(changed[i]) : undefined}
                     className={`rounded-lg px-3 py-2 text-[length:calc(12.5px*var(--chat-scale,1))] leading-relaxed ${
                       t.role === "user"
                         ? "whitespace-pre-wrap break-words bg-tr-panel"

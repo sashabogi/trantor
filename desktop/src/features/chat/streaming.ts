@@ -6,11 +6,12 @@ export type AskOption = { label: string; description: string };
 /** One AskUserQuestion question. `ask` on a Block carries an array because the tool CAN ask
  *  several at once, though a single question is the common case. */
 export type AskQuestion = { header: string; question: string; multiSelect: boolean; options: AskOption[] };
-export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string; ask?: AskQuestion[] };
+export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string; ask?: AskQuestion[]; path?: string };
 /** `queued`: sent while the agent was mid-turn and NOT yet seen by the session — the middle of
- *  the three delivery states (sent, queued, seen). Cleared when the dequeue marker (the queue's
- *  `remove` row) arrives. */
-export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[]; queued?: boolean };
+ *  the three delivery states (sent, queued, seen); cleared when the dequeue marker (the queue's
+ *  `remove` row) arrives. `ts`: epoch ms from the row that opened the turn (#14084); absent
+ *  stays absent, so no time is ever guessed. */
+export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[]; queued?: boolean; ts?: number };
 export type ToolResult = { tool_id: string; ok: boolean; preview: string };
 /** The context window as the transcript's usage rows report it (#5508). `tokens`/`frac` are null
  *  until an assistant row with usage has been seen; `window` is 0 when unset — an unknown window
@@ -390,4 +391,30 @@ export function isDividerTurn(t: Turn): boolean {
 export function insertPaths(draft: string, cursor: number, paths: string[]): string {
   const insertion = paths.map(p => `${p} `).join("");
   return draft.slice(0, cursor) + insertion + draft.slice(cursor);
+}
+
+/** The tools whose target file counts as "this prompt changed that file" (#14084). */
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/** For each turn, the distinct files the edit-family tool calls between it and the next operator
+ *  message changed (#14084): entry i answers "what did this prompt change" for turns[i]. The
+ *  paths come from the tool block's own target, never out of its prose, and tool calls before
+ *  the first operator message answer to no prompt. */
+export function changedFiles(turns: ReadonlyArray<Turn>): string[][] {
+  const out: string[][] = Array.from(turns, () => []);
+  let prompt = -1;
+  turns.forEach((t, i) => {
+    if (t.role === "user") {
+      prompt = i;
+      return;
+    }
+    if (prompt < 0) return;
+    for (const b of t.blocks) {
+      if (b.kind === "tool" && b.tool !== undefined && EDIT_TOOLS.has(b.tool) && b.path) {
+        const files = out[prompt];
+        if (!files.includes(b.path)) files.push(b.path);
+      }
+    }
+  });
+  return out;
 }

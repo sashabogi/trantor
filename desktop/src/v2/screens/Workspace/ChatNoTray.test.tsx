@@ -11,7 +11,7 @@ describe("ChatNoTray", () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
     saveTrayOpen(true);
     const host = document.createElement("div");
-    act(() => { createRoot(host).render(<ChatNoTray><p>chat</p></ChatNoTray>); });
+    act(() => { createRoot(host).render(<ChatNoTray onOpenChange={() => {}}><p>chat</p></ChatNoTray>); });
     expect(loadTrayOpen()).toBe(false);
     expect(host.querySelector("[data-v2-chat]")?.textContent).toBe("chat");
   });

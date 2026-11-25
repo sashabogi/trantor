@@ -1742,3 +1742,66 @@ describe("Chat idle compaction notice (#11851)", () => {
     expect(host.textContent).not.toContain("prompt cache expired");
   });
 });
+
+// #14084: the prompt timeline reads the send time and the changed files off the chat's own
+// bubbles, so both doors are pinned here: the mount backfill and the live chat-rows push.
+describe("prompt timeline facts on the bubbles (#14084)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  const mountWithBackfill = async (turns: unknown[], total: number) => {
+    const d = makeDeps();
+    const invoke = <T,>(cmd: string): Promise<T> => {
+      if (cmd === "orchestrator_chat") {
+        // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is the
+        // Backfill tuple carrying real turns, so the mount read renders them.
+        return Promise.resolve(JSON.stringify([turns, [], total, META, []]) as T);
+      }
+      return d.deps.invoke<T>(cmd);
+    };
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={{ ...d.deps, invoke }} />); });
+    await flush();
+    await flush();
+    return d;
+  };
+
+  it("a prompt bubble carries its send time and the files its reply edited, and the list grows live", async () => {
+    const user = { role: "user", blocks: [{ kind: "text", text: "fix the login" }], ts: 1_700_000_000_000 };
+    const editA = { role: "assistant", blocks: [{ kind: "tool", text: "src/a.ts", tool: "Edit", path: "src/a.ts" }] };
+    const d = await mountWithBackfill([user, editA], 2);
+    const bubble = host.querySelector<HTMLElement>('[data-prompt-id="0.0"]');
+    expect(bubble?.getAttribute("data-prompt-ts")).toBe("1700000000000");
+    expect(bubble?.getAttribute("data-prompt-files")).toBe(JSON.stringify(["src/a.ts"]));
+
+    // The live door: a pushed batch adds a second edit for the same prompt.
+    await act(async () => {
+      for (const cb of d.handlers.get("chat-rows") ?? []) cb({
+        payload: rowsPayload({ after: 2, total: 3, turns: [
+          { role: "assistant", blocks: [{ kind: "tool", text: "src/b.rs", tool: "Write", path: "src/b.rs" }] },
+        ] }),
+      });
+    });
+    await flush();
+    const grown = host.querySelector<HTMLElement>('[data-prompt-id="0.0"]');
+    expect(grown?.getAttribute("data-prompt-ts")).toBe("1700000000000");
+    expect(grown?.getAttribute("data-prompt-files")).toBe(JSON.stringify(["src/a.ts", "src/b.rs"]));
+  });
+
+  it("a prompt with no time and no edits carries neither fact, never a placeholder", async () => {
+    await mountWithBackfill([{ role: "user", blocks: [{ kind: "text", text: "hello" }] }], 1);
+    const bubble = host.querySelector<HTMLElement>('[data-prompt-id="0.0"]');
+    expect(bubble?.hasAttribute("data-prompt-ts")).toBe(false);
+    expect(bubble?.hasAttribute("data-prompt-files")).toBe(false);
+  });
+});

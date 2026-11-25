@@ -45,12 +45,14 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
   const back = () => setSheet(null);
   // #13987 drill: Git is the Code screen's Source control, not a sheet; the seat travels with the intent.
   const openGit = () => { setOpenIntent(project, { kind: "source-control", seat: scope ?? undefined }); onNavigate("code"); };
+  // #14084 drill: a changed file named on a prompt tick's card opens Code on that change.
+  const openChange = (path: string) => { setOpenIntent(project, { kind: "change", path, seat: scope ?? undefined }); onNavigate("code"); };
   return (
     <section aria-label="Project panel" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <ChatHeader brand={orchestrator?.brand} sheet={sheet} onSheet={setSheet} changed={changed} project={project}
         sessionId={session?.id ?? orchestrator?.session ?? null} onGit={openGit} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
-        <ChatNoTray><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
+        <ChatNoTray onOpenChange={openChange}><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
           onClose={() => setSession(null)} /></ChatNoTray>
       </div>
       {sheet === "sessions" && (
@@ -63,14 +65,14 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
 }
 
 // #13987 drill: Chat's read-only terminal tray is a second view of the pane already on the left, and opening it blanked that one.
-export function ChatNoTray({ children }: { children: ReactNode }) {
+export function ChatNoTray({ children, onOpenChange }: { children: ReactNode; onOpenChange: (path: string) => void }) {
   useState(() => { saveTrayOpen(false); return null; });
   const chat = useRef<HTMLDivElement | null>(null);
   // The timeline sits beside the chat, so it never covers the scrollbar or the composer (#14075).
   return (
     <div className="flex min-h-0 flex-1">
       <div ref={chat} data-v2-chat className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
-      <PromptTimeline root={chat} />
+      <PromptTimeline root={chat} onOpenChange={onOpenChange} />
     </div>
   );
 }

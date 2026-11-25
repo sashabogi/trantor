@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
+  applyBackfill, applyRows, applySessionChanged, bannerVisible, changedFiles, composerSlot, emptyChat,
   gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn, openQuestion,
   sessionLiveness, normalizeAttachments, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   elapsedShort, lastToolLabel, tickerText,
@@ -336,6 +336,55 @@ describe("insertPaths", () => {
 
   it("an empty drop is a no-op splice", () => {
     expect(insertPaths("unchanged", 4, [])).toBe("unchanged");
+  });
+});
+
+// #14084: the prompt timeline's changed-files answer, one entry per turn (entry i belongs to
+// turns[i], so the files sit on the operator message that caused them, not on the reply).
+describe("changedFiles (#14084)", () => {
+  const edit = (tool: string, path: string) => ({ kind: "tool" as const, text: path, tool, path });
+  const say = (text: string) => ({ kind: "text" as const, text });
+
+  it("collects the distinct edit-family target files between one operator message and the next", () => {
+    const turns: Turn[] = [
+      { role: "user", blocks: [say("fix the login")] },
+      { role: "assistant", blocks: [edit("Edit", "src/a.ts"), edit("Write", "src/b.ts")] },
+      { role: "assistant", blocks: [edit("MultiEdit", "src/a.ts")] },
+      { role: "user", blocks: [say("thanks, also the test")] },
+      { role: "assistant", blocks: [edit("NotebookEdit", "n/c.ipynb")] },
+    ];
+    expect(changedFiles(turns)).toEqual([["src/a.ts", "src/b.ts"], [], [], ["n/c.ipynb"], []]);
+  });
+
+  it("reads no path out of prose: tools without a target or non-edit tools never contribute", () => {
+    const turns: Turn[] = [
+      { role: "user", blocks: [say("look at src/a.ts please")] },
+      { role: "assistant", blocks: [
+        { kind: "tool", text: "src/a.ts", tool: "Read" },
+        { kind: "tool", text: "npm test", tool: "Bash" },
+        { kind: "tool", text: "src/a.ts", tool: "Edit", path: "src/a.ts" },
+      ] },
+    ];
+    expect(changedFiles(turns)).toEqual([["src/a.ts"], []]);
+  });
+
+  it("tool calls before the first operator message answer to no prompt", () => {
+    const turns: Turn[] = [
+      { role: "assistant", blocks: [edit("Edit", "src/early.ts")] },
+      { role: "user", blocks: [say("hello")] },
+      { role: "assistant", blocks: [edit("Edit", "src/late.ts")] },
+    ];
+    expect(changedFiles(turns)).toEqual([[], ["src/late.ts"], []]);
+  });
+
+  it("a tool-less conversation yields all-empty entries, and the last prompt owns the tail", () => {
+    const turns: Turn[] = [
+      { role: "user", blocks: [say("hi")] },
+      { role: "assistant", blocks: [say("hello")] },
+      { role: "user", blocks: [say("edit a file")] },
+      { role: "assistant", blocks: [edit("Edit", "src/x.ts")] },
+    ];
+    expect(changedFiles(turns)).toEqual([[], [], ["src/x.ts"], []]);
   });
 });
 

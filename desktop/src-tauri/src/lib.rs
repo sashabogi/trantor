@@ -34,6 +34,7 @@ mod text_search;
 mod output_log;
 mod problems;
 mod chat;
+mod transcript_facts;
 mod watchers;
 mod panes;
 mod pane_mode;
