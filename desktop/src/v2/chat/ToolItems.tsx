@@ -1,7 +1,7 @@
 // The transcript's tool rows (#14327): a run of calls folds into one quiet summary row, a lone call
 // is a verb and what it acted on, a failed call opens itself, an edit is a small diff card. All the
 // wording and grouping comes from toolGroups.ts; this file only draws it.
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ChevronRight, FilePlus, Folder, GitCommitHorizontal, ListChecks, Pencil, Terminal, Wrench, X, type LucideIcon } from "lucide-react";
 import { singleRow, summary, type Call, type Item } from "../../features/chat/toolGroups";
 import type { Block, ToolKind, ToolResult } from "../../features/chat/streaming";
@@ -106,10 +106,18 @@ export function ToolRow({ call, open: opensItself }: { call: Call; open: boolean
 
 /** An edit or write that landed: the file, what it added and removed, and the changed lines. */
 export function EditCard({ call }: { call: Call }) {
-  const { openDiff } = useLinks();
+  const { openDiff, locate, project } = useLinks();
   const { block } = call;
   const path = block.paths?.[0] ?? block.path ?? "";
   const name = path ? baseName(path) : block.text;
+  const [where, setWhere] = useState<"inside" | "outside" | "unknown">("unknown");
+  useEffect(() => {
+    if (!path) return;
+    let alive = true;
+    void locate(path).then(w => { if (alive) setWhere(w); });
+    return () => { alive = false; };
+  }, [path, locate]);
+  const outside = where === "outside";
   return (
     <div data-testid="edit-card" className="my-0.5 mb-1 flex flex-col gap-1.5 rounded-lg border border-[var(--v2-edge)] px-3 py-2.5">
       <div className="flex items-center gap-2">
@@ -118,7 +126,8 @@ export function EditCard({ call }: { call: Call }) {
         {block.added !== undefined && <span data-testid="edit-added" className="v2-mono text-v2-small text-[var(--v2-ok)]">+{block.added}</span>}
         {block.removed !== undefined && <span data-testid="edit-removed" className="v2-mono text-v2-small text-[var(--v2-bad)]">-{block.removed}</span>}
         <span className="flex-1" />
-        {path && <button type="button" onClick={() => openDiff(path)} className="text-v2-small text-[var(--v2-link)] hover:underline">Open diff</button>}
+        {outside && <span data-testid="edit-outside" title={`${path} is not in ${project || "this project"}, so it does not show in Source Control`} className="text-v2-small text-[var(--v2-faint)]">outside {project || "the project"}</span>}
+        {path && !outside && <button type="button" onClick={() => openDiff(path)} className="text-v2-small text-[var(--v2-link)] hover:underline">Open diff</button>}
       </div>
       {block.diff && block.diff.length > 0 && (
         <div className="v2-mono overflow-hidden rounded-sm text-v2-small leading-[1.55]">

@@ -30,7 +30,7 @@ function fakeLinks(files: string[], commits: string[] = []) {
     pathsExist: (_p, paths) => new Promise(done => { release.push(() => done(paths.map(x => files.includes(x)))); }),
     commitsExist: (_p, shas) => Promise.resolve(shas.map(x => commits.includes(x))),
   };
-  const value: LinkContextValue = { resolver: createLinkResolver("p", api), open: l => opened.push(l), openDiff: () => {} };
+  const value: LinkContextValue = { resolver: createLinkResolver("p", api), open: l => opened.push(l), openDiff: () => {}, locate: async () => "unknown", project: "p" };
   return { value, opened, release: () => release.splice(0).forEach(r => r()) };
 }
 

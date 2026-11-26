@@ -126,7 +126,7 @@ describe("tool rows", () => {
 
   it("draws a landed edit as a card with +N -M, tinted diff lines, and Open diff on its path", async () => {
     const opened: string[] = [];
-    const links: LinkContextValue = { resolver: null, open: () => {}, openDiff: p => opened.push(p) };
+    const links: LinkContextValue = { resolver: null, open: () => {}, openDiff: p => opened.push(p), locate: async () => "inside", project: "trantor" };
     const edit = tool("e2", "Edit", "Composer2.tsx", {
       tool_kind: "edit", path: "desktop/Composer2.tsx", paths: ["/repo/desktop/Composer2.tsx"], added: 12, removed: 3,
       diff: [{ op: "-", text: "old()" }, { op: "+", text: "new()" }],
@@ -144,9 +144,28 @@ describe("tool rows", () => {
     expect(opened).toEqual(["/repo/desktop/Composer2.tsx"]);
   });
 
+  it("labels an edit to a file outside the project, which Source Control never shows, and offers no diff", async () => {
+    const asked: string[] = [];
+    const links: LinkContextValue = {
+      resolver: null, open: () => {}, openDiff: () => {}, project: "trantor",
+      locate: async p => { asked.push(p); return "outside"; },
+    };
+    const edit = tool("e9", "Write", "chat-fix1.md", {
+      tool_kind: "write", path: "/private/tmp/scratch/chat-fix1.md", paths: ["/private/tmp/scratch/chat-fix1.md"], added: 51, removed: 0,
+    });
+    await show(<LinkProvider value={links}><Transcript turns={[user("go"), agent([edit])]} results={results(ok("e9"))} working /></LinkProvider>);
+    await act(async () => { await Promise.resolve(); });
+    expect(asked).toEqual(["/private/tmp/scratch/chat-fix1.md"]);
+    const label = host.querySelector('[data-testid="edit-outside"]');
+    expect(label?.textContent).toBe("outside trantor");
+    expect(label?.getAttribute("title")).toContain("does not show in Source Control");
+    const card = host.querySelector('[data-testid="edit-card"]');
+    expect([...card?.querySelectorAll("button") ?? []].some(b => b.textContent === "Open diff")).toBe(false);
+  });
+
   it("makes a read's object a link to its file", async () => {
     const opened: string[] = [];
-    const links: LinkContextValue = { resolver: null, open: l => opened.push(l.href), openDiff: () => {} };
+    const links: LinkContextValue = { resolver: null, open: l => opened.push(l.href), openDiff: () => {}, locate: async () => "unknown", project: "trantor" };
     const one = [tool("r9", "Read", "src/one.ts", { tool_kind: "explore", paths: ["/repo/src/one.ts"] })];
     await show(<LinkProvider value={links}><Transcript turns={[user("go"), agent(one)]} results={results(ok("r9"))} working /></LinkProvider>);
     const a = host.querySelector('[data-testid="tool-row"] a');

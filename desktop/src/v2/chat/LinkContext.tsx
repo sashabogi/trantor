@@ -14,9 +14,14 @@ export type LinkContextValue = {
   open: (link: Link) => void;
   /** "Open diff" on an edit card: the change view for one path. */
   openDiff: (path: string) => void;
+  /** Whether a path is inside this project's checkout. An edit to a file outside it (a scratch
+   *  note, another repo) never shows in Source Control, so the card says so. */
+  locate: (path: string) => Promise<"inside" | "outside" | "unknown">;
+  /** The project's name, for the "outside <project>" label. */
+  project: string;
 };
 
-const NONE: LinkContextValue = { resolver: null, open: () => {}, openDiff: () => {} };
+const NONE: LinkContextValue = { resolver: null, open: () => {}, openDiff: () => {}, locate: async () => "unknown", project: "" };
 
 const LinkContext = createContext<LinkContextValue>(NONE);
 
@@ -38,6 +43,11 @@ export function ChatLinks({ project, navigate, seat, deps, children }: {
       resolver: linkResolverFor(project),
       open: link => { void openLink(project, link, wired, seat).catch(() => {}); },
       openDiff: path => { setOpenIntent(project, { kind: "change", path, seat }); navigate("code", project); },
+      locate: async path => {
+        try { return (await wired.resolvePath(project, path))?.inside ? "inside" : "outside"; }
+        catch { return "unknown"; }
+      },
+      project,
     };
   }, [project, navigate, seat, deps]);
   return <LinkProvider value={value}>{children}</LinkProvider>;
