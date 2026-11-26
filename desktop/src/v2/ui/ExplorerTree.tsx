@@ -1,6 +1,7 @@
 // The 2.0 file tree for the Workspace Files column and the Code Explorer: git status letters, tinted names and
 // folder dots like a real IDE's explorer (#13987 drill). The classic FileTree stays for classic screens.
 import { useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { CircleHelp, FolderPlus, Plus } from "lucide-react";
 import { createFile, deleteFile, renameFile, safePath, type FileEntry } from "../../features/code/fileApi";
 import { Popover } from "../shell/Popover";
@@ -74,7 +75,9 @@ function useTreeKeys(d: ExplorerData, onOpen: (p: string) => void, treeRef: RefO
   };
 }
 
-function Tree({ project, seat, onOpen, openPath }: { project: string; seat: string | null; onOpen: (path: string) => void; openPath?: string | null }) {
+type TreeProps = { project: string; seat: string | null; onOpen: (path: string) => void; openPath?: string | null; toolbarSlot?: HTMLElement | null };
+
+function Tree({ project, seat, onOpen, openPath, toolbarSlot }: TreeProps) {
   const d = useExplorerData(project, seat);
   const [edit, setEdit] = useState<Edit>(null);
   const [menu, setMenu] = useState<string | null>(null);
@@ -139,18 +142,21 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
     if (dragged) { if (dir) d.expand(dir); ops.move(dragged, dir); }
   };
   const firstPath = d.rows[0]?.entry.path;
+  const toolbar = (
+    <div className="flex items-center gap-1 px-2 py-1" data-root-drop onDragOver={e => { if (dragPath) e.preventDefault(); }} onDrop={e => { e.preventDefault(); dropOn(""); }}>
+      <span className="flex-1" />
+      <IconButton label="New file" title="Create a new file (relative path, e.g. src/foo.ts)" size={24} onClick={() => setEdit({ kind: "create", dir: "", folder: false })}>
+        <Plus size={13} aria-hidden />
+      </IconButton>
+      <IconButton label="New folder" title="Create a new folder at the top of the project" size={24} onClick={() => setEdit({ kind: "create", dir: "", folder: true })}>
+        <FolderPlus size={13} aria-hidden />
+      </IconButton>
+      <Legend />
+    </div>
+  );
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-1 px-2 py-1" data-root-drop onDragOver={e => { if (dragPath) e.preventDefault(); }} onDrop={e => { e.preventDefault(); dropOn(""); }}>
-        <span className="flex-1" />
-        <IconButton label="New file" title="Create a new file (relative path, e.g. src/foo.ts)" size={24} onClick={() => setEdit({ kind: "create", dir: "", folder: false })}>
-          <Plus size={13} aria-hidden />
-        </IconButton>
-        <IconButton label="New folder" title="Create a new folder at the top of the project" size={24} onClick={() => setEdit({ kind: "create", dir: "", folder: true })}>
-          <FolderPlus size={13} aria-hidden />
-        </IconButton>
-        <Legend />
-      </div>
+      {toolbarSlot ? createPortal(toolbar, toolbarSlot) : toolbar}
       {moving && <MoveToPicker project={project} seat={seat} entry={moving} onClose={() => setMoving(null)} onPick={dir => { if (dir) d.expand(dir); ops.move(moving, dir); setMoving(null); }} />}
       {asking && <DeleteConfirm text={asking.text} onConfirm={confirmRemove} onCancel={() => setAsking(null)} />}
       {note && <div role="status" className="px-3 pb-1 text-v2-small text-[var(--v2-bad)]">{note}</div>}
@@ -175,6 +181,6 @@ function Tree({ project, seat, onOpen, openPath }: { project: string; seat: stri
 }
 
 /** Remounted per project and checkout, so one scope's open folders and status never bleed into another's. */
-export function ExplorerTree(p: { project: string; seat: string | null; onOpen: (path: string) => void; openPath?: string | null }) {
+export function ExplorerTree(p: TreeProps) {
   return <Tree key={`${p.project}::${p.seat ?? "project"}`} {...p} />;
 }

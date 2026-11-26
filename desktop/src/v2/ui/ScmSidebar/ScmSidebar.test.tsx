@@ -1,14 +1,14 @@
 // @vitest-environment happy-dom
-// #14044 drill: the source control sidebar's header, flat Changes list, Files, Recent commits,
-// remembered sections and clicks; #14047 ahead/behind + seats rows; #14058 every header stays on
-// screen, each open body scrolls in itself. Fakes: the Tauri IPC and a per-test localStorage.
+// #14044 drill: the source control sidebar's header, change groups, Files, Recent commits,
+// remembered sections and clicks; #14047 ahead/behind + seats rows; #14344 one scroller, the
+// Changes / Files switch, folded history. Fakes: the Tauri IPC and a per-test localStorage.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ScmSidebar } from "./index";
-import { flatChanges } from "./ChangesSection";
-import { readScmSectionOpen, writeScmSectionOpen, SCM_KEY_PREFIX } from "./sectionState";
+import { flatChanges, groupChanges } from "./ChangesSection";
+import { readScmSectionOpen, readScmView, writeScmSectionOpen, writeScmView, SCM_KEY_PREFIX } from "./sectionState";
 import type { SeatInfo } from "../../screens/Code/model";
 import type { ScopeSnapshot, ScopeState } from "../../screens/Code/useScopeGit";
 
@@ -43,6 +43,8 @@ let picked: (string | null)[];
 let fetchReply: (() => void | Promise<void>) | null;
 let stashReply: string;
 let mutations: number;
+let worktreeReply: unknown[];
+let conflicts: string[];
 
 let host: HTMLDivElement;
 let root: Root;
@@ -54,6 +56,8 @@ beforeEach(() => {
   fetchReply = null;
   stashReply = "[]";
   mutations = 0;
+  worktreeReply = [];
+  conflicts = [];
   state = { kind: "ok", snap: SEAT_SNAP };
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
@@ -71,6 +75,7 @@ beforeEach(() => {
     if (command === "git_fetch") return fetchReply?.();
     if (command === "git_discard") return "/Trash/Trantor discard test";
     if (command === "git_stash_list") return stashReply;
+    if (command === "git_worktrees") return JSON.stringify(worktreeReply);
     if (command === "git_stash_save" || command === "git_stash_change") return null;
     if (command === "plugin:event|listen") return 1;
     return null;
@@ -85,17 +90,20 @@ afterEach(async () => {
 });
 
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
-const render = async (project = "trantor") => {
+const render = async (project = "trantor", scope: string | null = "glm-5", selectedPath: string | null = null) => {
   await act(async () => {
-    root.render(<ScmSidebar project={project} scope="glm-5" scopeName="glm-5" state={state} seats={SEATS}
-      onPickScope={s => picked.push(s)} onMutated={() => { mutations += 1; }}
-      onOpenFile={p => opened.file.push(p)} onOpenChange={p => opened.change.push(p)} onOpenCommit={s => opened.commit.push(s)} />);
+    root.render(<ScmSidebar project={project} scope={scope} scopeName={scope ?? "project checkout"} state={state} seats={SEATS}
+      onPickScope={s => picked.push(s)} onMutated={() => { mutations += 1; }} selectedPath={selectedPath}
+      onOpenFile={p => opened.file.push(p)} onOpenChange={p => opened.change.push(p)} onOpenCommit={s => opened.commit.push(s)}
+      onOpenConflict={p => conflicts.push(p)} />);
   });
   await flush(); await flush();
 };
 const click = (el: Element | null) => act(async () => { if (el instanceof HTMLElement) el.click(); });
 const byLabel = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
 const sectionBody = (s: string) => host.querySelector(`[data-section-body="${s}"]`);
+const openGroup = (s: string) => click(host.querySelector(`button[data-section-toggle="${s}"]`));
+const showFiles = () => click([...host.querySelectorAll("button")].find(b => b.textContent === "Files") ?? null);
 const typeMessage = async (text: string) => {
   const input = host.querySelector<HTMLInputElement>("#v2-commit-msg");
   await act(async () => {
@@ -105,7 +113,7 @@ const typeMessage = async (text: string) => {
   });
 };
 
-describe("flatChanges", () => {
+describe("flatChanges and groupChanges", () => {
   it("gives every changed path one row with the chip letter and the stage direction", () => {
     const rows = flatChanges(STATUS);
     expect(rows.map(r => [r.path, r.letter])).toEqual([
@@ -116,6 +124,12 @@ describe("flatChanges", () => {
     expect(rows.find(r => r.path === "fresh.ts")).toMatchObject({ staged: false, unstaged: true });
     expect(rows.find(r => r.path === "src/c.ts")).toMatchObject({ conflict: true, staged: false });
   });
+
+  it("splits Staged from Changes, a path edited after staging sits in both, each with its own side's letter", () => {
+    const groups = groupChanges([...STATUS, { path: "both.ts", x: "A", y: "M" }]);
+    expect(groups.staged.map(r => [r.path, r.letter])).toEqual([["src/staged.ts", "M"], ["both.ts", "A"]]);
+    expect(groups.changes.map(r => [r.path, r.letter])).toEqual([["bin/a.mjs", "M"], ["fresh.ts", "U"], ["src/c.ts", "M"], ["both.ts", "M"]]);
+  });
 });
 
 describe("section persistence", () => {
@@ -125,29 +139,74 @@ describe("section persistence", () => {
     expect(readScmSectionOpen("changes")).toBe(false);
     expect(readScmSectionOpen("files")).toBe(true);
   });
+
+  it("a folded-by-default group stays folded until the operator opens it", () => {
+    expect(readScmSectionOpen("commits", false)).toBe(false);
+    writeScmSectionOpen("commits", true);
+    expect(readScmSectionOpen("commits", false)).toBe(true);
+  });
+
+  it("remembers the Changes / Files view under trantor.v2.scm.view", () => {
+    expect(readScmView()).toBe("changes");
+    writeScmView("files");
+    expect(localStorage.getItem(`${SCM_KEY_PREFIX}.view`)).toBe("files");
+    expect(readScmView()).toBe("files");
+  });
 });
 
 describe("the sidebar", () => {
-  it("reads Source control with the branch and scope name, and lists all three sections", async () => {
+  it("is one header row: state dot, branch, and no uppercase title or section for the files", async () => {
     await render();
-    expect(host.textContent).toContain("Source control");
-    expect(host.textContent).toContain("seat/glm-5");
-    expect(host.textContent).toContain("glm-5");
+    const header = host.querySelector("header");
+    expect(header?.textContent).toContain("seat/glm-5");
+    expect(host.textContent).not.toContain("Source control");
+    expect(host.querySelector("[data-state-dot]")).not.toBeNull();
     expect(sectionBody("changes")).not.toBeNull();
-    expect(sectionBody("files")).not.toBeNull();
-    expect(sectionBody("commits")).not.toBeNull();
+    expect(sectionBody("staged")).not.toBeNull();
+    expect(host.querySelector('[role="tree"]')).toBeNull();
   });
 
-  it("shows every changed file in one flat list, staged and unstaged together", async () => {
+  it("names the scope once, in a pill with a way back, and only off the main checkout", async () => {
     await render();
-    const list = sectionBody("changes");
-    for (const path of ["bin/a.mjs", "src/staged.ts", "fresh.ts", "src/c.ts"]) {
-      expect(list?.querySelector(`[data-change="${path}"]`)).not.toBeNull();
+    const pill = host.querySelector("[data-scope-pill]");
+    expect(pill?.textContent).toBe("glm-5’s worktree, read only");
+    expect(host.querySelectorAll("[data-scope-pill]")).toHaveLength(1);
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Back to my checkout") ?? null);
+    expect(picked).toEqual([null]);
+    state = { kind: "ok", snap: CHECKOUT_SNAP };
+    await render("trantor", null);
+    expect(host.querySelector("[data-scope-pill]")).toBeNull();
+    expect([...host.querySelectorAll("button")].find(b => b.textContent === "Back to my checkout")).toBeUndefined();
+  });
+
+  it("shows every changed file in its group: Staged first, then Changes with counts, each with a count in the header", async () => {
+    await render();
+    expect(sectionBody("staged")?.querySelector('[data-change="src/staged.ts"]')).not.toBeNull();
+    for (const path of ["bin/a.mjs", "fresh.ts", "src/c.ts"]) {
+      expect(sectionBody("changes")?.querySelector(`[data-change="${path}"]`)).not.toBeNull();
     }
     expect(host.querySelector('[data-change="bin/a.mjs"]')?.textContent).toContain("+4");
     expect(byLabel("Stage bin/a.mjs")).not.toBeNull();
     expect(byLabel("Unstage src/staged.ts")).not.toBeNull();
-    expect(host.querySelector("[data-count]")?.textContent).toBe("4");
+    expect(host.querySelector('[data-section="staged"] [data-count]')?.textContent).toBe("1");
+    expect(host.querySelector('[data-section="changes"] [data-count]')?.textContent).toBe("3");
+  });
+
+  it("puts the file name first, the folder after it, and the status letter at the far right of a 24px row", async () => {
+    await render();
+    const row = host.querySelector('[data-change="bin/a.mjs"]');
+    expect(row?.className).toContain("h-6");
+    const text = row?.querySelector("button")?.textContent ?? "";
+    expect(text.indexOf("a.mjs")).toBeLessThan(text.indexOf("bin"));
+    expect(row?.lastElementChild?.textContent).toBe("M");
+  });
+
+  it("keeps the row actions in a column that is hidden, not removed, until hover", async () => {
+    await render();
+    const actions = host.querySelector('[data-change="bin/a.mjs"] [data-row-actions]');
+    expect(actions?.className).toContain("invisible");
+    expect(actions?.className).toContain("group-hover:visible");
+    expect(actions?.contains(byLabel("Stage bin/a.mjs"))).toBe(true);
   });
 
   it("keeps conflict actions protected and offers discard on a seat", async () => {
@@ -168,6 +227,26 @@ describe("the sidebar", () => {
     expect(calls.find(c => c.command === "git_discard")?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["bin/a.mjs"] });
   });
 
+  it("keeps Discard all in the group's menu, disabled while a conflict is open", async () => {
+    await render();
+    expect([...host.querySelectorAll("button")].find(b => b.textContent === "Discard all")).toBeUndefined();
+    await click(byLabel("More actions for Changes"));
+    const item = [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(b => b.textContent === "Discard all");
+    expect(item?.disabled).toBe(true);
+    expect(item?.title).toContain("Resolve conflicts");
+  });
+
+  it("Discard all in the menu asks first, then discards the whole scope", async () => {
+    state = { kind: "ok", snap: { ...SEAT_SNAP, status: STATUS.filter(e => e.path !== "src/c.ts") } };
+    await render();
+    await click(byLabel("More actions for Changes"));
+    await click([...host.querySelectorAll('[role="menuitem"]')].find(b => b.textContent === "Discard all") ?? null);
+    expect(host.querySelector('[data-discard-confirm="all"]')).not.toBeNull();
+    expect(calls.some(c => c.command === "git_discard")).toBe(false);
+    await click(host.querySelector('[data-discard-confirm="all"] button[data-variant="danger"]'));
+    expect(calls.find(c => c.command === "git_discard")?.args).toEqual({ project: "trantor", agent: "glm-5" });
+  });
+
   it("stages and unstages per row through the scope git bridge", async () => {
     await render();
     await click(byLabel("Stage bin/a.mjs"));
@@ -176,38 +255,48 @@ describe("the sidebar", () => {
     expect(calls.filter(c => c.command === "git_stage")[1]?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["src/staged.ts"], unstage: true });
   });
 
-  it("Stage all batches every non-conflicted change in one call", async () => {
+  it("Stage all batches every non-conflicted change in one call, Unstage all the whole Staged group", async () => {
     await render();
-    const button = [...host.querySelectorAll("button")].find(b => b.textContent === "Stage all");
-    await click(button ?? null);
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Stage all") ?? null);
     expect(calls.find(c => c.command === "git_stage")?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["bin/a.mjs", "fresh.ts"], unstage: false });
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Unstage all") ?? null);
+    expect(calls.filter(c => c.command === "git_stage")[1]?.args).toEqual({ project: "trantor", agent: "glm-5", paths: ["src/staged.ts"], unstage: true });
+  });
+
+  it("hides the Staged group while nothing is staged", async () => {
+    state = { kind: "ok", snap: { ...SEAT_SNAP, status: [{ path: "bin/a.mjs", x: " ", y: "M" }] } };
+    await render();
+    expect(host.querySelector('[data-section="staged"]')).toBeNull();
+    expect(sectionBody("changes")).not.toBeNull();
   });
 
   it("commits through the bridge with the staged count", async () => {
     await render();
     await typeMessage("#14044 land it");
-    await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes("Commit 1 file to seat/glm-5")) ?? null);
+    await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes("Commit 1 file")) ?? null);
     await flush();
     expect(calls.find(c => c.command === "git_commit")?.args).toEqual({ project: "trantor", agent: "glm-5", message: "#14044 land it" });
   });
 
-  it("on the main checkout the refusal travels with the commit box and discard", async () => {
+  it("on the main checkout the refusal travels with the discard and the commit button never names the branch", async () => {
     state = { kind: "ok", snap: CHECKOUT_SNAP };
-    await render();
-    const commit = [...host.querySelectorAll("button")].find(b => b.textContent?.includes("Commit 1 file to main"));
-    expect(commit?.querySelector("[data-main-checkout]")).not.toBeNull();
+    await render("trantor", null);
+    const commit = [...host.querySelectorAll("button")].find(b => b.textContent?.includes("Commit 1 file"));
+    expect(commit).toBeDefined();
+    expect(commit?.textContent).not.toContain("main");
+    expect(host.querySelector("[data-main-checkout]")).toBeNull();
     expect(byLabel("Discard bin/a.mjs")?.title).toContain("orchestrator");
   });
 
-  it("collapses one section, remembers it across a remount, and reopens", async () => {
+  it("collapses one group, remembers it across a remount, and reopens", async () => {
     await render();
-    await click(host.querySelector('button[data-section-toggle="changes"]'));
+    await openGroup("changes");
     expect(sectionBody("changes")).toBeNull();
-    expect(sectionBody("files")).not.toBeNull();
+    expect(sectionBody("staged")).not.toBeNull();
     expect(localStorage.getItem(`${SCM_KEY_PREFIX}.changes`)).toBe("false");
     await render();
     expect(sectionBody("changes")).toBeNull();
-    await click(host.querySelector('button[data-section-toggle="changes"]'));
+    await openGroup("changes");
     expect(sectionBody("changes")).not.toBeNull();
     expect(localStorage.getItem(`${SCM_KEY_PREFIX}.changes`)).toBe("true");
   });
@@ -216,8 +305,11 @@ describe("the sidebar", () => {
     await render();
     await click(host.querySelector('button[title="Show the diff for bin/a.mjs"]'));
     expect(opened.change).toEqual(["bin/a.mjs"]);
+    await openGroup("commits");
     await click(host.querySelector('[data-sha="abc1234def"]'));
     expect(opened.commit).toEqual(["abc1234def"]);
+    await showFiles();
+    await flush();
     await click(host.querySelector('[role="treeitem"][data-path="README.md"]'));
     expect(opened.file).toEqual(["README.md"]);
   });
@@ -225,7 +317,10 @@ describe("the sidebar", () => {
   it("empty git data says so instead of stub sections", async () => {
     state = { kind: "ok", snap: { ...SEAT_SNAP, status: [], counts: [], log: [] } };
     await render();
-    expect(sectionBody("changes")?.textContent).toContain("No uncommitted changes.");
+    expect(host.textContent).toContain("Nothing to commit");
+    expect(host.querySelector('[data-section="changes"]')).toBeNull();
+    await openGroup("commits");
+    await openGroup("stashes");
     expect(sectionBody("commits")?.textContent).toContain("No commits yet.");
     expect([...host.querySelectorAll("button")].find(b => b.textContent === "Stage all")).toBeUndefined();
     expect(host.textContent).toContain("No stashes.");
@@ -240,18 +335,99 @@ describe("the sidebar", () => {
     await render();
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("git is not reachable");
   });
+
+  it("marks the row of the change the host is showing as selected", async () => {
+    await render("trantor", "glm-5", "bin/a.mjs");
+    expect(host.querySelector('[data-change="bin/a.mjs"]')?.getAttribute("data-selected")).toBe("true");
+    expect(host.querySelector('[data-change="fresh.ts"]')?.hasAttribute("data-selected")).toBe(false);
+  });
+});
+
+describe("the Changes / Files switch (#14344)", () => {
+  it("starts on Changes, switches to a full-height Files view with its toolbar in the header, and remembers it", async () => {
+    await render();
+    const switcher = host.querySelector('[role="group"][aria-label="Source control view"]');
+    expect(switcher?.querySelector('button[aria-pressed="true"]')?.textContent).toBe("Changes");
+    expect(host.querySelector('[role="tree"]')).toBeNull();
+    await showFiles();
+    await flush();
+    expect(host.querySelector('[role="tree"]')).not.toBeNull();
+    expect(sectionBody("changes")).toBeNull();
+    expect(host.querySelector("[data-files-toolbar]")?.contains(byLabel("New file"))).toBe(true);
+    expect(localStorage.getItem(`${SCM_KEY_PREFIX}.view`)).toBe("files");
+    await render();
+    expect(host.querySelector('[role="tree"]')).not.toBeNull();
+  });
+
+  it("marks the open file's row selected in the tree, with the status letter at the right", async () => {
+    await render("trantor", "glm-5", "README.md");
+    await showFiles();
+    await flush();
+    const row = host.querySelector('[role="treeitem"][data-path="README.md"]');
+    expect(row?.getAttribute("data-selected")).toBe("true");
+    expect(row?.className).toContain("h-6");
+    expect(row?.lastElementChild?.getAttribute("data-letter")).toBe("M");
+  });
+});
+
+describe("what needs you comes first (#14344)", () => {
+  const READY = { path: "/repo/.claude/worktrees/agent-a3b04308faa", branch: "wt", head: "a", locked: false, kind: "agent", last_activity: Math.floor(Date.now() / 1000) - 3600, changed: 3, ahead: 1, files: [] };
+
+  it("says files are in conflict and Resolve opens the first one in the merge view", async () => {
+    await render();
+    const note = host.querySelector('[data-note="conflicts"]');
+    expect(note?.textContent).toContain("1 file is in conflict");
+    await click(note?.querySelector("button") ?? null);
+    expect(conflicts).toEqual(["src/c.ts"]);
+  });
+
+  it("offers no note while nothing is in conflict and no agent has work waiting", async () => {
+    state = { kind: "ok", snap: { ...SEAT_SNAP, status: [{ path: "bin/a.mjs", x: " ", y: "M" }] } };
+    await render();
+    expect(host.querySelector("[role=note]")).toBeNull();
+  });
+
+  it("names an agent whose finished work waits in its worktree, and Review reads that worktree", async () => {
+    worktreeReply = [READY];
+    state = { kind: "ok", snap: CHECKOUT_SNAP };
+    await render("trantor", null);
+    const note = host.querySelector('[data-note="ready"]');
+    expect(note?.textContent).toContain("agent a3b0430 has 3 files ready in its worktree");
+    await click([...note?.querySelectorAll("button") ?? []].find(b => b.textContent === "Review") ?? null);
+    expect(picked).toEqual(["wt:/repo/.claude/worktrees/agent-a3b04308faa"]);
+  });
+
+  it("does not nag about a worktree that is still working", async () => {
+    worktreeReply = [{ ...READY, locked: true }];
+    state = { kind: "ok", snap: CHECKOUT_SNAP };
+    await render("trantor", null);
+    expect(host.querySelector('[data-note="ready"]')).toBeNull();
+  });
 });
 
 describe("ahead/behind beside the branch (#14047)", () => {
-  it("counts unlanded work when there is no upstream and names the upstream when there is one", async () => {
+  it("shows arrows in accent when ahead, and says the upstream or the unlanded rule in the tooltip", async () => {
     await render();
     const ahead = host.querySelector("[data-ahead]");
-    expect(ahead?.textContent).toBe("2 unlanded");
+    expect(ahead?.textContent).toBe("↑2");
     expect(ahead?.getAttribute("title")).toBe("no upstream: ahead counts unlanded work against main");
+    expect(host.querySelector("[data-state-dot]")?.getAttribute("data-tone")).toBe("accent");
+  });
+
+  it("shows nothing when in sync, the dot goes ok and its tooltip says in sync with the upstream", async () => {
     state = { kind: "ok", snap: CHECKOUT_SNAP };
-    await render();
-    expect(host.querySelector("[data-ahead]")?.textContent).toBe("in sync");
+    await render("trantor", null);
+    expect(host.querySelector("[data-ahead]")).toBeNull();
+    expect(host.querySelector("[data-state-dot]")?.getAttribute("data-tone")).toBe("ok");
+    expect(host.querySelector("[data-state-dot]")?.getAttribute("title")).toBe("in sync with origin/main");
+  });
+
+  it("shows both arrows with an upstream and warns when behind", async () => {
+    state = { kind: "ok", snap: { ...CHECKOUT_SNAP, ahead: 2, behind: 1 } };
+    await render("trantor", null);
+    expect(host.querySelector("[data-ahead]")?.textContent).toBe("↑2 ↓1");
     expect(host.querySelector("[data-ahead]")?.getAttribute("title")).toContain("origin/main");
+    expect(host.querySelector("[data-state-dot]")?.getAttribute("data-tone")).toBe("warn");
   });
 
   it("says nothing while git is still loading", async () => {
@@ -285,7 +461,7 @@ describe("Fetch (#14056)", () => {
     await click(byLabel("Fetch from origin"));
     await flush();
     expect(host.querySelector('[role="alert"]')?.textContent).toBe("Remote is unavailable");
-    expect(host.querySelector("[data-ahead]")?.textContent).toBe("2 unlanded");
+    expect(host.querySelector("[data-ahead]")?.textContent).toBe("↑2");
     expect(host.querySelector("[data-ahead]")?.getAttribute("title")).not.toContain("fetched");
     expect(mutations).toBe(0);
   });
@@ -295,6 +471,7 @@ describe("Stashes (#14099)", () => {
   it("saves with a message and pops the selected stash through the scoped bridge", async () => {
     stashReply = JSON.stringify([{ name: "stash@{0}", sha: "abcdef123456", created_at: 1_700_000_000, message: "work in progress" }]);
     await render();
+    await openGroup("stashes");
     expect(host.querySelector('[data-stash="stash@{0}"]')?.textContent).toContain("work in progress");
     const input = host.querySelector<HTMLInputElement>("#v2-stash-message");
     await act(async () => {
@@ -312,16 +489,18 @@ describe("Stashes (#14099)", () => {
 });
 
 describe("Branches and seats (#14047)", () => {
-  it("comes after Recent commits with the row count in the badge", async () => {
+  it("comes after Recent commits, folded, with the row count in the header", async () => {
     await render();
     expect([...host.querySelectorAll("section")].map(s => s.getAttribute("data-section")))
-      .toEqual(["changes", "files", "commits", "stashes", "branches"]);
+      .toEqual(["staged", "changes", "commits", "stashes", "branches"]);
+    expect(sectionBody("branches")).toBeNull();
     const badge = host.querySelector('section[data-section="branches"] [data-count]');
     expect(badge?.textContent).toBe("3");
   });
 
   it("lists the main checkout and every seat, current row marked, worktree-less seat disabled", async () => {
     await render();
+    await openGroup("branches");
     expect(host.querySelector('button[data-scope-row="main"]')?.textContent).toContain("main checkout");
     expect(host.querySelector('button[data-scope-row="glm-5"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector('button[data-scope-row="main"]')?.getAttribute("aria-pressed")).toBe("false");
@@ -332,61 +511,49 @@ describe("Branches and seats (#14047)", () => {
 
   it("a row click re-scopes the sidebar: the seat, then back to the checkout", async () => {
     await render();
+    await openGroup("branches");
     await click(host.querySelector('button[data-scope-row="glm-5"]'));
     await click(host.querySelector('button[data-scope-row="main"]'));
     expect(picked).toEqual(["glm-5", null]);
   });
 });
 
-describe("headers always on screen (#14058)", () => {
-  it("open section bodies scroll in place, and open sections keep a floor so none is squeezed under the next header", async () => {
+describe("one scroller, history folded (#14344)", () => {
+  it("scrolls the whole column in one place; no group body scrolls inside itself", async () => {
     await render();
-    const column = host.querySelector('section[data-section="changes"]')?.parentElement;
-    expect(column?.className).toContain("flex-1");
-    // #14058 drill: the column scrolls only when the floors no longer fit (a very short window).
-    expect(column?.className).toContain("overflow-y-auto");
-    expect(host.querySelector('section[data-section="files"]')?.className).toContain("min-h-[150px]");
-    expect(host.querySelector('section[data-section="commits"]')?.className).toContain("min-h-[64px]");
-    for (const s of ["changes", "files", "commits", "stashes", "branches"]) {
-      expect(sectionBody(s)?.className).toContain("overflow-y-auto");
+    const scrollers = host.querySelectorAll('[class*="overflow-y-auto"]');
+    expect(host.querySelectorAll("[data-scm-scroller]")).toHaveLength(1);
+    expect(host.querySelector("[data-scm-scroller]")?.className).toContain("overflow-y-auto");
+    for (const el of scrollers) expect(el.hasAttribute("data-section-body")).toBe(false);
+  });
+
+  it("folds Recent commits, Stashes and Branches and seats by default and keeps the work groups open", async () => {
+    await render();
+    for (const open of ["staged", "changes"]) expect(sectionBody(open)).not.toBeNull();
+    for (const folded of ["commits", "stashes", "branches"]) {
+      expect(host.querySelector(`button[data-section-toggle="${folded}"]`)?.getAttribute("aria-expanded")).toBe("false");
+      expect(sectionBody(folded)).toBeNull();
     }
   });
 
-  it("with Files open the later headers sit outside the Files body, after it in the column", async () => {
+  it("opens a folded group inline and remembers it", async () => {
     await render();
-    const files = sectionBody("files");
-    const commitsHeader = host.querySelector('button[data-section-toggle="commits"]');
-    const branchesHeader = host.querySelector('button[data-section-toggle="branches"]');
-    expect(commitsHeader).not.toBeNull();
-    expect(branchesHeader).not.toBeNull();
-    expect(files?.contains(commitsHeader)).toBe(false);
-    expect(files?.contains(branchesHeader)).toBe(false);
+    await openGroup("commits");
+    expect(sectionBody("commits")?.querySelectorAll("[data-sha]")).toHaveLength(2);
+    expect(localStorage.getItem(`${SCM_KEY_PREFIX}.commits`)).toBe("true");
+    await render();
+    expect(sectionBody("commits")).not.toBeNull();
   });
 
-  it("Files takes the remaining space; the other three stop at 40% of the column", async () => {
+  it("the header row reads as a control: caret, count, aria-expanded, Show/Hide title, 26px", async () => {
     await render();
-    expect(host.querySelector('section[data-section="files"]')?.className).toContain("flex-1");
-    for (const s of ["changes", "commits", "stashes", "branches"]) {
-      expect(host.querySelector(`section[data-section="${s}"]`)?.className).toContain("max-h-[40%]");
-    }
-  });
-
-  it("a collapsed section is only its header row and gives the space back", async () => {
-    await render();
-    await click(host.querySelector('button[data-section-toggle="files"]'));
-    const files = host.querySelector('section[data-section="files"]');
-    expect(files?.className).toContain("shrink-0");
-    expect(files?.className).not.toContain("flex-1");
-    expect(sectionBody("files")).toBeNull();
-  });
-
-  it("the header row reads as a control: chevron, badge, aria-expanded, Show/Hide title", async () => {
-    await render();
+    await openGroup("commits");
     const toggle = host.querySelector<HTMLButtonElement>('button[data-section-toggle="commits"]');
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
     expect(toggle?.title).toBe("Hide Recent commits");
-    expect(toggle?.querySelector("svg")).not.toBeNull();
+    expect(toggle?.querySelector("svg")?.getAttribute("style")).toContain("rotate(90deg)");
     expect(toggle?.querySelector("[data-count]")?.textContent).toBe("2");
+    expect(toggle?.parentElement?.className).toContain("h-[26px]");
     await click(toggle);
     const collapsed = host.querySelector<HTMLButtonElement>('button[data-section-toggle="commits"]');
     expect(collapsed?.getAttribute("aria-expanded")).toBe("false");
@@ -403,6 +570,7 @@ describe("Controls a developer expects (#14268)", () => {
   it("asks before dropping a stash, and Cancel keeps it", async () => {
     stashReply = JSON.stringify(stash);
     await render();
+    await openGroup("stashes");
     await click(dropButton());
     expect(confirmBox()?.textContent).toContain("stash@{0}");
     expect(calls.find(c => c.command === "git_stash_change")).toBeUndefined();
@@ -414,6 +582,7 @@ describe("Controls a developer expects (#14268)", () => {
   it("drops only after the confirm click, and Escape closes the question", async () => {
     stashReply = JSON.stringify(stash);
     await render();
+    await openGroup("stashes");
     await click(dropButton());
     await key(document.body, "Escape");
     expect(confirmBox()).toBeNull();
@@ -425,6 +594,7 @@ describe("Controls a developer expects (#14268)", () => {
 
   it("Enter in the stash message box stashes", async () => {
     await render();
+    await openGroup("stashes");
     const input = host.querySelector<HTMLInputElement>("#v2-stash-message");
     await act(async () => {
       if (!input) return;
@@ -451,6 +621,19 @@ describe("Controls a developer expects (#14268)", () => {
     await key(host.querySelector('[data-change="src/c.ts"] button'), " ");
     await flush();
     expect(calls.find(c => c.command === "git_stage")).toBeUndefined();
+  });
+
+  it("Delete on a change row asks to discard it, and discards nothing until confirmed", async () => {
+    await render();
+    await key(host.querySelector('[data-change="bin/a.mjs"] button'), "Delete");
+    expect(host.querySelector('[data-discard-confirm="bin/a.mjs"]')).not.toBeNull();
+    expect(calls.find(c => c.command === "git_discard")).toBeUndefined();
+  });
+
+  it("Delete on a conflicted row discards nothing and asks nothing", async () => {
+    await render();
+    await key(host.querySelector('[data-change="src/c.ts"] button'), "Delete");
+    expect(host.querySelector("[data-discard-confirm]")).toBeNull();
   });
 
   it("Escape closes the discard question without discarding", async () => {

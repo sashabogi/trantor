@@ -158,7 +158,8 @@ describe("an agent worktree scope in the sidebar", () => {
     await settle(100);
     await click(host.querySelector(`button[data-agent-row="${WORKTREE}"]`));
     await settle(100);
-    await click(host.querySelector('[data-sha="abc1234def"] button, button[data-sha="abc1234def"]') ?? host.querySelector('[data-sha="abc1234def"]'));
+    await click(host.querySelector('button[data-section-toggle="commits"]'));
+    await click(host.querySelector('button[data-sha="abc1234def"]'));
     expect(go).toHaveBeenCalledWith("code");
     expect(takeOpenIntent("trantor")).toEqual({ kind: "commit", sha: "abc1234def", seat: `wt:${WORKTREE}` });
   });

@@ -1,23 +1,25 @@
-// The source control sidebar (#14044): the one column the Workspace's left side and Code's sidebar
-// share: Changes (flat list with the commit box), Files, Recent commits, Stashes, every section collapsible
-// and remembered in localStorage; every git mutation reuses the Code screen's scoped bridge.
-// #14047: ahead/behind + seats rows. #14058: every header stays on screen, bodies scroll alone.
+// The source control sidebar (#14044): the one column the Workspace's left side and Code's sidebar share.
+// #14344: one header row, a Changes / Files switch, one scroller, what needs the operator first, history folded.
+// Every git mutation reuses the Code screen's scoped bridge.
 import { useEffect, useState, type ReactNode } from "react";
-import { RefreshCw } from "lucide-react";
+import { Eye, RefreshCw } from "lucide-react";
 import { ago } from "../../../shared/time";
 import { ExplorerTree } from "../ExplorerTree";
-import { aheadLabel } from "../../../features/code/gitApi";
-import { MainCheckoutMark } from "../../screens/Code/parts";
+import { IconButton } from "../IconButton";
+import { NoteCard } from "../NoteCard";
+import { Seg } from "../Seg";
+import { isUnmerged } from "../../../features/code/gitApi";
 import type { SeatInfo } from "../../screens/Code/model";
-import { useScopeGit, type ScopeState } from "../../screens/Code/useScopeGit";
+import { useScopeGit, type ScopeSnapshot, type ScopeState } from "../../screens/Code/useScopeGit";
 import { isWorktreeScope, scopeFetch } from "../../screens/Code/scopeGitApi";
-import { scopeWorktreeLabel, useAgentWorktrees, type AgentWorktree } from "../../screens/Code/useAgentWorktrees";
+import { scopeWorktreeLabel, useAgentWorktrees, worktreeLabel, worktreeLive, worktreeScope, type AgentWorktree } from "../../screens/Code/useAgentWorktrees";
 import { AgentsSection } from "./AgentsSection";
 import { BranchesSection } from "./BranchesSection";
 import { ChangesSection } from "./ChangesSection";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { CommitsSection } from "./CommitsSection";
 import { StashesSection } from "./StashesSection";
+import { readScmView, writeScmView, type ScmView } from "./sectionState";
 
 export type ScmSidebarProps = {
   project: string;
@@ -43,10 +45,6 @@ export type ScmSidebarProps = {
   /** header-row extras: the column's collapse button, the open-full-tab button */
   actions?: ReactNode;
 };
-
-function CountBadge({ n }: { n: number }) {
-  return <span data-count className="v2-mono rounded-full bg-[var(--v2-track)] px-1.5 text-v2-micro text-[var(--v2-text-2)]">{n}</span>;
-}
 
 /** What a git-dependent section shows while the panel has no snapshot. */
 function Pending({ state }: { state: ScopeState }) {
@@ -106,67 +104,117 @@ export function ScmSidebar(p: ScmSidebarProps) {
   return <ScmSidebarView {...view} scopeName={scopeName} />;
 }
 
+const VIEWS = [{ value: "changes", label: "Changes" }, { value: "files", label: "Files" }] as const satisfies readonly { value: ScmView; label: string }[];
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** What needs the operator: files in conflict, and agents whose finished work waits in a worktree. */
+function NeedsYou({ snap, worktrees, scope, onOpenConflict, onPickScope }: {
+  snap: ScopeSnapshot | null; worktrees: AgentWorktree[]; scope: string | null;
+  onOpenConflict?: (path: string) => void; onPickScope: (scope: string) => void;
+}) {
+  const conflicts = snap ? snap.status.filter(isUnmerged) : [];
+  const ready = worktrees.filter(w => !worktreeLive(w) && w.changed > 0 && worktreeScope(w) !== scope).slice(0, 2);
+  if (conflicts.length === 0 && ready.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5 px-3 pb-1 pt-1">
+      {conflicts.length > 0 && (
+        <NoteCard note="conflicts" action={onOpenConflict ? { label: "Resolve", title: "Open the merge view", onClick: () => onOpenConflict(conflicts[0].path) } : undefined}>
+          {plural(conflicts.length, "file is", "files are")} in conflict
+        </NoteCard>
+      )}
+      {ready.map(w => (
+        <NoteCard key={w.path} note="ready" action={{ label: "Review", title: "Read this worktree", onClick: () => onPickScope(worktreeScope(w)) }}>
+          {worktreeLabel(w)} has {plural(w.changed, "file", "files")} ready in its worktree
+        </NoteCard>
+      ))}
+    </div>
+  );
+}
+
+const arrows = (snap: ScopeSnapshot) => [snap.ahead ? `↑${snap.ahead}` : "", snap.behind ? `↓${snap.behind}` : ""].filter(Boolean).join(" ");
+
 function ScmSidebarView(p: ViewProps) {
   const snap = p.state.kind === "ok" ? p.state.snap : null;
   const fetch = useFetch(p.project, p.scope, p.onMutated);
+  const [view, setViewState] = useState<ScmView>(readScmView);
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
+  const setView = (next: ScmView) => { setViewState(next); writeScmView(next); };
   const upstreamTitle = snap?.upstream ? `upstream ${snap.upstream}` : "no upstream: ahead counts unlanded work against main";
   const aheadTitle = `${upstreamTitle}${fetch.fetchedAt ? ` · fetched ${ago(fetch.fetchedAt)}` : ""}`;
+  const away = snap ? arrows(snap) : "";
+  const tone = !snap ? "faint" : snap.behind ? "warn" : snap.ahead ? "accent" : "ok";
+  const dotColor = { faint: "var(--v2-faint)", warn: "var(--v2-warn)", accent: "var(--v2-accent)", ok: "var(--v2-ok)" }[tone];
+  const dotTitle = away ? aheadTitle : snap?.upstream ? `in sync with ${snap.upstream}` : "all landed";
   return (
     <div data-testid="scm-sidebar" className="flex min-h-0 flex-1 flex-col">
-      <header className="flex shrink-0 flex-col gap-1 border-b border-[var(--v2-edge)] px-3 pb-2 pt-2.5">
-        <div className="flex items-center gap-1">
-          <span className="flex-1 text-v2-small font-semibold uppercase tracking-[0.06em] text-[var(--v2-muted)]">Source control</span>
-          <button type="button" aria-label="Fetch from origin" title="Fetch origin with prune" disabled={fetch.busy}
-            onClick={() => { void fetch.run(); }}
-            className="v2-hover inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--v2-muted)] disabled:opacity-45">
+      <header className="flex shrink-0 flex-col px-3 pt-1">
+        <div className="flex h-8 items-center gap-2">
+          <span data-state-dot data-tone={tone} role="img" aria-label={dotTitle} title={dotTitle} className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: dotColor }} />
+          <span className="v2-mono min-w-0 truncate text-v2-body text-[var(--v2-text)]" title={snap?.branch ?? "reading…"}>{snap?.branch ?? "reading…"}</span>
+          {away && <span data-ahead className="v2-mono shrink-0 text-v2-body text-[var(--v2-accent)]" title={aheadTitle}>{away}</span>}
+          <span className="flex-1" />
+          <IconButton label="Fetch from origin" title="Fetch origin with prune" size={24} disabled={fetch.busy} onClick={() => { void fetch.run(); }}>
             <RefreshCw size={13} aria-hidden className={fetch.busy ? "animate-spin" : undefined} />
-          </button>
+          </IconButton>
           {p.actions && <span className="flex shrink-0 items-center gap-1">{p.actions}</span>}
         </div>
-        <div className="flex min-w-0 items-center gap-1.5 text-v2-small">
-          <span className="v2-mono min-w-0 shrink-0 truncate text-[var(--v2-text)]" title={snap?.branch ?? "reading…"}>{snap?.branch ?? "reading…"}</span>
-          {snap && !snap.seatBacked && <MainCheckoutMark />}
-          {snap && (
-            <span data-ahead className="v2-mono shrink-0 text-v2-small text-[var(--v2-muted)]"
-              title={aheadTitle}>
-              {aheadLabel(snap)}
+        {p.scope !== null && (
+          <div className="flex flex-col items-start gap-1 pb-2">
+            <span data-scope-pill title={p.scopeName} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--v2-edge-2)] px-2 py-0.5 text-v2-small text-[var(--v2-text-2)]">
+              <Eye size={11} aria-hidden className="shrink-0" /><span className="truncate">{p.scopeName}’s worktree, read only</span>
             </span>
-          )}
-          <span className="min-w-0 flex-1 truncate text-right text-[var(--v2-muted)]" title={p.scopeName}>{p.scopeName}</span>
-        </div>
+            <button type="button" onClick={() => p.onPickScope(null)} className="border-0 bg-transparent p-0 text-v2-small text-[var(--v2-link)]">Back to my checkout</button>
+          </div>
+        )}
       </header>
       {fetch.error && (
-        <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-v2-body text-[var(--v2-bad)]">{fetch.error}</div>
+        <div role="alert" className="px-3 py-2 text-v2-body text-[var(--v2-bad)]">{fetch.error}</div>
       )}
       {p.state.kind === "error" && (
-        <div role="alert" className="border-b border-[var(--v2-edge)] px-3 py-2 text-v2-body text-[var(--v2-bad)]">{p.state.reason}</div>
+        <div role="alert" className="px-3 py-2 text-v2-body text-[var(--v2-bad)]">{p.state.reason}</div>
       )}
-      {/* #14058: open bodies scroll in place; the column itself scrolls only when the sections' floors no longer fit */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <CollapsibleSection section="changes" title="Changes" badge={snap ? <CountBadge n={snap.status.length} /> : undefined}>
-          {snap
-            ? <ChangesSection project={p.project} snap={snap} selected={p.selectedPath ?? null} onOpen={p.onOpenChange}
-              onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
-            : <Pending state={p.state} />}
-        </CollapsibleSection>
-        <CollapsibleSection section="files" title="Files" sizing="fill">
-          <ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} />
-        </CollapsibleSection>
-        <CollapsibleSection section="commits" title="Recent commits" badge={snap ? <CountBadge n={snap.log.length} /> : undefined}>
-          {snap ? <CommitsSection key={p.scope ?? "project"} log={snap.log} onOpen={p.onOpenCommit} /> : <Pending state={p.state} />}
-        </CollapsibleSection>
-        <CollapsibleSection section="stashes" title="Stashes">
-          {snap ? <StashesSection project={p.project} scope={p.scope} onMutated={p.onMutated} /> : <Pending state={p.state} />}
-        </CollapsibleSection>
-        {p.worktrees.length > 0 && (
-          <CollapsibleSection section="agents" title="Agents working" badge={<CountBadge n={p.worktrees.length} />}>
-            <AgentsSection project={p.project} worktrees={p.worktrees} scope={p.scope} onPickScope={p.onPickScope} />
-          </CollapsibleSection>
-        )}
-        <CollapsibleSection section="branches" title="Branches and seats" badge={<CountBadge n={1 + p.seats.length} />}>
-          <BranchesSection project={p.project} scope={p.scope} seats={p.seats} onPickScope={p.onPickScope} />
-        </CollapsibleSection>
+      <div className="shrink-0 px-3 pb-2">
+        <Seg fill label="Source control view" options={VIEWS} value={view} onChange={setView} />
+      </div>
+      {view === "files" && <div ref={setToolbarSlot} data-files-toolbar className="shrink-0" />}
+      {/* #14344: one scroller for the whole column; groups open and close in it, none scrolls inside itself. */}
+      <div data-scm-scroller className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        {view === "files"
+          ? toolbarSlot && <ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} openPath={p.selectedPath ?? null} toolbarSlot={toolbarSlot} />
+          : <ChangesView {...p} snap={snap} />}
       </div>
     </div>
+  );
+}
+
+function ChangesView(p: ViewProps & { snap: ScopeSnapshot | null }) {
+  const { snap } = p;
+  return (
+    <>
+      <NeedsYou snap={snap} worktrees={p.worktrees} scope={p.scope} onOpenConflict={p.onOpenConflict} onPickScope={p.onPickScope} />
+      {snap
+        ? <ChangesSection project={p.project} snap={snap} selected={p.selectedPath ?? null} onOpen={p.onOpenChange}
+          onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
+        : <Pending state={p.state} />}
+      {p.worktrees.length > 0 && (
+        <CollapsibleSection section="agents" title="Agents working" count={p.worktrees.length}>
+          <AgentsSection project={p.project} worktrees={p.worktrees} scope={p.scope} onPickScope={p.onPickScope} />
+        </CollapsibleSection>
+      )}
+      {snap && (
+        <>
+          <CollapsibleSection section="commits" title="Recent commits" count={snap.log.length} defaultOpen={false}>
+            <CommitsSection key={p.scope ?? "project"} log={snap.log} onOpen={p.onOpenCommit} />
+          </CollapsibleSection>
+          <CollapsibleSection section="stashes" title="Stashes" defaultOpen={false}>
+            <StashesSection project={p.project} scope={p.scope} onMutated={p.onMutated} />
+          </CollapsibleSection>
+          <CollapsibleSection section="branches" title="Branches and seats" count={1 + p.seats.length} defaultOpen={false}>
+            <BranchesSection project={p.project} scope={p.scope} seats={p.seats} onPickScope={p.onPickScope} />
+          </CollapsibleSection>
+        </>
+      )}
+    </>
   );
 }

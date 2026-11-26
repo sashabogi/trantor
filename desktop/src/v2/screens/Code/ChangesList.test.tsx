@@ -46,9 +46,19 @@ afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.uns
 const flush = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
 const click = async (target: HTMLElement | null | undefined) => { await act(async () => { target?.click(); }); await flush(); };
 const button = (text: string) => [...host.querySelectorAll("button")].find(item => item.textContent?.includes(text));
+const menuItem = (text: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === text);
+const openMenu = () => click(host.querySelector<HTMLElement>('button[aria-label="More commit actions"]'));
+const field = (id: string) => host.querySelector<HTMLInputElement | HTMLTextAreaElement>(id);
 const mount = async (snapshot: ScopeSnapshot = snap, staged = 1) => {
   await act(async () => { root.render(<CommitBox project="trantor" snap={snapshot} staged={staged} onDone={done} onError={errors} />); });
   await flush();
+};
+const typeInto = async (target: HTMLInputElement | HTMLTextAreaElement | null, value: string) => {
+  const proto = target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(target, value);
+    target?.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 };
 const message = async (value: string) => {
   const field = host.querySelector<HTMLInputElement>("#v2-commit-msg");
@@ -61,8 +71,10 @@ const message = async (value: string) => {
 describe("CommitBox G3", () => {
   it("loads the last subject and amends even when nothing new is staged", async () => {
     await mount(snap, 0);
-    await click(host.querySelector<HTMLElement>('input[type="checkbox"]'));
+    await openMenu();
+    await click(menuItem("Amend last commit"));
     expect(host.querySelector<HTMLInputElement>("#v2-commit-msg")?.value).toBe("previous subject");
+    expect(host.textContent).toContain("Amending the last commit");
     await click(button("Amend commit"));
     expect(calls.find(call => call.command === "git_commit_amend")?.args).toEqual({ project: "trantor", scope: "project", message: "previous subject" });
     expect(done).toHaveBeenCalled();
@@ -70,24 +82,27 @@ describe("CommitBox G3", () => {
 
   it("undoes an unpushed commit and restores its message", async () => {
     await mount();
-    await click(button("Undo last commit"));
+    await openMenu();
+    await click(menuItem("Undo last commit"));
     expect(calls.find(call => call.command === "git_commit_undo")?.args).toEqual({ project: "trantor", scope: "project" });
     expect(host.querySelector<HTMLInputElement>("#v2-commit-msg")?.value).toBe("previous message");
     expect(done).toHaveBeenCalled();
   });
 
-  it("refuses amend and undo in the controls when HEAD is already pushed", async () => {
+  it("refuses amend and undo in the menu when HEAD is already pushed", async () => {
     await mount({ ...snap, ahead: 0 });
-    expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')?.disabled).toBe(true);
-    expect(button("Undo last commit")?.disabled).toBe(true);
-    expect(button("Undo last commit")?.title).toContain("already pushed");
+    await openMenu();
+    expect(menuItem("Amend last commit")?.disabled).toBe(true);
+    expect(menuItem("Undo last commit")?.disabled).toBe(true);
+    expect(menuItem("Undo last commit")?.title).toContain("already pushed");
     expect(calls).toEqual([]);
   });
 
   it("commits first and then pushes as the second commit action", async () => {
     await mount();
     await message("ship G3");
-    await click(button("Commit and push"));
+    await openMenu();
+    await click(menuItem("Commit and push"));
     expect(calls.map(call => call.command)).toEqual(["git_commit", "git_push"]);
     expect(calls[0].args).toEqual({ project: "trantor", scope: "project", message: "ship G3" });
     expect(done).toHaveBeenCalled();
@@ -98,22 +113,56 @@ describe("CommitBox G3", () => {
     localStorage.setItem(MODE_KEY, "orchestrator");
     await mount();
     await message("must not commit");
-    expect(button("Commit and push")?.disabled).toBe(true);
-    await click(button("Commit and push"));
+    await openMenu();
+    expect(menuItem("Commit and push")?.disabled).toBe(true);
+    await click(menuItem("Commit and push"));
     expect(calls).toEqual([]);
   });
+});
 
-  it("wraps the commit buttons instead of clipping them, each filling its own line", async () => {
+describe("CommitBox, the calm commit area (#14344)", () => {
+  it("shows only the message field and the quiet last commit while nothing is staged", async () => {
+    await mount(snap, 0);
+    expect(field("#v2-commit-msg")?.placeholder).toBe("Message for your commit");
+    expect(field("#v2-commit-desc")).toBeNull();
+    expect(button("Commit ")).toBeUndefined();
+    expect(host.textContent).toContain("Nothing to commit");
+    expect(host.textContent).toContain("previous subject");
+    expect(host.querySelector("[data-char-count]")).toBeNull();
+  });
+
+  it("with files staged it grows a description, a character count and one Commit N files button", async () => {
+    await mount(snap, 3);
+    expect(field("#v2-commit-desc")).not.toBeNull();
+    const primary = button("Commit 3 files");
+    expect(primary).toBeDefined();
+    expect(primary?.textContent).not.toContain("main");
+    expect(primary?.textContent).toContain("⌘↵");
+    await message("twelve chars");
+    expect(host.querySelector("[data-char-count]")?.textContent).toBe("12");
+  });
+
+  it("turns the count warn past 72 characters", async () => {
+    await mount(snap, 1);
+    await message("x".repeat(72));
+    expect(host.querySelector("[data-char-count]")?.className).not.toContain("--v2-warn");
+    await message("x".repeat(73));
+    expect(host.querySelector("[data-char-count]")?.className).toContain("--v2-warn");
+  });
+
+  it("sends the description after a blank line, and Cmd+Enter commits from the field", async () => {
+    await mount(snap, 2);
+    await message("the summary");
+    await typeInto(field("#v2-commit-desc"), "why it changed");
+    await act(async () => { field("#v2-commit-msg")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); });
+    await flush();
+    expect(calls.find(call => call.command === "git_commit")?.args).toEqual({ project: "trantor", scope: "project", message: "the summary\n\nwhy it changed" });
+  });
+
+  it("the split chevron lists the three rare actions and the button never repeats the branch", async () => {
     await mount();
-    const commit = button("Commit 1 file to main");
-    const push = button("Commit and push");
-    expect(commit).toBeTruthy();
-    expect(push).toBeTruthy();
-    expect(commit?.parentElement?.className).toContain("flex-wrap");
-    for (const target of [commit, push]) {
-      expect(target?.className).toContain("grow");
-      expect(target?.className).toContain("shrink-0");
-      expect(target?.className).toContain("basis-auto");
-    }
+    await openMenu();
+    expect([...host.querySelectorAll('[role="menuitem"]')].map(item => item.textContent)).toEqual(["Commit and push", "Amend last commit", "Undo last commit"]);
+    expect(host.textContent).not.toContain("to main");
   });
 });

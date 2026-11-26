@@ -1,7 +1,7 @@
 import { useActivePane } from "../../ui/useActivePane";
 // The sidebar beside file tabs (#13988): Explorer, Search, the source control sidebar, Agents,
 // Cards. The "source" view is the same ScmSidebar the Workspace left column shows
-// (#14044): Changes, Files and Recent commits, one flat list with the commit box.
+// (#14044, #14344): a Changes / Files switch over one scroller, the calm commit area and folded history.
 import { Maximize2 } from "lucide-react";
 import type { Card, HubClient } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";

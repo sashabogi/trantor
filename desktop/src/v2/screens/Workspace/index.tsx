@@ -107,9 +107,11 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   }, [seats, setSelKey]);
   // #13987 drill: a chosen file used to be dropped on navigate; the intent carries it to the Code screen.
   // #14265: the intents carry the scope the sidebar shows, which is a wt: scope while an agent worktree is picked.
-  const openFile = (path: string) => { setOpenIntent(project, { kind: "file", path, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
+  // #14344: the last file opened from the sidebar keeps its selected row, like the Code screen's open file.
+  const [openedPath, setOpenedPath] = useState<string | null>(null);
+  const openFile = (path: string) => { setOpenedPath(path); setOpenIntent(project, { kind: "file", path, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
   // #14044 drill: a changed file or a commit clicked in the source control sidebar opens Code on it.
-  const openChange = (path: string) => { setOpenIntent(project, { kind: "change", path, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
+  const openChange = (path: string) => { setOpenedPath(path); setOpenIntent(project, { kind: "change", path, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
   const openCommit = (sha: string) => { setOpenIntent(project, { kind: "commit", sha, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
 
   let body;
@@ -130,7 +132,8 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
     <div ref={workspaceRef} className="flex min-h-0 flex-1 gap-[6px] bg-[var(--v2-chrome)] p-[6px]">
       <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
         scopeName={scope ?? "project checkout"} seats={seatInfos} onPickScope={pickScope}
-        onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} onShownScope={setShownScope} />
+        onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} onShownScope={setShownScope}
+        selectedPath={openedPath} onOpenConflict={openChange} />
       <div {...pane} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
         {data.error && data.seats !== null && <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>}
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}

@@ -219,6 +219,7 @@ describe("behaviour", () => {
 describe("both screens use it", () => {
   it("the Workspace Files column renders the new tree", async () => {
     localStorage.setItem(FILES_OPEN_KEY, "true");
+    localStorage.setItem("trantor.v2.scm.view", "files");
     const ref = { current: null };
     function Column() {
       const col = useFilesColumn();

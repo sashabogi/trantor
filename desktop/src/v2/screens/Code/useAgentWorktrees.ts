@@ -47,6 +47,10 @@ export const worktreeLive = (w: AgentWorktree, now = Date.now()): boolean => w.l
 export const worktreeCounts = (w: AgentWorktree): string =>
   `${w.changed} ${w.changed === 1 ? "file" : "files"} changed · ${w.ahead} ${w.ahead === 1 ? "commit" : "commits"}`;
 
+/** The sidebar's short form: "3 files · 1 commit". */
+export const worktreeBrief = (w: AgentWorktree): string =>
+  `${w.changed} ${w.changed === 1 ? "file" : "files"} · ${w.ahead} ${w.ahead === 1 ? "commit" : "commits"}`;
+
 /** Agent and helper worktrees only; seats already have their own rows. */
 export function useAgentWorktrees(project: string): AgentWorktree[] {
   const [rows, setRows] = useState<AgentWorktree[]>([]);

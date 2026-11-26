@@ -285,8 +285,7 @@ describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
 
   it("stages, unstages and commits on the checkout by scope, never by an agent", async () => {
     await mount();
-    const commit = button("Commit 1 file to main");
-    expect(commit?.querySelector("[data-main-checkout]")).not.toBeNull();
+    expect(button("Commit 1 file")).toBeDefined();
     await click('button[aria-label="Unstage src/staged.ts"]');
     expect(calls.find(c => c.command === "git_stage")?.args).toEqual({ project: "trantor", scope: "project", paths: ["src/staged.ts"], unstage: true });
     await click('button[aria-label="Stage bin/a.mjs"]');
@@ -297,7 +296,7 @@ describe("CodeScreen on the project's main checkout (#13988 drill)", () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "#13988 land it");
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await act(async () => { button("Commit 1 file to main")?.click(); });
+    await act(async () => { button("Commit 1 file")?.click(); });
     await flush();
     expect(calls.find(c => c.command === "git_commit")?.args).toEqual({ project: "trantor", scope: "project", message: "#13988 land it" });
   });

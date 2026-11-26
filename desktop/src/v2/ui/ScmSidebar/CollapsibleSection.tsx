@@ -1,51 +1,36 @@
-// One collapsible section of the source control sidebar (#14044): a chevron header with badge and
-// row actions, the open/closed choice remembered per section in localStorage. #14058: the section
-// owns its scrolling so every header stays on screen: "fill" takes the space the others leave
-// (Files), "content" sizes to its content and stops at 40% of the column.
+// One collapsible group of the source control sidebar (#14044): a GroupHeader and a body that sits in the
+// column's one scroller, the open/closed choice remembered per section in localStorage.
+// #14344: no inner scroller; groups that are history, not work, start folded.
 import { useId, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { GroupHeader, type HeaderAction } from "../GroupHeader";
 import { readScmSectionOpen, writeScmSectionOpen } from "./sectionState";
-
-export type SectionSizing = "fill" | "content";
 
 export type CollapsibleSectionProps = {
   /** persistence key suffix: trantor.v2.scm.<section> */
   section: string;
   title: string;
-  /** a count beside the title */
-  badge?: ReactNode;
-  /** header-row actions (kept outside the toggle button so they stay clickable) */
-  actions?: ReactNode;
-  /** fill grows to the space the other sections leave; content stops at 40% of the column */
-  sizing?: SectionSizing;
+  count?: number;
+  /** hover-only text actions in the header */
+  actions?: HeaderAction[];
+  /** a trailing control such as a menu button */
+  menu?: ReactNode;
+  /** the state before the operator chooses; folded groups pass false */
+  defaultOpen?: boolean;
   children: ReactNode;
 };
 
-export function CollapsibleSection({ section, title, badge, actions, sizing = "content", children }: CollapsibleSectionProps) {
-  const [open, setOpen] = useState(() => readScmSectionOpen(section));
+export function CollapsibleSection({ section, title, count, actions, menu, defaultOpen = true, children }: CollapsibleSectionProps) {
+  const [open, setOpen] = useState(() => readScmSectionOpen(section, defaultOpen));
   const id = useId();
   const toggle = () => setOpen(o => {
     const next = !o;
     writeScmSectionOpen(section, next);
     return next;
   });
-  // Collapsed is only its header row, never squashed; open bodies scroll inside themselves.
-  // #14058 drill: with every section open Files was squeezed to nothing and its header drawn under the next one, so open sections keep a floor.
-  const spaceClass = !open ? "shrink-0" : sizing === "fill" ? "min-h-[150px] flex-1" : "max-h-[40%] min-h-[64px] shrink";
   return (
-    <section aria-label={title} data-section={section} className={`flex flex-col border-b border-[var(--v2-edge)] ${spaceClass}`}>
-      <div className="flex shrink-0 items-center pr-2">
-        <button type="button" aria-expanded={open} aria-controls={id} data-section-toggle={section}
-          title={open ? `Hide ${title}` : `Show ${title}`} onClick={toggle}
-          className="flex min-w-0 flex-1 items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-v2-body font-semibold text-[var(--v2-text-2)] hover:bg-[var(--v2-raised)]">
-          {open ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />}
-          <span className="truncate">{title}</span>
-          {badge ? <span className="shrink-0">{badge}</span> : null}
-        </button>
-        {actions && <span className="flex shrink-0 items-center gap-0.5">{actions}</span>}
-      </div>
-      {open && <div id={id} data-section-body={section}
-        className={sizing === "fill" ? "min-h-0 flex-1 overflow-y-auto" : "min-h-0 overflow-y-auto"}>{children}</div>}
+    <section aria-label={title} data-section={section} className="flex shrink-0 flex-col border-t border-[var(--v2-edge-soft)] first:border-t-0">
+      <GroupHeader section={section} title={title} count={count} open={open} onToggle={toggle} actions={actions} menu={menu} controls={id} />
+      {open && <div id={id} data-section-body={section} className="flex flex-col pb-1">{children}</div>}
     </section>
   );
 }

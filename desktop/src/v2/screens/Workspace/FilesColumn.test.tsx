@@ -30,9 +30,11 @@ let host: HTMLDivElement;
 let root: Root;
 let navigated: string[];
 let herdrSeatsReply = "[]";
+let conflicted = false;
 beforeEach(() => {
   navigated = [];
   herdrSeatsReply = "[]";
+  conflicted = false;
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
@@ -46,7 +48,7 @@ beforeEach(() => {
       // SAFETY: mockIPC types payload as unknown; git_panel is invoked with an object of named args.
       const args = (payload ?? {}) as { agent?: string; scope?: string };
       if (args.agent) return JSON.stringify({ ...PANEL, branch: `seat/${args.agent}`, upstream: null, ahead: 3, behind: null });
-      return JSON.stringify(PANEL);
+      return JSON.stringify(conflicted ? { ...PANEL, status: [...PANEL.status, { path: "src/c.ts", x: "U", y: "U" }] } : PANEL);
     }
     if (command === "plugin:event|listen") return 1;
     return null;
@@ -95,7 +97,7 @@ describe("defaults by mode", () => {
     await mountScreen();
     expect(column()).not.toBeNull();
     expect(rail()).toBeNull();
-    expect(column()?.textContent).toContain("project checkout");
+    expect(column()?.querySelector('[data-testid="scm-sidebar"]')).not.toBeNull();
   });
 
   it("a stored choice beats the mode default", async () => {
@@ -206,15 +208,16 @@ describe("panes as panels (#14250)", () => {
 describe("the source control sidebar (#14044)", () => {
   beforeEach(() => { localStorage.setItem(FILES_OPEN_KEY, "true"); });
 
-  it("reads Source control with the branch, the scope name and all three sections", async () => {
+  it("reads the branch once, with the Changes and Files switch, the open Changes group and the history folded", async () => {
     await mountScreen();
     const col = column();
-    expect(col?.textContent).toContain("Source control");
-    expect(col?.textContent).toContain("main");
-    expect(col?.textContent).toContain("project checkout");
+    expect(col?.getAttribute("aria-label")).toBe("Source control");
+    expect(col?.querySelector("header")?.textContent).toContain("main");
+    expect(col?.querySelector("[data-scope-pill]")).toBeNull();
+    expect(col?.querySelector('[role="group"][aria-label="Source control view"] button[aria-pressed="true"]')?.textContent).toBe("Changes");
     expect(col?.querySelector('[data-section-body="changes"]')).not.toBeNull();
-    expect(col?.querySelector('[data-section-body="files"]')).not.toBeNull();
-    expect(col?.querySelector('[data-section-body="commits"]')).not.toBeNull();
+    expect(col?.querySelector('[data-section="commits"]')).not.toBeNull();
+    expect(col?.querySelector('[data-section-body="commits"]')).toBeNull();
   });
 
   it("clicking a changed file opens Code on that file's diff", async () => {
@@ -226,6 +229,7 @@ describe("the source control sidebar (#14044)", () => {
 
   it("clicking a commit opens Code on History with that commit", async () => {
     await mountScreen();
+    await click(column()?.querySelector('button[data-section-toggle="commits"]') ?? null);
     await click(column()?.querySelector('[data-sha="abc1234"]') ?? null);
     expect(navigated).toEqual(["code"]);
     expect(takeOpenIntent("trantor")).toEqual({ kind: "commit", sha: "abc1234", seat: undefined });
@@ -233,11 +237,51 @@ describe("the source control sidebar (#14044)", () => {
 
   it("still opens a file from the tree through a file intent", async () => {
     await mountScreen();
+    await click([...(column()?.querySelectorAll("button") ?? [])].find(b => b.textContent === "Files") ?? null);
+    await settle();
     const row = [...(column()?.querySelectorAll<HTMLElement>('[role="treeitem"]') ?? [])].find(b => b.textContent?.includes("README.md"));
     expect(row).toBeDefined();
     await click(row ?? null);
     expect(navigated).toEqual(["code"]);
     expect(takeOpenIntent("trantor")).toEqual({ kind: "file", path: "README.md", seat: undefined });
+  });
+});
+
+describe("Workspace parity with the Code screen (#14344)", () => {
+  beforeEach(() => { localStorage.setItem(FILES_OPEN_KEY, "true"); });
+
+  it("a change opened from the sidebar keeps its row selected, like the open file in Code", async () => {
+    await mountScreen();
+    expect(column()?.querySelector('[data-change="bin/a.mjs"]')?.hasAttribute("data-selected")).toBe(false);
+    await click(column()?.querySelector('button[title="Show the diff for bin/a.mjs"]') ?? null);
+    expect(column()?.querySelector('[data-change="bin/a.mjs"]')?.getAttribute("data-selected")).toBe("true");
+    expect(column()?.querySelector('[data-change="src/staged.ts"]')?.hasAttribute("data-selected")).toBe(false);
+  });
+
+  it("a file opened from the tree keeps its row selected there too", async () => {
+    await mountScreen();
+    await click([...(column()?.querySelectorAll("button") ?? [])].find(b => b.textContent === "Files") ?? null);
+    await settle();
+    await click(column()?.querySelector('[role="treeitem"][data-path="README.md"]') ?? null);
+    expect(column()?.querySelector('[role="treeitem"][data-path="README.md"]')?.getAttribute("data-selected")).toBe("true");
+  });
+
+  it("a conflicted file's Resolve opens Code on that file instead of doing nothing", async () => {
+    conflicted = true;
+    await mountScreen();
+    const note = column()?.querySelector('[data-note="conflicts"]');
+    expect(note?.textContent).toContain("in conflict");
+    await click(note?.querySelector("button") ?? null);
+    expect(navigated).toEqual(["code"]);
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "change", path: "src/c.ts", seat: undefined });
+  });
+
+  it("the chip on a conflicted row opens the same place", async () => {
+    conflicted = true;
+    await mountScreen();
+    await click(column()?.querySelector('[data-change="src/c.ts"] button[title="Resolve this conflict"]') ?? null);
+    expect(navigated).toEqual(["code"]);
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "change", path: "src/c.ts", seat: undefined });
   });
 });
 
@@ -256,6 +300,7 @@ describe("Branches and seats (#14047)", () => {
 
   it("lists the main checkout and each seat with its branch and unlanded count", async () => {
     await mountScreen(seatPeersClient());
+    await click(column()?.querySelector('button[data-section-toggle="branches"]') ?? null);
     const col = column();
     expect(col?.querySelector('button[data-scope-row="main"]')?.textContent).toContain("main checkout");
     const row = col?.querySelector<HTMLButtonElement>('button[data-scope-row="codex-8"]');
@@ -267,6 +312,7 @@ describe("Branches and seats (#14047)", () => {
 
   it("clicking a seat row reads that seat's changes in the sidebar; the main row returns to the checkout", async () => {
     await mountScreen(seatPeersClient());
+    await click(column()?.querySelector('button[data-section-toggle="branches"]') ?? null);
     await click(column()?.querySelector('button[data-scope-row="codex-8"]') ?? null);
     await settle(); await settle();
     expect(column()?.querySelector("header")?.textContent).toContain("seat/codex-8");

@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { projectFiles, type FileEntry } from "../../features/code/fileApi";
-import { scopePanel } from "../screens/Code/scopeGitApi";
-import { rollUp, type FolderMark, type GitPath } from "./explorerStatus";
+import { useScopeGit } from "../screens/Code/useScopeGit";
+import { rollUp, type FolderMark } from "./explorerStatus";
 
 const POLL_MS = 10_000;
 export type Row = { entry: FileEntry; depth: number };
 export type Counts = { plus: number | null; minus: number | null };
-type Git = { status: GitPath[]; counts: Map<string, Counts> };
 
 export const expandedKey = (project: string, seat: string | null) => `trantor.v2.explorer.expanded.${project}.${seat ?? "project"}`;
 function readExpanded(key: string): string[] {
@@ -51,7 +50,8 @@ export function useExplorerData(project: string, seat: string | null): ExplorerD
   const [kids, setKids] = useState<Record<string, FileEntry[]>>({});
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string[]>(() => readExpanded(key));
-  const [git, setGit] = useState<Git | null>(null);
+  // #14344: the status comes from the one shared scope read, not a poll of its own.
+  const { state: gitState, refresh: refreshGit } = useScopeGit(project, seat);
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
   const alive = useRef(true);
@@ -62,23 +62,20 @@ export function useExplorerData(project: string, seat: string | null): ExplorerD
     if (list && alive.current) setKids(prev => ({ ...prev, [dir]: list }));
   }, [project, seat]);
 
-  const refresh = useCallback(() => {
+  const refreshListing = useCallback(() => {
     projectFiles(project, undefined, seat ?? undefined)
       .then(r => { if (alive.current) { setRoots(r); setError(null); } })
       .catch(e => { if (alive.current) setError(e instanceof Error ? e.message : String(e)); });
     for (const dir of expandedRef.current) void loadDir(dir);
-    // A failed git read just leaves the plain listing codes in charge: the tree must still render.
-    scopePanel(project, seat, 1).then(p => {
-      if (alive.current) setGit({ status: p.status, counts: new Map(p.counts.map(c => [c.path, { plus: c.plus, minus: c.minus }])) });
-    }).catch(() => { if (alive.current) setGit(null); });
   }, [project, seat, loadDir]);
+  const refresh = useCallback(() => { refreshListing(); refreshGit(); }, [refreshListing, refreshGit]);
 
   useEffect(() => {
-    refresh();
+    refreshListing();
     const unlisten = listen<{ project: string }>("file-changed", ev => { if (ev.payload.project === project) refresh(); });
-    const iv = setInterval(refresh, POLL_MS);
+    const iv = setInterval(refreshListing, POLL_MS);
     return () => { clearInterval(iv); unlisten.then(u => u()).catch(() => {}); };
-  }, [refresh, project]);
+  }, [refresh, refreshListing, project]);
 
   const persist = useCallback((next: string[]) => {
     setExpanded(next);
@@ -95,7 +92,10 @@ export function useExplorerData(project: string, seat: string | null): ExplorerD
   }, [persist, expand]);
 
   const rows = useMemo(() => flatten(roots ?? [], kids, expanded), [roots, kids, expanded]);
-  const gitStatus = useMemo(() => new Map((git?.status ?? []).map(s => [s.path, { x: s.x, y: s.y }])), [git]);
-  const folders = useMemo(() => rollUp(git?.status ?? []), [git]);
-  return { roots, error, rows, expanded, toggle, expand, refresh, gitStatus, counts: git?.counts ?? new Map(), folders };
+  // A failed git read just leaves the plain listing codes in charge: the tree must still render.
+  const snap = gitState.kind === "ok" ? gitState.snap : null;
+  const gitStatus = useMemo(() => new Map((snap?.status ?? []).map(s => [s.path, { x: s.x, y: s.y }])), [snap]);
+  const counts = useMemo(() => new Map((snap?.counts ?? []).map(c => [c.path, { plus: c.plus, minus: c.minus }])), [snap]);
+  const folders = useMemo(() => rollUp(snap?.status ?? []), [snap]);
+  return { roots, error, rows, expanded, toggle, expand, refresh, gitStatus, counts, folders };
 }

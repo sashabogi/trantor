@@ -1,12 +1,13 @@
 // Staged and unstaged files with the commit box (#13988). Every mutation goes through the scoped
 // git commands; discard asks for confirmation and copies the work to the Trash first.
-import { useState, type ReactNode } from "react";
-import { Minus, Plus, Undo2 } from "lucide-react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { Minus, MoreHorizontal, Plus, Undo2 } from "lucide-react";
 import { bucketStatus, isUnmerged, lineCountFor, stageableChanges, type GitStatusEntry } from "../../../features/code/gitApi";
-import { Button } from "../../ui/Button";
-import { Checkbox } from "../../ui/Checkbox";
 import { IconButton } from "../../ui/IconButton";
-import { Counts, MainCheckoutMark, PathLabel, SectionLabel, StatusLetter } from "./parts";
+import { Kbd } from "../../ui/Kbd";
+import { SplitButton } from "../../ui/SplitButton";
+import { Popover } from "../../shell/Popover";
+import { Counts, PathLabel, SectionLabel, StatusLetter } from "./parts";
 import { fileChipLabel, type Letter } from "./model";
 import { checkoutMutationRefusal, historyMutationRefusal, scopeAmend, scopeCommit, scopePush, scopeStage, scopeUndo } from "./scopeGitApi";
 import { DiscardConfirmation, useDiscard } from "./DiscardControls";
@@ -29,7 +30,7 @@ function FileRow({ entry, letter, snap, selected, onSelect, onToggle, action, co
 }) {
   const n = lineCountFor(snap.counts, entry.path);
   return (
-    <div data-selected={selected || undefined} className={`group flex items-center gap-1.5 px-3 py-[3px] text-v2-body ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
+    <div data-selected={selected || undefined} className={`group flex items-center gap-1.5 px-3 py-1 text-v2-body ${selected ? "bg-[var(--v2-accent-soft)]" : "hover:bg-[var(--v2-raised)]"}`}>
       <button type="button" onClick={onSelect} title={`Show the diff for ${entry.path}`}
         onKeyDown={e => { if (e.key === " " && !conflict) { e.preventDefault(); onToggle(); } }} className="flex min-w-0 flex-1 items-center gap-2 border-0 bg-transparent p-0 text-left">
         <StatusLetter letter={letter} /><PathLabel path={entry.path} />
@@ -45,56 +46,90 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
   project: string; snap: ScopeSnapshot; staged: number; onDone: () => void; onError: (m: string) => void;
 }) {
   const [message, setMessage] = useState("");
+  const [description, setDescription] = useState("");
   const [amend, setAmend] = useState(false);
   const [busy, setBusy] = useState(false);
-  const target = snap.branch ?? "this checkout";
+  const [moreOpen, setMoreOpen] = useState(false);
   const mode = useShellMode();
   const pushRefusal = checkoutMutationRefusal(snap.scope, mode);
   const pushed = !!snap.upstream && snap.ahead === 0;
   const noCommit = snap.log.length === 0;
   const historyReason = historyMutationRefusal(snap.scope, mode) ?? (noCommit ? "There is no commit to change" : pushed ? "The last commit is already pushed" : null);
   const reason = !amend && staged === 0 ? "Nothing is staged yet" : !message.trim() ? "Write a commit message first" : amend && historyReason ? historyReason : busy ? "Working" : null;
+  const expanded = staged > 0 || amend;
+  const full = description.trim() ? `${message}\n\n${description.trim()}` : message;
+  const reset = () => { setMessage(""); setDescription(""); setAmend(false); };
   const commit = (push = false) => {
     setBusy(true);
-    void (amend ? scopeAmend(project, snap.scope, message) : scopeCommit(project, snap.scope, message))
+    void (amend ? scopeAmend(project, snap.scope, full) : scopeCommit(project, snap.scope, full))
       .then(() => push ? scopePush(project, snap.scope) : undefined)
-      .then(() => { setMessage(""); setAmend(false); onDone(); })
+      .then(() => { reset(); onDone(); })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
   };
   const undo = () => {
     setBusy(true);
     void scopeUndo(project, snap.scope)
-      .then(previous => { setMessage(previous); setAmend(false); onDone(); })
+      .then(previous => { setMessage(previous); setDescription(""); setAmend(false); onDone(); })
       .catch(e => onError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false));
   };
   const toggleAmend = () => {
     setAmend(value => !value);
     setMessage(amend ? "" : (snap.log[0]?.subject ?? ""));
+    setDescription("");
   };
+  // #14344: Cmd+Enter commits from either field.
+  const onKey = (e: KeyboardEvent<HTMLElement>) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !reason) commit(); };
+  const undoReason = busy ? "Working" : historyReason;
+  const amendItem = { label: "Amend last commit", onSelect: toggleAmend, disabledReason: busy ? "Working" : historyReason };
+  const undoItem = { label: "Undo last commit", onSelect: undo, disabledReason: undoReason };
+  const last = snap.log[0];
+  const length = message.length;
   return (
-    <div className="flex flex-col gap-1.5 border-b border-[var(--v2-edge)] px-3 py-2.5">
-      <label htmlFor="v2-commit-msg" className="sr-only">Commit message</label>
-      <input id="v2-commit-msg" value={message} onChange={e => setMessage(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !reason) commit(); }}
-        placeholder={`Message (⌘⏎ to commit to ${target})`}
-        className="w-full rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
-      <div className="flex items-center gap-2 text-v2-body text-[var(--v2-text-2)]">
-        <label className="flex items-center gap-1.5" title={historyReason ?? "Replace the last commit with its changes plus what is staged"}>
-          <Checkbox checked={amend} disabled={busy || !!historyReason} onChange={toggleAmend} />Amend last commit
-        </label>
-        <span className="flex-1" />
-        <Button variant="quiet" className="!px-2 !py-0.5 !text-v2-small" disabledReason={busy ? "Working" : historyReason} onClick={undo}><Undo2 size={12} aria-hidden />Undo last commit</Button>
+    <div className="flex flex-col gap-2 px-3 py-2">
+      <div className="relative flex items-center gap-1">
+        <label htmlFor="v2-commit-msg" className="sr-only">Commit message</label>
+        <input id="v2-commit-msg" value={message} onChange={e => setMessage(e.target.value)} onKeyDown={onKey}
+          placeholder="Message for your commit"
+          className={`min-w-0 flex-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] py-1.5 pl-2.5 text-v2-base text-[var(--v2-text)] outline-none ${expanded ? "pr-9" : "pr-2.5"}`} />
+        {expanded && <span data-char-count className={`v2-mono pointer-events-none absolute right-2.5 text-v2-small ${length > 72 ? "text-[var(--v2-warn)]" : "text-[var(--v2-muted)]"}`}>{length}</span>}
+        {!expanded && (
+          <span className="relative shrink-0">
+            <IconButton label="More commit actions" title="Amend or undo the last commit" size={28} onClick={() => setMoreOpen(o => !o)}><MoreHorizontal size={14} aria-hidden /></IconButton>
+            <Popover open={moreOpen} onClose={() => setMoreOpen(false)} label="More commit actions" align="right">
+              {[amendItem, undoItem].map(item => (
+                <button key={item.label} type="button" role="menuitem" disabled={!!item.disabledReason} title={item.disabledReason ?? undefined}
+                  onClick={() => { setMoreOpen(false); item.onSelect(); }}
+                  className="v2-hover flex w-full items-center rounded-md border-0 bg-transparent px-2 py-1.5 text-left text-v2-base text-[var(--v2-text-2)] disabled:opacity-45">{item.label}</button>
+              ))}
+            </Popover>
+          </span>
+        )}
       </div>
-      {/* #14237: the buttons wrap instead of clipping; alone on its line, each fills the row. */}
-      <div className="flex flex-wrap gap-1.5">
-        <Button variant="primary" onClick={() => commit()} disabledReason={reason} className="grow shrink-0 basis-auto justify-center">
-          {amend ? "Amend commit" : `Commit ${staged} ${staged === 1 ? "file" : "files"}`} to {target}
-          {!snap.seatBacked && <MainCheckoutMark />}
-        </Button>
-        <Button onClick={() => commit(true)} disabledReason={reason ?? pushRefusal} className="grow shrink-0 basis-auto justify-center">Commit and push</Button>
-      </div>
+      {expanded && (
+        <>
+          <label htmlFor="v2-commit-desc" className="sr-only">Commit description</label>
+          <textarea id="v2-commit-desc" value={description} onChange={e => setDescription(e.target.value)} onKeyDown={onKey} rows={2}
+            placeholder="Description (optional)"
+            className="w-full resize-none rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)] outline-none" />
+          {amend && (
+            <div className="flex items-center gap-2 text-v2-small text-[var(--v2-muted)]">
+              <span className="flex-1">Amending the last commit</span>
+              <button type="button" onClick={toggleAmend} className="border-0 bg-transparent p-0 text-v2-small text-[var(--v2-link)]">Cancel</button>
+            </div>
+          )}
+          <SplitButton label={amend ? "Amend commit" : `Commit ${staged} ${staged === 1 ? "file" : "files"}`} onPrimary={() => commit()} disabledReason={reason}
+            menuLabel="More commit actions" hint={<Kbd>⌘↵</Kbd>}
+            items={[{ label: "Commit and push", onSelect: () => commit(true), disabledReason: reason ?? pushRefusal }, amendItem, undoItem]} />
+        </>
+      )}
+      {snap.status.length === 0 && !amend && (
+        <div className="flex flex-col text-v2-small">
+          <span className="text-[var(--v2-text-2)]">Nothing to commit</span>
+          {last && <span className="truncate text-[var(--v2-faint)]" title={last.subject}>{last.subject} · {last.when}</span>}
+        </div>
+      )}
     </div>
   );
 }

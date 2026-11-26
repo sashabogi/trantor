@@ -26,6 +26,10 @@ export type FilesColumnProps = {
   onOpenCommit: (sha: string) => void;
   /** #14265: the scope the sidebar is showing, a wt: scope while an agent worktree is picked */
   onShownScope?: (scope: string | null) => void;
+  /** #14344: the file the host last opened, so its row shows as selected like in Code */
+  selectedPath?: string | null;
+  /** #14344: a conflicted row's Resolve; the host opens the merge flow */
+  onOpenConflict?: (path: string) => void;
 };
 
 /** The open column: the shared sidebar with this scope's git state, collapse button included. */
@@ -34,6 +38,7 @@ function ScmColumn(p: FilesColumnProps) {
   return (
     <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scopeName} state={state} seats={p.seats} onPickScope={p.onPickScope}
       onMutated={refresh} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onShownScope={p.onShownScope}
+      selectedPath={p.selectedPath} onOpenConflict={p.onOpenConflict}
       actions={<IconButton label="Collapse files" title="Collapse the source control sidebar to a rail" size={26} onClick={() => p.col.setOpen(false)}>
         <ChevronsLeft size={14} aria-hidden />
       </IconButton>} />

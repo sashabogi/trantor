@@ -3,6 +3,7 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight, File as FileIcon, Folder } from "lucide-react";
 import type { FileEntry } from "../../features/code/fileApi";
 import { Popover, MenuItem } from "../shell/Popover";
+import { LIST_ROW_SURFACE, rowIndent } from "./ListRow";
 import { TONE_VAR, countsLabel, decorationTitle, folderTitle, type Decoration, type FolderMark } from "./explorerStatus";
 
 export type RowMark = { deco: Decoration | null; folder?: FolderMark; plus?: number | null; minus?: number | null };
@@ -29,7 +30,7 @@ export function NameInput({ depth, initial = "", placeholder, onCommit, onCancel
     if (e.key === "Escape") finish(false, "");
   };
   return (
-    <div className="flex items-center py-[2px] pr-2" style={{ paddingLeft: 26 + depth * 12 }}>
+    <div className="flex h-6 items-center pr-2" style={{ paddingLeft: rowIndent(depth) + 18 }}>
       <input ref={ref} defaultValue={initial} placeholder={placeholder} aria-label={placeholder ?? "Name"} onKeyDown={onKey}
         onBlur={e => finish(true, e.currentTarget.value)}
         className="min-w-0 flex-1 rounded border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2 py-0.5 text-v2-body text-[var(--v2-text)] outline-none focus:border-[var(--v2-accent)]" />
@@ -58,12 +59,12 @@ export function ExplorerRow({ entry, depth, open, mark, selected, focusable, men
       <div role="treeitem" aria-level={depth + 1} aria-expanded={entry.dir ? open : undefined} aria-selected={selected}
         data-path={entry.path} tabIndex={focusable ? 0 : -1} title={rowTitle(entry, mark)}
         onClick={onActivate} onFocus={onFocusRow} onContextMenu={e => { e.preventDefault(); onMenu(); }}
-        draggable={!!drag} data-drop-over={drag?.over || undefined}
+        draggable={!!drag} data-drop-over={drag?.over || undefined} data-selected={selected || undefined}
         onDragStart={e => { if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", entry.path); } drag?.onStart(); }} onDragEnd={() => drag?.onEnd()}
         onDragOver={e => { if (entry.dir && drag) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "move"; drag.onOver(); } }}
         onDrop={e => { if (entry.dir && drag) { e.preventDefault(); e.stopPropagation(); drag.onDrop(); } }}
-        className={`v2-hover flex cursor-pointer items-center gap-1.5 py-[3px] pr-2 text-v2-body ${selected || drag?.over ? "bg-[var(--v2-raised)]" : ""}`}
-        style={{ paddingLeft: 6 + depth * 12 }}>
+        className={`${LIST_ROW_SURFACE} cursor-pointer data-[drop-over=true]:bg-[var(--v2-raised)]`}
+        style={{ paddingLeft: rowIndent(depth) }}>
         {entry.dir
           ? (open ? <ChevronDown size={12} aria-hidden className="shrink-0" /> : <ChevronRight size={12} aria-hidden className="shrink-0" />)
           : <span className="w-3 shrink-0" />}

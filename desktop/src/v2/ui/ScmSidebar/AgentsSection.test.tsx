@@ -77,10 +77,10 @@ describe("Agents working", () => {
     const rows = agentRows();
     expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain("agent a3b0430");
-    expect(rows[0].textContent).toContain("3 files changed · 1 commit");
+    expect(rows[0].textContent).toContain("3 files · 1 commit");
     expect(rows[0].textContent).toContain("1m ago");
     expect(rows[1].textContent).toContain("helper codex");
-    expect(rows[1].textContent).toContain("1 file changed · 0 commits");
+    expect(rows[1].textContent).toContain("1 file · 0 commits");
     expect(rows[1].textContent).toContain("30m ago");
   });
 
@@ -114,7 +114,9 @@ describe("Agents working", () => {
 });
 
 describe("Agents working: changed files", () => {
-  const fileRows = (row: Element) => [...row.parentElement!.querySelectorAll<HTMLButtonElement>("button[data-agent-file]")];
+  // the group is the agent row plus the file rows beneath it: button, then its ListRow, then the wrapper
+  const group = (row: Element) => row.parentElement!.parentElement!;
+  const fileRows = (row: Element) => [...group(row).querySelectorAll<HTMLButtonElement>("button[data-agent-file]")];
 
   it("a live row lists its changed files, base name then folder, and an idle row lists none", async () => {
     await renderSidebar();
@@ -123,7 +125,7 @@ describe("Agents working: changed files", () => {
     expect(files.map(f => f.textContent)).toEqual(["App.tsxdesktop/src", "README.md", "a.tssrc"]);
     expect(files[0].querySelector("span")?.textContent).toBe("App.tsx");
     expect(fileRows(idle)).toHaveLength(0);
-    expect(idle.parentElement?.textContent).not.toContain("idle.txt");
+    expect(group(idle).textContent).not.toContain("idle.txt");
   });
 
   it("says how many more files changed than are listed, and shows nothing extra when all are listed", async () => {
@@ -131,12 +133,12 @@ describe("Agents working: changed files", () => {
     await renderSidebar();
     const row = agentRows()[0];
     expect(fileRows(row)).toHaveLength(3);
-    expect(row.parentElement?.textContent).toContain("+6 more");
+    expect(group(row).textContent).toContain("+6 more");
     worktreeReply = [{ ...WORKTREES[0], changed: 3 }];
     await act(async () => { root.unmount(); });
     root = createRoot(host);
     await renderSidebar();
-    expect(agentRows()[0].parentElement?.textContent).not.toContain("more");
+    expect(group(agentRows()[0]).textContent).not.toContain("more");
   });
 
   it("a file click opens that worktree's file through the open intent, scoped to the worktree", async () => {

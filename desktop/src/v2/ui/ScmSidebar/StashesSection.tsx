@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Archive, CornerUpLeft, Trash2 } from "lucide-react";
 import { Button } from "../Button";
 import { IconButton } from "../IconButton";
+import { ListRow } from "../ListRow";
 import { useEscape } from "../useEscape";
 import { scopeStashChange, scopeStashes, scopeStashSave, type GitStash, type GitStashAction } from "../../screens/Code/scopeGitApi";
 
@@ -9,16 +10,15 @@ function StashRow({ stash, busy, onAction }: { stash: GitStash; busy: boolean; o
   const [dropping, setDropping] = useState(false);
   useEscape(() => setDropping(false), dropping);
   return (
-    <div data-stash={stash.name} className="flex flex-col">
-      <div className="flex items-center gap-1 px-3 py-1.5 text-v2-body">
-        <div className="min-w-0 flex-1" title={new Date(stash.created_at * 1000).toLocaleString()}>
-          <div className="truncate text-[var(--v2-text)]">{stash.message}</div>
-          <div className="v2-mono text-v2-micro text-[var(--v2-muted)]">{stash.name} · {stash.sha.slice(0, 7)}</div>
-        </div>
-        <IconButton label={`Apply ${stash.name}`} title="Apply this stash and keep it" size={22} disabled={busy} onClick={() => onAction("apply")}><CornerUpLeft size={12} aria-hidden /></IconButton>
-        <Button variant="quiet" title="Apply this stash and remove it from the list" disabledReason={busy ? "A stash action is running" : null} onClick={() => onAction("pop")}>Pop</Button>
-        <IconButton label={`Drop ${stash.name}`} title="Drop this stash" size={22} disabled={busy} onClick={() => setDropping(true)}><Trash2 size={12} aria-hidden /></IconButton>
-      </div>
+    <div className="flex flex-col">
+      <ListRow shell={{ "data-stash": stash.name, title: new Date(stash.created_at * 1000).toLocaleString() }}
+        name={stash.message} meta={`${stash.name} · ${stash.sha.slice(0, 7)}`}
+        actions={<>
+          <IconButton label={`Apply ${stash.name}`} title="Apply this stash and keep it" size={20} disabled={busy} onClick={() => onAction("apply")}><CornerUpLeft size={12} aria-hidden /></IconButton>
+          <button type="button" title="Apply this stash and remove it from the list" disabled={busy} onClick={() => onAction("pop")}
+            className="border-0 bg-transparent px-1 text-v2-small text-[var(--v2-link)] disabled:opacity-45">Pop</button>
+          <IconButton label={`Drop ${stash.name}`} title="Drop this stash" size={20} disabled={busy} onClick={() => setDropping(true)}><Trash2 size={12} aria-hidden /></IconButton>
+        </>} />
       {dropping && (
         <div role="alert" data-stash-drop-confirm={stash.name} className="mx-3 mb-1 flex flex-col gap-2 rounded-lg border border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-2.5 py-2 text-v2-body text-[var(--v2-text-2)]">
           <span>Drop {stash.name}? The changes in it are lost.</span>
@@ -56,7 +56,7 @@ export function StashesSection({ project, scope, onMutated }: { project: string;
   const save = () => run(() => scopeStashSave(project, scope, message));
   return (
     <div className="flex flex-col">
-      <div className="flex gap-1.5 px-3 py-2">
+      <div className="flex gap-1.5 px-2 py-1">
         <label htmlFor="v2-stash-message" className="sr-only">Stash message</label>
         <input id="v2-stash-message" value={message} onChange={e => setMessage(e.target.value)} placeholder="Stash message"
           onKeyDown={e => { if (e.key === "Enter" && !saveReason) save(); }}

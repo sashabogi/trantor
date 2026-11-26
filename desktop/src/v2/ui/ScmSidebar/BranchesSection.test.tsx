@@ -63,7 +63,7 @@ const row = (name: string) => host.querySelector<HTMLButtonElement>(`button[data
 describe("Branches and seats", () => {
   it("reads the main checkout's branch through the git bridge and labels the row", async () => {
     await render();
-    expect(calls).toEqual([{ project: "trantor", scope: "project", limit: 1 }]);
+    expect(calls).toEqual([{ project: "trantor", scope: "project" }]);
     expect(row("main")?.textContent).toContain("main");
     expect(row("main")?.textContent).toContain("main checkout");
     expect(row("main")?.title).toContain("main");
