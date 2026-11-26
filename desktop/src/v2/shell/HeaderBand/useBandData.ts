@@ -6,6 +6,7 @@ import { usePeers } from "../../../shared/presence";
 import { usePendingProposals } from "../../../shared/Proposals";
 import { usePendingHolds } from "../../../shared/FileHolds";
 import { useScopeGit } from "../../screens/Code/useScopeGit";
+import { PROJECT_FOLDERS_CHANGED } from "../../projectsFolder";
 import { laneRows } from "./SeatLanes";
 
 export type CiStatus = {
@@ -16,6 +17,12 @@ export type CiStatus = {
 
 function usePoll<T>(read: () => Promise<T>, delay: (value: T | null) => number): T | null {
   const [value, setValue] = useState<T | null>(null);
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => setRevision(v => v + 1);
+    window.addEventListener(PROJECT_FOLDERS_CHANGED, refresh);
+    return () => window.removeEventListener(PROJECT_FOLDERS_CHANGED, refresh);
+  }, []);
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
@@ -30,7 +37,7 @@ function usePoll<T>(read: () => Promise<T>, delay: (value: T | null) => number):
     };
     void load();
     return () => { active = false; clearTimeout(timer); };
-  }, [read, delay]);
+  }, [read, delay, revision]);
   return value;
 }
 

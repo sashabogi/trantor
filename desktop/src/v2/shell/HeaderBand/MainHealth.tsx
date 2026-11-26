@@ -1,4 +1,6 @@
 // #14256: git remains visible even when GitHub CLI cannot report CI.
+import { CheckoutRecovery } from "../../ui/CheckoutRecovery";
+import type { Navigate } from "../../routes";
 import { Check, LoaderCircle } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ago } from "../../../shared/time";
@@ -24,7 +26,7 @@ export function CiChip({ status }: { status: CiStatus | null }) {
   );
 }
 
-export function MainHealth({ snap, status, gitFailed = false }: { snap: ScopeSnapshot | null; status: CiStatus | null; gitFailed?: boolean }) {
+export function MainHealth({ snap, status, project, onNavigate, gitFailed = false }: { project: string; onNavigate: Navigate; snap: ScopeSnapshot | null; status: CiStatus | null; gitFailed?: boolean }) {
   const missingCheckout = status?.localCheckout === false;
   const tag = status?.hasRemote ? status.tag : null;
   const published = status?.tagPublishedAt ? Date.parse(status.tagPublishedAt) : NaN;
@@ -36,7 +38,7 @@ export function MainHealth({ snap, status, gitFailed = false }: { snap: ScopeSna
         <span className="truncate text-[var(--v2-muted)]">{snap ? aheadLabel(snap) : ""}</span>
       </div>
       <div className="flex min-w-0 items-center gap-1">
-        <CiChip status={status} />
+        {missingCheckout ? <CheckoutRecovery compact project={project} onNavigate={onNavigate} /> : <CiChip status={status} />}
         {release && <span className="v2-mono truncate text-v2-small text-[var(--v2-muted)]" title={release}>{release}</span>}
       </div>
     </div>

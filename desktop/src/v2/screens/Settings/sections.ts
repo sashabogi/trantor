@@ -16,7 +16,7 @@ export type SectionDef = {
 export const GROUPS = ["You", "Crew", "Code and git", "System"] as const;
 
 export const SECTIONS: readonly SectionDef[] = [
-  { id: "general", group: "You", label: "General", desc: "app to open code in, updates", rows: ["open code in", "editor", "updates", "check now", "trantor 2.0", "onboarding"] },
+  { id: "general", group: "You", label: "General", desc: "app to open code in, updates", rows: ["projects folder root directory checkout development TRANTOR_DEV_ROOT", "open code in", "editor", "updates", "check now", "trantor 2.0", "onboarding"] },
   { id: "notifications", group: "You", label: "Notifications", desc: "when Trantor interrupts you", rows: ["notify", "alerts", "background"] },
   { id: "keyboard", group: "You", label: "Keyboard", desc: "every shortcut, grouped", rows: ["shortcuts", "keys", "chord", "command palette", "go to file", "quick open"] },
   { id: "accounts", group: "You", label: "Accounts and providers", desc: "logins, keys, plan status", rows: ["api key", "login", "keychain", "provider", "plan"] },

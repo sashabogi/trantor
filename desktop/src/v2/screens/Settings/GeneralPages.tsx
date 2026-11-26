@@ -9,6 +9,7 @@ import { Section } from "../../ui/Section";
 import { Select } from "../../ui/Select";
 import { Toggle } from "../../ui/Toggle";
 import { backToClassic } from "../../toggle";
+import { chooseFolder, projectsRoot, setProjectsRoot, type ProjectsRoot } from "../../projectsFolder";
 import { keptRows } from "./sections";
 
 export function Row({ title, body, children }: { title: string; body: ReactNode; children: ReactNode }) {
@@ -26,7 +27,7 @@ export function Row({ title, body, children }: { title: string; body: ReactNode;
 export function OpenCodeIn() {
   const [editor, setEditor] = useState<EditorPref>(editorPref());
   return (
-    <Row title="Open code in" body="Repos are found at ~/development/<project> (override with TRANTOR_DEV_ROOT).">
+    <Row title="Open code in" body="Choose the app used to open local project checkouts.">
       <Select aria-label="Open code in" value={editor}
         onChange={e => { const v = e.target.value; if (isEditorPref(v)) { setEditor(v); setEditorPref(v); } }}>
         <option value="default">System default</option>
@@ -35,6 +36,38 @@ export function OpenCodeIn() {
         <option value="zed">Zed</option>
         <option value="reveal">Reveal in Finder</option>
       </Select>
+    </Row>
+  );
+}
+
+export function ProjectsFolderRow() {
+  const [root, setRoot] = useState<ProjectsRoot | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    projectsRoot().then(value => { if (active) setRoot(value); }, e => { if (active) setError(String(e)); });
+    return () => { active = false; };
+  }, []);
+  const change = async (reset: boolean) => {
+    setBusy(true); setError("");
+    try {
+      const path = reset ? null : await chooseFolder("Choose your projects folder");
+      if (!reset && path === null) return;
+      setRoot(await setProjectsRoot(path));
+    } catch (e) { setError(String(e)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Row title="Projects folder" body={<>
+      <span>{root ? `${root.path} · Source: ${root.source}` : "Reading projects folder…"}</span>
+      {root?.source === "TRANTOR_DEV_ROOT" && <span> The environment override takes precedence over your saved setting.</span>}
+      {error && <span role="alert" className="text-[var(--v2-bad)]"> {error}</span>}
+    </>}>
+      <div className="flex gap-2">
+        <Button onClick={() => void change(false)} disabledReason={busy ? "Updating folder" : null}>Choose…</Button>
+        <Button onClick={() => void change(true)} disabledReason={busy ? "Updating folder" : null}>Reset to default</Button>
+      </div>
     </Row>
   );
 }
@@ -92,6 +125,7 @@ export function BackToClassicRow({ onBack = backToClassic }: { onBack?: () => vo
 }
 
 const GENERAL_WORDS = {
+  projects: "projects folder root directory checkout development TRANTOR_DEV_ROOT",
   editor: "open code in editor app vs code cursor zed finder repos",
   update: "updates check now release version install",
   onboarding: "onboarding show again walk through providers identity",
@@ -102,6 +136,7 @@ export function GeneralPage({ onBackToClassic, query = "" }: { onBackToClassic?:
   const keep = keptRows(query, "General", GENERAL_WORDS);
   return (
     <Section title="General" sub="App behaviour on this machine." flush>
+      {keep.has("projects") && <ProjectsFolderRow />}
       {keep.has("editor") && <OpenCodeIn />}
       {keep.has("update") && <UpdateRow />}
       {keep.has("onboarding") && <OnboardingRow />}

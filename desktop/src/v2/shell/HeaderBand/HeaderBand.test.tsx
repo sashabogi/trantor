@@ -214,6 +214,8 @@ it("shows no local checkout after git fails instead of reading forever", async (
   ci = { ...ci, localCheckout: false, hasRemote: false, sha: null, tag: null, ci: null };
   await act(async () => { root.render(<HeaderBand client={client} project="trantor" onNavigate={vi.fn()} />); });
   expect(host.textContent).toContain("No local checkout");
+  expect(host.textContent).toContain("Choose the folder for trantor");
+  expect(host.textContent).toContain("Projects folder setting");
   expect(host.textContent).not.toContain("Reading git");
   expect(host.querySelector('[aria-label^="CI"]')).toBeNull();
 });

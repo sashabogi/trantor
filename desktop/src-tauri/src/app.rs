@@ -122,6 +122,7 @@ pub fn run() {
         .manage(HandoffChains::default())
         .manage(genesis::WakeChains::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .setup(|app| {
@@ -278,6 +279,9 @@ pub fn run() {
             dismissed_sessions_clear,
             right_panel_get,
             right_panel_set,
+            crate::projects_folder::projects_root_get,
+            crate::projects_folder::projects_root_set,
+            crate::projects_folder::project_folder_set,
             project_lens_get,
             project_lens_set,
             composer_draft_get,

@@ -91,7 +91,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
   const notice = data.active ? (
     <WakeLine project={data.active} state={start.wakes.get(data.active)} startedAt={start.wakeStarts.get(data.active)}
       hint={start.planHint === data.active} onRetry={p => void start.retry(p)} onDismiss={start.dismissWake}
-      onDismissHint={start.dismissHint} />
+      onDismissHint={start.dismissHint} onNavigate={onNavigate} />
   ) : null;
   useEffect(() => keepInputsPlain(document.body), []);
   return (

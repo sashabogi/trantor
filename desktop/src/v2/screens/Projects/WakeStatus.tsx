@@ -1,11 +1,14 @@
 // The wake, said plainly: a Workspace status line and a one-line shell notice (#13984).
 import { useEffect, useState } from "react";
+import { CheckoutRecovery } from "../../ui/CheckoutRecovery";
+import type { Navigate } from "../../routes";
 import type { WakeRowState } from "../../../features/genesis/wakeRow";
 import { PLAN_HINT, wakeInFlight, wakeNoticeText, wakeStatusLine } from "./wakeModel";
 
 const TONE = { muted: "text-[var(--v2-muted)]", ok: "text-[var(--v2-ok)]", danger: "text-[var(--v2-bad)]" } as const;
 
-export function WakeLine({ project, state, startedAt, hint, onRetry, onDismiss, onDismissHint }: {
+export function WakeLine({ project, state, startedAt, hint, onRetry, onDismiss, onDismissHint, onNavigate }: {
+  onNavigate: Navigate;
   project: string; state: WakeRowState | undefined; startedAt: number | undefined; hint: boolean;
   onRetry: (p: string) => void; onDismiss: (p: string) => void; onDismissHint: () => void;
 }) {
@@ -34,6 +37,7 @@ export function WakeLine({ project, state, startedAt, hint, onRetry, onDismiss, 
           Try again
         </button>
       )}
+      {line?.text.toLowerCase().includes("no local checkout") && <CheckoutRecovery project={project} onNavigate={onNavigate} />}
       {hint && (
         <span className="flex items-center gap-1.5 text-[var(--v2-muted)]">
           {PLAN_HINT}

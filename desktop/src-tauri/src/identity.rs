@@ -288,12 +288,9 @@ pub fn hub_for_project(project: &str) -> String {
     "http://127.0.0.1:4477".into()
 }
 
-/// Where projects live on THIS machine: ~/development by convention, TRANTOR_DEV_ROOT to relocate.
+/// The shared machine preference, with the development/test environment override first.
 pub fn dev_root() -> PathBuf {
-    PathBuf::from(
-        std::env::var("TRANTOR_DEV_ROOT")
-            .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default())),
-    )
+    crate::projects_folder::resolved_root().path
 }
 
 /// The id a checkout records in `.trantor/project.json` (#6724), the same file lib/project.mjs

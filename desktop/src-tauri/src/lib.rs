@@ -14,6 +14,7 @@ mod right_panel;
 mod cc_suggestion;
 mod composer_draft;
 mod project_lens;
+mod projects_folder;
 mod project_model;
 mod ghost;
 mod handoff_drill;

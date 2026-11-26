@@ -54,7 +54,7 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
         sessionId={session?.id ?? orchestrator?.session ?? null} onGit={openGit} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
         <ChatNoTray onOpenChange={openChange}><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
-          emptyAction={wake ? <StartOrchestrator project={project} wake={wake} /> : undefined} onClose={() => setSession(null)} /></ChatNoTray>
+          emptyAction={wake ? <StartOrchestrator project={project} wake={wake} onNavigate={onNavigate} /> : undefined} onClose={() => setSession(null)} /></ChatNoTray>
       </div>
       {sheet === "sessions" && (
         <Sheet kind="sessions" onBack={back}>

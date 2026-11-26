@@ -89,6 +89,15 @@ describe("chat panel empty state", () => {
     await act(async () => { release("woken"); });
   });
 
+  it("offers folder recovery when the wake cannot find a checkout", async () => {
+    wakeAnswer = async () => { throw new Error("no local checkout for alpha"); };
+    await mount();
+    await click(startButton());
+    await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+    expect(host.textContent).toContain("Choose the folder for alpha");
+    expect(host.textContent).toContain("Projects folder setting");
+  });
+
   it("keeps a failure in plain words until the next click", async () => {
     wakeAnswer = async () => { throw new Error("herdr is not running"); };
     await mount();

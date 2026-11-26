@@ -421,12 +421,12 @@ pub(crate) async fn agent_settings_set_default(id: Option<String>) -> Result<Str
     .await
 }
 
-/// Where a project's code lives on THIS machine. Convention first (~/development/<project>),
-/// TRANTOR_DEV_ROOT to relocate, and a renamed checkout answers by the id it records (#6724).
+/// Where a project's code lives on THIS machine: the resolved projects root, a per-project
+/// folder override, then bounded Claude transcript records. Renames answer by recorded id.
 /// Returns None when the repo simply isn't here — a card can reference code on another
 /// operator's machine and the UI degrades to text.
 pub(crate) fn project_dir(project: &str) -> Option<std::path::PathBuf> {
-    identity::checkout_for(&identity::dev_root(), project)
+    crate::projects_folder::project_dir(project)
 }
 
 #[cfg(test)]

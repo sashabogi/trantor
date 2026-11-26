@@ -2,6 +2,7 @@
 // checkout, both through git_panel (the checkout by scope "project", #13988 drill).
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GitLineCount, GitLogEntry, GitStatusEntry } from "../../../features/code/gitApi";
+import { PROJECT_FOLDERS_CHANGED } from "../../projectsFolder";
 import { scopePanel } from "./scopeGitApi";
 
 export type ScopeSnapshot = {
@@ -50,7 +51,8 @@ export function useScopeGit(project: string, scope: string | null): ScopeGit {
   useEffect(() => {
     setState({ kind: "loading" });
     const iv = setInterval(refresh, POLL_MS);
-    return () => clearInterval(iv);
+    window.addEventListener(PROJECT_FOLDERS_CHANGED, refresh);
+    return () => { clearInterval(iv); window.removeEventListener(PROJECT_FOLDERS_CHANGED, refresh); };
   }, [project, scope, refresh]);
   return { state, refresh };
 }

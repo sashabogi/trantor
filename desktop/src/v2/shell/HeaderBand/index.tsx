@@ -16,7 +16,7 @@ export function HeaderBand({ client, project, onNavigate }: { client: HubClient;
     <div className="v2-header-band flex h-full min-w-0 flex-1 items-stretch gap-2" aria-label="Project overview">
       <PhaseGoal data={phases} onOpen={() => onNavigate("board", project)} />
       <SeatLanes project={project} {...lanes} onOpen={() => onNavigate("workspace", project)} />
-      <MainHealth {...health} />
+      <MainHealth {...health} project={project} onNavigate={onNavigate} />
       <NeedsYou key={project} ids={ids} onOpen={() => onNavigate("inbox", project)} />
     </div>
   );

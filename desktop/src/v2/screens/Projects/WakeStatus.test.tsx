@@ -29,7 +29,7 @@ const show = (state: WakeRowState = DELIVERED, activeProject = "trantor", starte
   root.render(<>
     <WakeNotice wakes={new Map([["rock-os", state]])} wakeStarts={new Map([["rock-os", startedAt]])} activeProject={activeProject} />
     {withLine && <WakeLine project="rock-os" state={state} startedAt={startedAt} hint={false}
-      onRetry={NOOP} onDismiss={NOOP} onDismissHint={NOOP} />}
+      onRetry={NOOP} onDismiss={NOOP} onDismissHint={NOOP} onNavigate={NOOP} />}
   </>);
 });
 const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
