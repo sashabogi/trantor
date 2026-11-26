@@ -5,22 +5,28 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
-import { ShellV2 } from "./ShellV2";
+import { ShellV2, LensScreenView } from "./ShellV2";
+import { ONBOARDING_REOPENED } from "../features/onboarding/onboardingApi";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // One empty body that satisfies every list endpoint the shell polls.
 const EMPTY = JSON.stringify({ peers: [], messages: [], cursor: 0, tasks: [], proposals: [], holds: [], entries: [], machines: [], ts: Date.now(), staleAfterMs: 90_000 });
 
+const overrides = new Map<string, unknown>();
+const calls: string[] = [];
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
+  overrides.clear(); calls.length = 0;
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
   });
   mockIPC(command => {
+    calls.push(command);
+    if (overrides.has(command)) return overrides.get(command);
     if (command === "known_projects") return ["crebral-cortex", "trantor"];
     if (command === "hub_for_project") return "http://127.0.0.1:4477";
     if (command === "identity_name") return "sasha";
@@ -102,5 +108,66 @@ describe("ShellV2", () => {
     await click('button[aria-label="Account: sasha"]');
     const item = [...host.querySelectorAll('[role="menu"] [role="menuitem"]')].find(b => b.textContent === "Back to classic");
     expect(item).toBeDefined();
+  });
+
+  // #14322: the 2.0 shell mounts the first-run gate, the CLI banner and the local hub start.
+  const OPEN = JSON.stringify({ flowVersion: 1, closedAt: null, lastCompletedStep: null });
+  const CLOSED = JSON.stringify({ flowVersion: 1, closedAt: 1, lastCompletedStep: null });
+  const SETUP_GAP = { node: "v22.0.0", npm: true, trantor: null, trantorCompatible: false, trantorMinimum: "0.18.47", herdr: null };
+
+  it("mounts the onboarding wizard on its setup step when onboarding is open", async () => {
+    overrides.set("onboarding_get", OPEN);
+    overrides.set("setup_check", SETUP_GAP);
+    await mount();
+    expect(host.querySelector('[data-testid="wizard-frame"]')?.textContent).toContain("Check your setup");
+    expect(host.querySelector('[data-setup-row="trantor"]')?.getAttribute("data-status")).toBe("missing");
+  });
+
+  it("does not mount the wizard once onboarding is closed", async () => {
+    overrides.set("onboarding_get", CLOSED);
+    await mount();
+    expect(host.querySelector('[data-testid="wizard-frame"]')).toBeNull();
+  });
+
+  it("Show onboarding again from Settings reopens the wizard in 2.0", async () => {
+    overrides.set("onboarding_get", CLOSED);
+    overrides.set("setup_check", { ...SETUP_GAP, trantor: "0.18.99", trantorCompatible: true, herdr: "/bin/herdr" });
+    await mount();
+    expect(host.querySelector('[data-testid="wizard-frame"]')).toBeNull();
+    overrides.set("onboarding_get", OPEN);
+    await act(async () => { window.dispatchEvent(new Event(ONBOARDING_REOPENED)); });
+    expect(host.querySelector('[data-testid="wizard-frame"]')?.textContent).toContain("Check your setup");
+  });
+
+  it("shows the too-old CLI banner", async () => {
+    overrides.set("trantor_cli_compatibility", { installed: "0.1.0", minimum: "0.18.47", compatible: false, reason: "trantor CLI 0.1.0 is older than this app needs" });
+    await mount();
+    expect(host.querySelector("[data-trantor-cli-banner]")?.textContent).toContain("older than this app needs");
+  });
+
+  it("starts the local hub once at mount and shows it running", async () => {
+    overrides.set("local_hub_ensure", { state: "started", detail: null, logPath: "/h/hub.log" });
+    await mount();
+    expect(calls.filter(c => c === "local_hub_ensure")).toHaveLength(1);
+    expect(host.querySelector("[data-local-hub]")?.textContent).toBe("Local hub running");
+  });
+
+  it("a failed hub start names the log and Retry starts it again", async () => {
+    overrides.set("local_hub_ensure", { state: "failed", detail: "boom", logPath: "/h/hub.log" });
+    await mount();
+    expect(host.querySelector("[data-local-hub]")?.textContent).toContain("/h/hub.log");
+    await click("[data-local-hub] button");
+    expect(calls.filter(c => c === "local_hub_ensure")).toHaveLength(2);
+  });
+
+  it("with no projects a lens offers Start a project, not a CLI instruction", async () => {
+    const onStartProject = vi.fn();
+    // SAFETY: LensScreenView returns before reading client or project fields when no project is set.
+    const props = { client: {}, project: null, onNavigate: vi.fn(), onStartProject } as never;
+    await act(async () => { root.render(<LensScreenView screen="workspace" props={props} me="m" />); });
+    expect(host.textContent).toContain("No projects yet.");
+    expect(host.textContent).not.toContain("trantor hub set");
+    await click("button");
+    expect(onStartProject).toHaveBeenCalledOnce();
   });
 });

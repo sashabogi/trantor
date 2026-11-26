@@ -13,6 +13,7 @@ import {
   isIdentityStepSatisfied,
   isProjectStepSatisfied,
   isProvidersStepSatisfied,
+  isSetupStepSatisfied,
   type AutonomyResolved,
   type OnboardingStep,
 } from "./onboardingState";
@@ -21,6 +22,8 @@ import { providerAccountsApi, type ProviderAccountsApi, type ProviderStatus } fr
 import { Autonomy } from "../settings/Autonomy";
 import { GenesisSheet } from "../genesis/GenesisSheet";
 import { WizardFrame } from "./WizardFrame";
+import { SetupStep } from "./SetupStep";
+import { setupApi as realSetupApi, type SetupApi, type SetupReport } from "../../shared/api/client";
 
 export type OnboardingFlowDeps = {
   api: OnboardingApi;
@@ -28,6 +31,7 @@ export type OnboardingFlowDeps = {
   knownProjects: () => Promise<string[]>;
   autonomyResolved: (project: string | null) => Promise<AutonomyResolved>;
   devRoot: () => Promise<string>;
+  setupApi: SetupApi;
 };
 
 export const DEFAULT_ONBOARDING_DEPS: OnboardingFlowDeps = {
@@ -40,6 +44,7 @@ export const DEFAULT_ONBOARDING_DEPS: OnboardingFlowDeps = {
     return parsed.resolved;
   },
   devRoot: () => invoke<string>("project_dev_root"),
+  setupApi: realSetupApi,
 };
 
 function DoneBanner({ children }: { children: string }) {
@@ -51,28 +56,32 @@ function DoneBanner({ children }: { children: string }) {
 }
 
 const STEP_COPY = {
+  setup: { title: "Check your setup", sub: "Node, the trantor CLI and herdr. You can skip this and come back from Settings." },
   providers: { title: "Connect a provider", sub: "One system login per provider — this is what your sessions and crews will run on." },
   identity: { title: "Identity and hub", sub: "Who this app signs as, and where its projects live." },
   autonomy: { title: "Autonomy", sub: "How much Trantor does without asking, on this machine." },
   project: { title: "Start a project", sub: "Create a repo or open one you already have." },
 } satisfies Record<OnboardingStep, { title: string; sub: string }>;
 
-export function OnboardingFlow({ me, project, onClose, forced = false, deps = DEFAULT_ONBOARDING_DEPS }: {
+export function OnboardingFlow({ me, project, onClose, forced = false, onCliInstalled, deps = DEFAULT_ONBOARDING_DEPS }: {
   me: string;
   project: string;
   onClose: () => void;
   /** True only for an explicit "Show onboarding again" — shows every step, satisfied ones marked
    * done, instead of the automatic first-run path's silent skip-and-close. */
   forced?: boolean;
+  /** After the CLI install succeeds: the shell retries its local hub start. Default: ask the backend. */
+  onCliInstalled?: () => void;
   deps?: OnboardingFlowDeps;
 }) {
-  const { api, providerApi, knownProjects, autonomyResolved, devRoot } = deps;
+  const { api, providerApi, knownProjects, autonomyResolved, devRoot, setupApi } = deps;
   const [visible, setVisible] = useState<OnboardingStep[] | null>(null);
   const [satisfiedAtMount, setSatisfiedAtMount] = useState<Record<OnboardingStep, boolean> | null>(null);
   const [index, setIndex] = useState(0);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [hasHubPin, setHasHubPin] = useState(false);
   const [projects, setProjects] = useState<string[]>([]);
+  const [setupReport, setSetupReport] = useState<SetupReport | null>(null);
   const [genesisRoot, setGenesisRoot] = useState<string | null>(null);
 
   // Computed once, at mount: which steps still apply. A step's own live state (a provider login
@@ -81,17 +90,21 @@ export function OnboardingFlow({ me, project, onClose, forced = false, deps = DE
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const [providerList, pinned, resolved, projectList] = await Promise.all([
+      const [report, providerList, pinned, resolved, projectList] = await Promise.all([
+        setupApi.check().catch((): SetupReport | null => null),
         providerApi.status().then(r => (r.available ? r.providers : [])).catch((): ProviderStatus[] => []),
         api.hasHubPin().catch(() => false),
         autonomyResolved(null).catch((): AutonomyResolved => ({ ...AUTONOMY_DEFAULTS })),
         knownProjects().catch((): string[] => []),
       ]);
       if (!alive) return;
+      setSetupReport(report);
       setProviders(providerList);
       setHasHubPin(pinned);
       setProjects(projectList);
       const satisfied = {
+        // An unreadable check never blocks the first-run path: only a read that found a gap shows the step.
+        setup: report === null || isSetupStepSatisfied(report),
         providers: isProvidersStepSatisfied(providerList),
         identity: isIdentityStepSatisfied(pinned),
         autonomy: isAutonomyStepSatisfied(resolved),
@@ -133,6 +146,7 @@ export function OnboardingFlow({ me, project, onClose, forced = false, deps = DE
   const last = index === visible.length - 1;
   const providersOk = isProvidersStepSatisfied(providers);
   const canContinue = step === "providers" ? providersOk : step === "project" ? projects.length > 0 : true;
+  const setupGap = step === "setup" && setupReport !== null && !isSetupStepSatisfied(setupReport);
 
   const advance = async () => {
     await api.setStep(step).catch(() => {});
@@ -155,9 +169,13 @@ export function OnboardingFlow({ me, project, onClose, forced = false, deps = DE
         footer={
           <button type="button" onClick={() => void advance()} disabled={!canContinue}
             className="flex items-center gap-1 rounded-lg bg-tr-doing/20 px-4 py-1.5 text-[12.5px] font-semibold text-tr-doing hover:bg-tr-doing/30 disabled:opacity-40">
-            {last ? "Done" : "Continue"} <ChevronRight size={14} />
+            {last ? "Done" : setupGap ? "Skip for now" : "Continue"} <ChevronRight size={14} />
           </button>
         }>
+          {step === "setup" && (
+            <SetupStep api={setupApi} report={setupReport} onReport={setSetupReport}
+              onCliInstalled={() => { if (onCliInstalled) onCliInstalled(); else void setupApi.hubEnsure().catch(() => {}); }} />
+          )}
           {step === "providers" && (
             <>
               <AccountsPane project={project} api={providerApi} />

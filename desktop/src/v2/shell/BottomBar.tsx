@@ -7,6 +7,7 @@ import { BrandMark } from "../../features/fleet/BrandMark";
 import { machineHealthLine, machineStale, useMachinesHealth } from "../../features/fleet/MachineHealth";
 import { IconButton } from "../ui/IconButton";
 import { useBalances } from "./useBalances";
+import type { LocalHub } from "./useLocalHub";
 
 const CHIP_TONE = {
   ok: { bg: "var(--v2-panel-2)", border: "var(--v2-edge)", value: "var(--v2-muted)", bar: "" },
@@ -74,10 +75,28 @@ export type PlansBarProps = {
   spinning: boolean;
   onRefresh: () => void;
   onOpenUsage: () => void;
+  localHub?: LocalHub;
+  onSetup?: () => void;
 };
 
+/** The footer line for the hub this app started itself (#14322); null when there is nothing to say. */
+export function localHubLine(hub: LocalHub | undefined): { text: string; title?: string; action?: "retry" | "setup" } | null {
+  if (!hub) return null;
+  if (hub.starting) return { text: "Starting local hub…" };
+  switch (hub.state?.state) {
+    case "running":
+    case "started": return { text: "Local hub running" };
+    case "no_cli": return { text: "Local hub needs the trantor CLI", action: "setup" };
+    case "failed": return {
+      text: `Local hub failed to start. Log: ${hub.state.logPath}`,
+      title: hub.state.detail ?? undefined, action: "retry",
+    };
+    default: return null;
+  }
+}
+
 /** Pure: the tests feed reports straight in. */
-export function PlansBar({ report, failure, refreshError, machines, spinning, onRefresh, onOpenUsage }: PlansBarProps) {
+export function PlansBar({ report, failure, refreshError, machines, spinning, onRefresh, onOpenUsage, localHub, onSetup }: PlansBarProps) {
   const chips = balanceChips(report);
   const dim = failure !== null || (report != null && isStale(report.ts));
   // #14055 — dimming alone never said WHY: the snapshot age (or the refresh error) rides beside
@@ -91,6 +110,7 @@ export function PlansBar({ report, failure, refreshError, machines, spinning, on
     : asOf != null
       ? { text: asOf, title: `Plans snapshot ${asOf} — the chips stay dim until a fresh refresh lands.` }
       : null;
+  const hubLine = localHubLine(localHub);
   const hub = failure !== null ? { color: "var(--v2-bad)", text: "hub unreachable" }
     : report ? { color: "var(--v2-ok)", text: "hub connected" } : { color: "var(--v2-track)", text: "connecting" };
   return (
@@ -113,6 +133,18 @@ export function PlansBar({ report, failure, refreshError, machines, spinning, on
       </IconButton>
       <span data-bar-machines className="ml-auto flex items-center gap-3" style={{ flex: "none" }}>
         <Machines report={machines} />
+        {hubLine && (
+          <span data-local-hub className="inline-flex items-center gap-1.5" title={hubLine.title}
+            style={{ color: localHub?.state?.state === "failed" ? "var(--v2-bad)" : undefined }}>
+            {hubLine.text}
+            {hubLine.action === "retry" && (
+              <button type="button" onClick={localHub?.retry} className="rounded-md border border-[var(--v2-edge)] bg-transparent px-1.5 text-v2-body text-[var(--v2-text)]">Retry</button>
+            )}
+            {hubLine.action === "setup" && (
+              <button type="button" onClick={onSetup} className="rounded-md border border-[var(--v2-edge)] bg-transparent px-1.5 text-v2-body text-[var(--v2-text)]">Set up</button>
+            )}
+          </span>
+        )}
         <span className="inline-flex items-center gap-1.5" title={failure ?? undefined}>
           <span aria-hidden className="h-[7px] w-[7px] rounded-full" style={{ background: hub.color }} />{hub.text}
         </span>
@@ -121,8 +153,8 @@ export function PlansBar({ report, failure, refreshError, machines, spinning, on
   );
 }
 
-export function BottomBar({ client, onOpenUsage }: { client: HubClient; onOpenUsage: () => void }) {
+export function BottomBar({ client, onOpenUsage, localHub, onSetup }: { client: HubClient; onOpenUsage: () => void; localHub?: LocalHub; onSetup?: () => void }) {
   const { report, failure, refreshError, spinning, refetch } = useBalances(client);
   const machines = useMachinesHealth(client);
-  return <PlansBar report={report} failure={failure} refreshError={refreshError} machines={machines} spinning={spinning} onRefresh={refetch} onOpenUsage={onOpenUsage} />;
+  return <PlansBar report={report} failure={failure} refreshError={refreshError} machines={machines} spinning={spinning} onRefresh={refetch} onOpenUsage={onOpenUsage} localHub={localHub} onSetup={onSetup} />;
 }

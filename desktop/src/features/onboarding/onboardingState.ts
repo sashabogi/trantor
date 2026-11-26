@@ -2,6 +2,7 @@
 // condition is already satisfied live here, apart from the wizard's rendering, so both are
 // testable without mounting anything.
 import type { ProviderStatus } from "../settings/providers/providerStatus";
+import type { SetupReport } from "../../shared/api/client";
 
 export type OnboardingState = {
   flowVersion: number;
@@ -9,7 +10,7 @@ export type OnboardingState = {
   lastCompletedStep: string | null;
 };
 
-export const ONBOARDING_STEPS = ["providers", "identity", "autonomy", "project"] as const;
+export const ONBOARDING_STEPS = ["setup", "providers", "identity", "autonomy", "project"] as const;
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number];
 
 /** null means "not read yet" — never show a flash of the wizard before the first read lands. */
@@ -50,4 +51,35 @@ export function isAutonomyStepSatisfied(resolved: AutonomyResolved): boolean {
 
 export function isProjectStepSatisfied(projectCount: number): boolean {
   return projectCount > 0;
+}
+
+export type SetupRow = {
+  key: "node" | "trantor" | "herdr";
+  label: string;
+  status: "ok" | "missing" | "outdated";
+  detail: string;
+  /** What Install runs; null when it cannot be offered (Node missing for the CLI, Node itself). */
+  install: "trantor" | "herdr" | null;
+  hint: string | null;
+};
+
+/** Pure: one status row each for node, the trantor CLI and herdr. */
+export function setupRows(r: SetupReport): SetupRow[] {
+  const nodeRow: SetupRow = r.node
+    ? { key: "node", label: "Node", status: "ok", detail: r.node, install: null, hint: null }
+    : { key: "node", label: "Node", status: "missing", detail: "not found", install: null, hint: "Install Node from nodejs.org, then Retry." };
+  const canNpm = r.node !== null && r.npm;
+  const cli: SetupRow = !r.trantor
+    ? { key: "trantor", label: "trantor CLI", status: "missing", detail: "not installed", install: canNpm ? "trantor" : null, hint: canNpm ? null : "Install Node from nodejs.org first." }
+    : !r.trantorCompatible
+      ? { key: "trantor", label: "trantor CLI", status: "outdated", detail: `${r.trantor}, this app needs ${r.trantorMinimum} or newer`, install: canNpm ? "trantor" : null, hint: canNpm ? null : "Install Node from nodejs.org first." }
+      : { key: "trantor", label: "trantor CLI", status: "ok", detail: r.trantor, install: null, hint: null };
+  const herdr: SetupRow = r.herdr
+    ? { key: "herdr", label: "herdr", status: "ok", detail: r.herdr, install: null, hint: null }
+    : { key: "herdr", label: "herdr", status: "missing", detail: "not installed", install: "herdr", hint: null };
+  return [nodeRow, cli, herdr];
+}
+
+export function isSetupStepSatisfied(r: SetupReport): boolean {
+  return setupRows(r).every(row => row.status === "ok");
 }

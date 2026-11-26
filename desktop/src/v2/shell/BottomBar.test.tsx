@@ -127,3 +127,47 @@ describe("BottomBar wiring", () => {
     expect(host.querySelector("[data-chip]")?.textContent).toContain("DeepSeek");
   });
 });
+
+describe("local hub line (#14322)", () => {
+  const st = (state: "running" | "started" | "remote" | "no_cli" | "failed", detail: string | null = null) =>
+    ({ state: { state, detail, logPath: "/Users/x/.agent-bus/hub.log" }, starting: false, retry: vi.fn() });
+  const bar = (localHub: Parameters<typeof PlansBar>[0]["localHub"], onSetup = vi.fn()) => {
+    act(() => root.render(<PlansBar report={null} failure={null} refreshError={null} machines={null} spinning={false} onRefresh={() => {}} onOpenUsage={() => {}} localHub={localHub} onSetup={onSetup} />));
+    return onSetup;
+  };
+  const line = () => host.querySelector<HTMLElement>("[data-local-hub]");
+
+  it("says the hub is starting", () => {
+    bar({ state: null, starting: true, retry: vi.fn() });
+    expect(line()?.textContent).toBe("Starting local hub…");
+  });
+
+  it("says the hub is running whether it was started or already there", () => {
+    bar(st("started"));
+    expect(line()?.textContent).toBe("Local hub running");
+    bar(st("running"));
+    expect(line()?.textContent).toBe("Local hub running");
+  });
+
+  it("shows nothing for a remote hub or no answer yet", () => {
+    bar(st("remote"));
+    expect(line()).toBeNull();
+    bar({ state: null, starting: false, retry: vi.fn() });
+    expect(line()).toBeNull();
+  });
+
+  it("names the log path on failure and Retry calls retry", () => {
+    const hub = st("failed", "exited early");
+    bar(hub);
+    expect(line()?.textContent).toContain("/Users/x/.agent-bus/hub.log");
+    act(() => line()?.querySelector("button")?.click());
+    expect(hub.retry).toHaveBeenCalledOnce();
+  });
+
+  it("a missing CLI hands off to the setup step instead of erroring", () => {
+    const onSetup = bar(st("no_cli"));
+    expect(line()?.textContent).toContain("needs the trantor CLI");
+    act(() => line()?.querySelector("button")?.click());
+    expect(onSetup).toHaveBeenCalledOnce();
+  });
+});

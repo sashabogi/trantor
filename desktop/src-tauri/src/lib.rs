@@ -28,6 +28,8 @@ mod sessions;
 mod terminal;
 mod remote_terminal;
 mod trantor_cli;
+mod local_hub;
+mod setup;
 mod hub;
 mod crew_controls;
 mod files;

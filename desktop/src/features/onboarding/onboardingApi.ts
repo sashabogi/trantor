@@ -1,6 +1,8 @@
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import type { OnboardingState } from "./onboardingState";
 
+export const ONBOARDING_REOPENED = "trantor:onboarding-reopened";
+
 export type OnboardingApi = {
   get: () => Promise<OnboardingState>;
   hasHubPin: () => Promise<boolean>;
@@ -18,5 +20,10 @@ export const onboardingApi: OnboardingApi = {
   hasHubPin: () => invoke<boolean>("onboarding_has_hub_pin"),
   setStep: step => invokeState("onboarding_set_step", { step }),
   close: () => invokeState("onboarding_close"),
-  reopen: () => invokeState("onboarding_reopen"),
+  reopen: async () => {
+    const state = await invokeState("onboarding_reopen");
+    // The 2.0 shell mounts the wizard and has no other way to learn the disk state changed.
+    window.dispatchEvent(new Event(ONBOARDING_REOPENED));
+    return state;
+  },
 };

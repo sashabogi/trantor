@@ -493,6 +493,38 @@ export async function trantorCliCompatibility(): Promise<TrantorCliCompatibility
   return invoke<TrantorCliCompatibility>("trantor_cli_compatibility");
 }
 
+export type LocalHubState = {
+  state: "running" | "started" | "remote" | "no_cli" | "failed";
+  detail: string | null;
+  logPath: string;
+};
+
+/** Starts the machine-local hub when nothing serves it; a no-op when one answers or a remote hub is pinned. */
+export async function localHubEnsure(): Promise<LocalHubState> {
+  return invoke<LocalHubState>("local_hub_ensure");
+}
+
+export type SetupReport = {
+  node: string | null;
+  npm: boolean;
+  trantor: string | null;
+  trantorCompatible: boolean;
+  trantorMinimum: string;
+  herdr: string | null;
+};
+export type InstallTarget = "trantor" | "herdr";
+export type InstallResult = { ok: boolean; cancelled: boolean; code: number | null };
+
+export const setupApi = {
+  check: () => invoke<SetupReport>("setup_check"),
+  install: (target: InstallTarget) => invoke<InstallResult>("setup_install", { target }),
+  cancel: () => invoke<void>("setup_install_cancel"),
+  onLine: async (handler: (line: string) => void): Promise<() => void> =>
+    listen<{ target: string; line: string }>("setup-install-line", ev => handler(ev.payload.line)),
+  hubEnsure: localHubEnsure,
+};
+export type SetupApi = typeof setupApi;
+
 export type AgentCliFeature = {
   name: string;
   verifiedFrom: string;

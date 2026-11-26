@@ -1,5 +1,10 @@
 // Trantor 2.0 shell: top bar, left rail, routed main area, plans-and-balances footer (#v2-F).
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { trantorCliCompatibility, type TrantorCliCompatibility } from "../shared/api/client";
+import { OnboardingFlow } from "../features/onboarding/OnboardingFlow";
+import { ONBOARDING_REOPENED, onboardingApi } from "../features/onboarding/onboardingApi";
+import { shouldShowOnboarding, type OnboardingState } from "../features/onboarding/onboardingState";
+import { useLocalHub } from "./shell/useLocalHub";
 import "./theme.css";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { backToClassic } from "./toggle";
@@ -13,7 +18,7 @@ import { AgentCliBanner } from "./shell/AgentCliBanner";
 import { Rail } from "./shell/Rail";
 import { BottomBar } from "./shell/BottomBar";
 import { ProjectFrame } from "./shell/ProjectFrame";
-import { AllProjects, ClassicLens, MessagesLens, NotWired } from "./shell/ClassicLenses";
+import { AllProjects, ClassicLens, MessagesLens } from "./shell/ClassicLenses";
 import { DashboardScreen } from "./screens/Dashboard";
 import { WorkspaceScreen } from "./screens/Workspace";
 import { CodeScreen } from "./screens/Code";
@@ -54,9 +59,22 @@ function FleetScreenView({ screen, props, projects, live, me }: {
   }
 }
 
-function LensScreenView({ screen, props, me, notice }: { screen: Screen; props: ScreenProps; me: string; notice?: ReactNode }): ReactNode {
+export function LensScreenView({ screen, props, me, notice }: { screen: Screen; props: ScreenProps; me: string; notice?: ReactNode }): ReactNode {
   if (!isLensScreen(screen)) return null;
-  if (!props.project) return <NotWired title="No project" line="No projects pinned. Run trantor hub set <project> <url>." />;
+  if (!props.project) {
+    return (
+      <div className="px-5 py-6">
+        <h2 className="m-0 text-v2-title font-semibold">No projects yet.</h2>
+        <p className="mt-1 text-v2-base text-[var(--v2-muted)]">Create a repo or open one you already have.</p>
+        {props.onStartProject && (
+          <button type="button" onClick={props.onStartProject}
+            className="mt-3 rounded-lg border-0 bg-[var(--v2-accent)] px-4 py-2 text-v2-base font-semibold text-[var(--v2-ink)]">
+            Start a project
+          </button>
+        )}
+      </div>
+    );
+  }
   const body = screen === "workspace" ? <WorkspaceScreen {...props} />
     : screen === "code" ? <CodeScreen {...props} />
     : screen === "board" ? <BoardScreen {...props} />
@@ -64,8 +82,43 @@ function LensScreenView({ screen, props, me, notice }: { screen: Screen; props: 
   return <ProjectFrame client={props.client} project={props.project} lens={screen} onNavigate={props.onNavigate} notice={screen === "workspace" ? notice : undefined}>{body}</ProjectFrame>;
 }
 
+/** The first-run gate and the CLI banner, the way the classic shell mounts them (#14322). */
+function useOnboardingGate() {
+  const [state, setState] = useState<OnboardingState | null>(null);
+  const [forced, setForced] = useState(false);
+  useEffect(() => {
+    const read = () => { onboardingApi.get().then(setState).catch(() => {}); };
+    read();
+    // "Show onboarding again" in Settings reopens it from disk and says so with this event.
+    const reopened = () => { onboardingApi.get().then(next => { setState(next); setForced(true); }).catch(() => {}); };
+    window.addEventListener(ONBOARDING_REOPENED, reopened);
+    return () => window.removeEventListener(ONBOARDING_REOPENED, reopened);
+  }, []);
+  const open = () => { setState({ flowVersion: 1, closedAt: null, lastCompletedStep: null }); setForced(true); };
+  const close = () => { setState(cur => cur && { ...cur, closedAt: Date.now() }); setForced(false); };
+  return { show: shouldShowOnboarding(state), forced, open, close };
+}
+
+function TrantorCliBanner() {
+  const [compat, setCompat] = useState<TrantorCliCompatibility | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void trantorCliCompatibility().then(c => { if (alive) setCompat(c); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!compat || compat.compatible || !compat.reason) return null;
+  return (
+    <div role="alert" data-trantor-cli-banner
+      className="shrink-0 border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-4 py-2 text-center text-v2-body text-[var(--v2-warn)]">
+      {compat.reason}
+    </div>
+  );
+}
+
 export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
   const data = useShellData();
+  const localHub = useLocalHub();
+  const onboarding = useOnboardingGate();
   const { setActive } = data;
   const [screen, setScreen] = useState<Screen>("dashboard");
   const mode = useShellMode();
@@ -101,6 +154,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
         onSearch={() => setPalette(data.active ? { kind: "project", project: data.active } : { kind: "global" })}
         needsYou={data.needsYou} me={data.me} onNavigate={onNavigate} onStartProject={start.startProject} onBackToClassic={backToClassic}
         notice={<WakeNotice wakes={start.wakes} wakeStarts={start.wakeStarts} activeProject={data.active} />} />
+      <TrantorCliBanner />
       <AgentCliBanner />
       <div className="flex min-h-0 flex-1">
         <Rail screen={screen} project={data.active} live={data.live} unread={data.unread} needsYou={data.needsYou} update={data.update} onNavigate={onNavigate} onWake={wakeProject} />
@@ -110,7 +164,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
             : <FleetScreenView screen={screen} props={props} projects={data.projects} live={data.live} me={data.me} />}
         </main>
       </div>
-      <BottomBar client={data.client} onOpenUsage={() => onNavigate("usage")} />
+      <BottomBar client={data.client} onOpenUsage={() => onNavigate("usage")} localHub={localHub} onSetup={onboarding.open} />
       {start.open && (
         <StartProjectSheet devRoot={start.devRoot} deps={start.deps} onClose={start.close} onMade={start.onMade} onCreated={start.onCreated} />
       )}
@@ -120,6 +174,10 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
           onClose={() => setPalette(null)}
           onJumpProject={p => { setPalette(null); onNavigate(landing, p); }}
           onOpenCard={p => { setPalette(null); onNavigate("board", p); }} />
+      )}
+      {onboarding.show && (
+        <OnboardingFlow me={data.me} project={data.active || data.projects[0] || ""} forced={onboarding.forced}
+          onCliInstalled={localHub.retry} onClose={onboarding.close} />
       )}
       <ShortcutLayer project={data.active} screen={screen} mode={mode} onMode={onMode} onNavigate={onNavigate} onSearch={togglePalette} />
     </div>
