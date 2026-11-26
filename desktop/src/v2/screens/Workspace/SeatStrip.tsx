@@ -62,7 +62,7 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
     if (iconOnly) {
       return {
         id: s.key, label: s.label, title: s.session, iconOnly, ariaLabel: `${s.label}, ${line}`,
-        leading: <SeatAstronaut vendor={s.brand} name={s.label} state={seatState(s)} size={24} variant="compact" surface={s.key === selectedKey ? "var(--v2-bg)" : "var(--v2-chrome)"} />,
+        leading: <SeatAstronaut vendor={s.brand} name={s.label} state={seatState(s)} size={64} variant="full" surface={s.key === selectedKey ? "var(--v2-bg)" : "var(--v2-chrome)"} />,
         hoverCard: hover,
       };
     }
@@ -79,7 +79,7 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
     };
   });
   return (
-    <Tabs label="Seats" pane="var(--v2-bg)" barClassName="h-10 px-3" tabs={tabs} activeId={selectedKey} onSelect={onSelect}
+    <Tabs label="Seats" pane="var(--v2-bg)" barClassName="h-22 px-3" tabs={tabs} activeId={selectedKey} onSelect={onSelect}
       stacked crowded={tabs.length > CROWDED_TABS}
       onClose={key => { const helper = seats.find(s => s.key === key && s.isHelper); if (helper) void crew.stopHelper(helper.agent.slice("helper:".length)); }}
       actions={<>

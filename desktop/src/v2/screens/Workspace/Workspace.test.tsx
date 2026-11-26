@@ -252,18 +252,20 @@ describe("middle column (#14351)", () => {
   const stopped = () => ipc.some(c => c.command === "workspace_cli" && (c.args as { args: string[] }).args[0] === "down");
   const wait = (ms: number) => act(async () => { await new Promise(r => setTimeout(r, ms)); });
 
-  it("draws icon-only crew tabs and merges the active one into the pane (#14365)", async () => {
+  it("draws icon-only crew tabs with the full-body astronaut and merges the active one into the pane (#14365)", async () => {
     await mountScreen(fakeClient([]));
     const codex = chipFor("codex-8");
     // Just the astronaut: no name or activity text, no separate state dot, the name rides on the aria-label.
     expect(codex?.textContent).toBe("");
     expect(codex?.querySelectorAll("span.truncate")).toHaveLength(0);
     expect(codex?.getAttribute("aria-label")).toBe("codex-8, working on card 13970");
-    expect(codex?.querySelector('[data-variant="compact"]')?.getAttribute("aria-label")).toBe("codex-8, working");
+    // The operator: tall tabs with the whole animated astronaut (typing, tapping, waving), not just the head.
+    expect(codex?.querySelector('[data-variant="full"]')?.getAttribute("aria-label")).toBe("codex-8, working");
+    expect(codex?.querySelector('[data-variant="compact"]')).toBeNull();
     expect(codex?.querySelectorAll('[role="img"]')).toHaveLength(1);
     expect(codex?.parentElement?.getAttribute("data-active")).toBe("true");
     expect(codex?.parentElement?.className).toContain("border-t-[var(--v2-accent)]");
-    expect(codex?.parentElement?.style.width).toBe("40px");
+    expect(codex?.parentElement?.style.width).toBe("76px");
     expect(chipFor("glm-5")?.parentElement?.getAttribute("data-active")).toBeNull();
   });
 
