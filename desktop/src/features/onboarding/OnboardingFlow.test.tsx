@@ -3,6 +3,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingFlow, type OnboardingFlowDeps } from "./OnboardingFlow";
+
+// The Autonomy body reads its dials through Tauri directly; answer autonomy_get with the defaults.
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async (cmd: string) => cmd === "autonomy_get"
+    ? JSON.stringify({ project: null, resolved: { harness: "prompt", commit: false, push: false, deploy: false, respawn: false, retry: false },
+        defaults: {}, overridden: [], path: "/home/u/.agent-bus/autonomy.json" })
+    : null),
+}));
 import { AUTONOMY_DEFAULTS, type AutonomyResolved } from "./onboardingState";
 import type { OnboardingApi } from "./onboardingApi";
 import type { SetupApi, SetupReport } from "../../shared/api/client";
@@ -104,6 +112,23 @@ describe("OnboardingFlow", () => {
     expect(host.textContent).toContain("Autonomy");
     expect(host.textContent).toContain("1 / 2");
     expect(host.textContent).not.toContain("Connect a provider");
+  });
+
+  it("the autonomy step is machine-wide: no row of project tabs, however many checkouts exist", async () => {
+    const many = ["ANE", "CSS", "PPLStudyBuddy", "adpilot", "agency-agents", "agent-router", "argus", "aria", "trantor"];
+    const { deps } = depsFor({
+      providers: [providerRow("connected")],
+      hasHubPin: true,
+      autonomy: { ...AUTONOMY_DEFAULTS },
+      projects: many,
+    });
+    await mount(deps);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const labels = [...host.querySelectorAll("button")].map(b => b.textContent?.trim());
+    expect(labels).not.toContain("every project");
+    for (const p of many) expect(labels).not.toContain(p);
+    expect(host.textContent).toContain("This applies to every project");
+    expect(host.textContent).not.toContain("set above");
   });
 
   it("closes immediately, showing nothing, when every step is already satisfied", async () => {

@@ -200,7 +200,9 @@ export function OnboardingFlow({ me, project, onClose, forced = false, onCliInst
           )}
           {step === "autonomy" && (
             <>
-              <Autonomy projects={projects} />
+              {/* Machine-wide only: per-project rules live in Settings, and a row of every
+                  checkout on this Mac overflowed the wizard card (2.1.1, operator GIF). */}
+              <Autonomy projects={[]} />
               {satisfiedAtMount?.autonomy && <DoneBanner>Already chosen — nothing needed here.</DoneBanner>}
             </>
           )}

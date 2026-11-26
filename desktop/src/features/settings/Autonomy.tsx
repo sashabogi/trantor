@@ -70,13 +70,15 @@ export function Autonomy({ projects }: { projects: string[] }) {
       <div>
         <div className="text-[13px] font-semibold">Autonomy</div>
         <div className="mt-1 text-[12.5px] leading-relaxed text-tr-muted">
-          How much Trantor does without asking, on this machine. What a crew AGENT may do
-          unattended is set above, per project, because that one is shared with your team.
+          {projects.length
+            ? "How much Trantor does without asking, on this machine. What a crew agent may do unattended is set above, per project, because that one is shared with your team."
+            : "How much Trantor does without asking, on this machine. This applies to every project. You can give a project its own rules later in Settings, Autonomy."}
         </div>
       </div>
 
-      {/* SCOPE. Defaults apply everywhere; a project overrides them. */}
-      <div className="flex items-center gap-1">
+      {/* SCOPE. Defaults apply everywhere; a project overrides them. Hidden when there is only the
+          default to pick, and it wraps so a long project list never widens its container. */}
+      {projects.length > 0 && <div className="flex min-w-0 flex-wrap items-center gap-1">
         <button
           type="button"
           onClick={() => setScope(null)}
@@ -96,7 +98,7 @@ export function Autonomy({ projects }: { projects: string[] }) {
             {p}
           </button>
         ))}
-      </div>
+      </div>}
 
       <Section title="Your session" sub="whether your own claude asks before it acts">
         <Choice
