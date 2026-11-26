@@ -44,6 +44,7 @@ mod settings;
 mod remote;
 mod icons;
 mod local_sessions;
+mod subagents;
 mod succession;
 mod drafts;
 mod git_panel;

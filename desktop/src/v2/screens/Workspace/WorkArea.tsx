@@ -10,6 +10,7 @@ import { Approval } from "./Approval";
 import { usePanes } from "./panes";
 import { takesSeatMessage } from "./seatModel";
 import { SeatMessage } from "./SeatMessage";
+import { SubagentPane } from "./SubagentPane";
 import type { SeatView } from "./seatModel";
 import type { DiffState } from "./useSeatDiff";
 
@@ -32,6 +33,11 @@ export function SeatTerminal({ project, seat, interactive }: { project: string; 
   );
 }
 
+/** What a tile shows for a seat: a sub-agent's conversation, else its terminal (#14265). */
+export function SeatPane({ project, seat, interactive }: { project: string; seat: SeatView; interactive: boolean }) {
+  return seat.agentInfo ? <SubagentPane key={seat.key} project={project} seat={seat} /> : <SeatTerminal project={project} seat={seat} interactive={interactive} />;
+}
+
 function TabBody({ tab, project, seat, diff }: { tab: WorkTab; project: string; seat: SeatView; diff: DiffState }) {
   if (tab === "terminal") {
     return <div className="flex min-h-[360px] min-w-0 flex-1 flex-col p-2"><SeatTerminal project={project} seat={seat} interactive /></div>;
@@ -47,6 +53,8 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
   tab: WorkTab; onTab: (t: WorkTab) => void; messageRef: RefObject<HTMLInputElement | null>; onDecided: () => void;
 }) {
   const changed = diff.diff?.files.length ?? 0;
+  // #14265: a sub-agent is read-only, so its pane has no Terminal and Changes tabs, no approval and no message box.
+  if (seat.agentInfo) return <div className="flex min-h-0 flex-1 flex-col"><SubagentPane key={seat.key} project={project} seat={seat} /></div>;
   return (
     // #14250: the centre column is the panel, so the work area carries no frame of its own.
     <div className="flex min-h-0 flex-1 flex-col">

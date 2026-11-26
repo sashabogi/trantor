@@ -87,7 +87,7 @@ function transcriptAnswered(ask: OrchAsk, chat: ChatState): boolean {
  *  every tool call. */
 /** Consecutive tool blocks batch into one array; an AskUserQuestion never joins a neighbour
  *  (#6094): kept singleton, so ToolRun's single-block path always routes it straight to AskCard. */
-function batch(blocks: Block[]): Array<Block | Block[]> {
+export function batch(blocks: Block[]): Array<Block | Block[]> {
   const out: Array<Block | Block[]> = [];
   const isAsk = (b: Block) => b.kind === "tool" && b.tool === "AskUserQuestion";
   for (const b of blocks) {
@@ -101,7 +101,7 @@ function batch(blocks: Block[]): Array<Block | Block[]> {
   return out;
 }
 
-function group(turns: Turn[]): Turn[] {
+export function group(turns: Turn[]): Turn[] {
   const out: Turn[] = [];
   for (const t of turns) {
     const last = out[out.length - 1];
@@ -119,7 +119,7 @@ function group(turns: Turn[]): Turn[] {
 /** A run of consecutive tool calls is ONE act to a reader — "checked nine things" — not nine
  *  stacked cards around a single sentence. Failures stay visible while collapsed, because a run
  *  that went wrong is exactly the one you want to open. */
-function ToolRun({ blocks, results }: {
+export function ToolRun({ blocks, results }: {
   blocks: Block[]; results: Record<string, ToolResult>;
 }) {
   const [open, setOpen] = useState(false);
@@ -335,7 +335,7 @@ function LiveAskCard({ ask, onAnswer, invokeFn }: {
   );
 }
 
-function Thinking({ text }: { text: string }) {
+export function Thinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="mt-1.5">

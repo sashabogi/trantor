@@ -38,6 +38,8 @@ export type ScmSidebarProps = {
   selectedPath?: string | null;
   /** true when the host follows onPickScope to a worktree scope itself (Code); else the sidebar reads it alone */
   hostPicksWorktree?: boolean;
+  /** #14265: told the scope the sidebar is showing, including an agent worktree it reads alone, so opens can name it */
+  onShownScope?: (scope: string | null) => void;
   /** header-row extras: the column's collapse button, the open-full-tab button */
   actions?: ReactNode;
 };
@@ -95,6 +97,9 @@ export function ScmSidebar(p: ScmSidebarProps) {
     setOwn(scope !== null && isWorktreeScope(scope) && !p.hostPicksWorktree ? scope : null);
     p.onPickScope(scope);
   };
+  const shown = own ?? p.scope;
+  const report = p.onShownScope;
+  useEffect(() => { report?.(shown); }, [report, shown]);
   const view = { ...p, worktrees, onPickScope };
   if (own) return <WorktreeScoped {...view} own={own} />;
   const scopeName = p.scope && isWorktreeScope(p.scope) ? scopeWorktreeLabel(p.scope, worktrees) : p.scopeName;

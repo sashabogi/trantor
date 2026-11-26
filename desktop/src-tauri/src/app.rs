@@ -220,6 +220,8 @@ pub fn run() {
             sessions::sessions_list,
             sessions::session_transcript,
             orchestrator_chat,
+            subagents::subagents_list,
+            subagents::subagent_tail,
             balances_refresh,
             machine_id,
             crew_controls::workspace_cli,

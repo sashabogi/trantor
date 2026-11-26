@@ -6,7 +6,7 @@ import { useTasks } from "../../../shared/tasks";
 import { usePendingHolds } from "../../../shared/FileHolds";
 import { herdrSeats, type HerdrSeat } from "../../../features/workspace/herdr";
 import { paneTargets } from "../../../features/workspace/paneTargets";
-import { hostPeer, seatPeers, seatViews, type SeatView } from "./seatModel";
+import { hostPeer, seatPeers, seatViews, type SeatView, type SubagentInfo } from "./seatModel";
 
 const POLL_MS = 12_000;
 
@@ -44,9 +44,31 @@ function useLocalPanes(project: string) {
   return { rows: owned.project === project ? owned.rows : [], refresh };
 }
 
+/** #14265: the orchestrator session's sub-agents, read from their transcript folder on the same cadence as the panes. */
+function useSubagents(project: string): SubagentInfo[] {
+  const [owned, setOwned] = useState<{ project: string; rows: SubagentInfo[] }>({ project, rows: [] });
+  useEffect(() => {
+    let alive = true;
+    const look = () => {
+      invoke<string>("subagents_list", { project })
+        .then(raw => {
+          // SAFETY: subagents_list answers a JSON array of SubagentInfo rows; anything else is dropped.
+          const rows = JSON.parse(raw) as SubagentInfo[] | null;
+          if (alive) setOwned({ project, rows: Array.isArray(rows) ? rows : [] });
+        })
+        .catch(() => {});
+    };
+    look();
+    const iv = setInterval(look, POLL_MS);
+    return () => { alive = false; clearInterval(iv); };
+  }, [project]);
+  return owned.project === project ? owned.rows : [];
+}
+
 export function useWorkspaceData(client: HubClient, project: string): WorkspaceData {
   const { peers, refresh: refreshPeers } = usePeerList(client);
   const { rows, refresh: refreshPanes } = useLocalPanes(project);
+  const subagents = useSubagents(project);
   const refresh = useCallback(() => { refreshPeers(); refreshPanes(); }, [refreshPeers, refreshPanes]);
   const cards = useTasks(client, project);
   const allHolds = usePendingHolds(client);
@@ -55,8 +77,8 @@ export function useWorkspaceData(client: HubClient, project: string): WorkspaceD
     if (!peers && !rows.length) return null;
     const orch = rows.find(r => r.kind === "orch") ?? null;
     const targets = paneTargets(seatPeers(peers ?? [], project), orch, hostPeer(peers ?? [], project), project);
-    return seatViews(targets, holds, rows.filter(r => r.kind === "helper"));
-  }, [peers, rows, project, holds]);
+    return seatViews(targets, holds, rows.filter(r => r.kind === "helper"), subagents);
+  }, [peers, rows, project, holds, subagents]);
   return { seats, cards, holds, refresh };
 }
 

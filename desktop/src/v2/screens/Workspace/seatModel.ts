@@ -6,6 +6,12 @@ import { isAgentPeer, type PaneTarget } from "../../../features/workspace/paneTa
 import { ago } from "../../../shared/time";
 import type { Presence } from "../../ui/identity";
 
+/** One row of `subagents_list`, as the native side serialises it. */
+export type SubagentInfo = {
+  id: string; description: string; subagentType: string | null; startedMs: number | null;
+  lastActivityMs: number; rows: number; state: "running" | "done";
+};
+
 export type SeatView = {
   key: string;
   /** Name a person reads: "codex-8", "orchestrator". */
@@ -23,6 +29,8 @@ export type SeatView = {
   machine?: string;
   isOrchestrator: boolean;
   isHelper?: boolean;
+  /** #14265: a Claude sub-agent of the orchestrator: read-only conversation, no terminal, no message box. */
+  agentInfo?: SubagentInfo;
   target: PaneTarget;
 };
 
@@ -55,7 +63,7 @@ export function presenceOf(t: PaneTarget, holds: FileHold[]): Presence {
   return "ready";
 }
 
-export function seatViews(targets: PaneTarget[], holds: FileHold[], helpers: HerdrSeat[] = []): SeatView[] {
+export function seatViews(targets: PaneTarget[], holds: FileHold[], helpers: HerdrSeat[] = [], subagents: SubagentInfo[] = []): SeatView[] {
   const crew = targets.map(t => {
     const presence = presenceOf(t, holds);
     return {
@@ -69,10 +77,27 @@ export function seatViews(targets: PaneTarget[], holds: FileHold[], helpers: Her
     const finished = t.status === "idle" || t.status === "done" || t.status === "finished";
     const target: PaneTarget = { key, label: t.agent, agent: key, brand: "helper", session: key, online: true, status: t.status ?? undefined, isOrchestrator: false };
     return { ...target, target, isHelper: true, presence: finished ? "ready" as const : "working" as const, words: finished ? "finished" : "running" };
+  }), ...subagents.map(a => {
+    const key = `agent:${a.id}`;
+    const running = a.state === "running";
+    const target: PaneTarget = { key, label: a.description, agent: key, brand: "agent", session: key, online: true, status: running ? "working" : "idle", isOrchestrator: false };
+    return { ...target, target, agentInfo: a, presence: running ? "working" as const : "ready" as const, words: running ? "running" : "finished" };
   })];
 }
 
-export const liveCrewSeats = (seats: SeatView[]) => liveSeats(seats).filter(s => !s.isHelper && !s.isOrchestrator);
+/** #14265: a finished sub-agent tab folds into the "+N finished" menu this long after its last row. */
+export const FINISHED_COLLAPSE_MS = 10 * 60 * 1000;
+
+export const isFinishedAgent = (s: SeatView): boolean => s.agentInfo?.state === "done";
+
+/** Finished long enough to fold away; the selected one stays a tab so opening it from the menu shows it. */
+export const isCollapsedAgent = (s: SeatView, now: number, selectedKey?: string): boolean =>
+  isFinishedAgent(s) && s.key !== selectedKey && now - (s.agentInfo?.lastActivityMs ?? 0) > FINISHED_COLLAPSE_MS;
+
+/** Split and Grid tiles: every live seat, with sub-agents only while they run. */
+export const tileSeats = (seats: SeatView[]): SeatView[] => liveSeats(seats).filter(s => !isFinishedAgent(s));
+
+export const liveCrewSeats = (seats: SeatView[]) => liveSeats(seats).filter(s => !s.isHelper && !s.agentInfo && !s.isOrchestrator);
 export const liveSeats = (seats: SeatView[]) => seats.filter(s => s.presence !== "offline");
 export const offlineSeats = (seats: SeatView[]) => seats.filter(s => s.presence === "offline");
 
@@ -100,4 +125,4 @@ export function visibleSeats(layout: Layout, live: SeatView[], selected: SeatVie
 }
 
 /** #14254: the orchestrator is spoken to in the chat panel, so only crew seats get the one-line message box. */
-export const takesSeatMessage = (seat: Pick<SeatView, "isOrchestrator" | "isHelper">): boolean => !seat.isOrchestrator && !seat.isHelper;
+export const takesSeatMessage = (seat: Pick<SeatView, "isOrchestrator" | "isHelper" | "agentInfo">): boolean => !seat.isOrchestrator && !seat.isHelper && !seat.agentInfo;
