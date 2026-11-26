@@ -51,7 +51,7 @@ fn subagents_dir(tdir: &Path, preferred: Option<&str>) -> Option<PathBuf> {
             continue;
         }
         let stamp = mtime_ms(&d).unwrap_or(0);
-        if best.as_ref().map_or(true, |(s, _)| stamp > *s) {
+        if best.as_ref().is_none_or(|(s, _)| stamp > *s) {
             best = Some((stamp, d));
         }
     }
@@ -96,6 +96,44 @@ fn row_for(jsonl: &Path, now_ms: u64) -> Option<SubagentRow> {
     if now_ms.saturating_sub(last_activity_ms) > ACTIVE_WINDOW_MS {
         return None;
     }
+    let len = std::fs::metadata(jsonl).ok()?.len();
+    let parsed = parsed_cached(jsonl, last_activity_ms, len, || parse_file(jsonl, &id))?;
+    let fresh = now_ms.saturating_sub(last_activity_ms) <= RUNNING_WINDOW_MS;
+    Some(SubagentRow {
+        description: parsed.description,
+        subagent_type: parsed.subagent_type,
+        id,
+        started_ms: parsed.started_ms,
+        last_activity_ms,
+        rows: parsed.rows,
+        state: if fresh && !parsed.finished && !parsed.last_is_final { "running" } else { "done" }.into(),
+    })
+}
+
+/// What a transcript says, independent of the clock; cached by mtime and size so the 12 s list poll
+/// re-reads a file only when it grew (#14265: whole-file reads of every active transcript each poll).
+#[derive(Clone)]
+struct Parsed { description: String, subagent_type: Option<String>, started_ms: Option<u64>, rows: usize, last_is_final: bool, finished: bool }
+
+fn parsed_cached(path: &Path, mtime: u64, len: u64, parse: impl FnOnce() -> Option<Parsed>) -> Option<Parsed> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Cache = Mutex<HashMap<PathBuf, (u64, u64, Parsed)>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some((m, l, p)) = cache.lock().ok().and_then(|c| c.get(path).cloned()) {
+        if m == mtime && l == len {
+            return Some(p);
+        }
+    }
+    let fresh = parse()?;
+    if let Ok(mut c) = cache.lock() {
+        c.insert(path.to_path_buf(), (mtime, len, fresh.clone()));
+    }
+    Some(fresh)
+}
+
+fn parse_file(jsonl: &Path, id: &str) -> Option<Parsed> {
     let raw = std::fs::read_to_string(jsonl).ok()?;
     let lines = complete_lines(&raw);
     let meta: Value = std::fs::read_to_string(jsonl.with_file_name(format!("agent-{id}.meta.json")))
@@ -110,15 +148,13 @@ fn row_for(jsonl: &Path, now_ms: u64) -> Option<SubagentRow> {
         .find_map(|l| serde_json::from_str::<Value>(l).ok().and_then(|v| message_row_is_final(&v)))
         .unwrap_or(false);
     let finished = meta.get("finished").and_then(Value::as_bool).unwrap_or(false);
-    let fresh = now_ms.saturating_sub(last_activity_ms) <= RUNNING_WINDOW_MS;
-    Some(SubagentRow {
-        description: meta_text("description").or_else(|| first_prompt(&lines)).unwrap_or_else(|| id.clone()),
+    Some(Parsed {
+        description: meta_text("description").or_else(|| first_prompt(&lines)).unwrap_or_else(|| id.to_string()),
         subagent_type: meta_text("agentType"),
-        id,
         started_ms,
-        last_activity_ms,
         rows: lines.len(),
-        state: if fresh && !finished && !last_is_final { "running" } else { "done" }.into(),
+        last_is_final,
+        finished,
     })
 }
 
