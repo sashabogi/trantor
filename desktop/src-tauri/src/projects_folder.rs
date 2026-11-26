@@ -19,7 +19,14 @@ pub(crate) struct ResolvedRoot {
 
 // Keyed by config path so independent bus directories never share a preference. Reads take only
 // this lock; successful writes replace the cached value before returning to the webview.
-static CACHE: Mutex<Option<(PathBuf, Preferences)>> = Mutex::new(None);
+// The mtime rides in the key, so an edit from the CLI or by hand is picked up on the next read.
+static CACHE: Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Preferences)>> = Mutex::new(None);
+// Transcript scans are bounded but not free, and the band and panes ask often: one answer per
+// project for a minute, hits and misses alike.
+static RECORDS: Mutex<Option<HashMap<String, (std::time::Instant, Option<PathBuf>)>>> = Mutex::new(None);
+const RECORDS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn mtime(path: &Path) -> Option<std::time::SystemTime> { fs::metadata(path).and_then(|m| m.modified()).ok() }
 
 fn config_path() -> PathBuf { crate::desktop_bus_dir().join("config.json") }
 fn home() -> PathBuf { PathBuf::from(std::env::var_os("HOME").unwrap_or_default()) }
@@ -34,12 +41,13 @@ fn read_config(path: &Path) -> Result<Value, String> {
 
 fn preferences(path: &Path) -> Preferences {
     let mut cache = crate::lock_or_recover(&CACHE);
-    if let Some((key, prefs)) = cache.as_ref() {
-        if key == path { return prefs.clone(); }
+    let stamp = mtime(path);
+    if let Some((key, at, prefs)) = cache.as_ref() {
+        if key == path && *at == stamp { return prefs.clone(); }
     }
-    let prefs = read_config(path).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
-    *cache = Some((path.to_owned(), prefs));
-    cache.as_ref().map(|(_, p)| p.clone()).unwrap_or_default()
+    let prefs: Preferences = read_config(path).ok().and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+    *cache = Some((path.to_owned(), stamp, prefs.clone()));
+    prefs
 }
 
 fn resolve_root(env: Option<PathBuf>, saved: Option<PathBuf>, home: &Path) -> ResolvedRoot {
@@ -80,7 +88,7 @@ fn save(path: &Path, project: Option<&str>, directory: Option<PathBuf>) -> Resul
     let temp = path.with_extension("projects.tmp");
     fs::write(&temp, serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     fs::rename(temp, path).map_err(|e| e.to_string())?;
-    *cache = Some((path.to_owned(), prefs));
+    *cache = Some((path.to_owned(), mtime(path), prefs));
     Ok(())
 }
 
@@ -101,14 +109,29 @@ pub(crate) fn project_folder_set(project: String, path: PathBuf) -> Result<(), S
 pub(crate) fn project_dir(project: &str) -> Option<PathBuf> {
     let prefs = preferences(&config_path());
     let root = resolve_root(std::env::var_os("TRANTOR_DEV_ROOT").map(PathBuf::from), prefs.projects_root.clone(), &home());
-    find_project(&root.path, &prefs.project_folders, &home(), project)
+    find_project_with(&root.path, &prefs.project_folders, project, |id| claude_checkout_cached(&home(), id))
 }
 
+#[cfg(test)]
 fn find_project(root: &Path, overrides: &HashMap<String, PathBuf>, home: &Path, project: &str) -> Option<PathBuf> {
+    find_project_with(root, overrides, project, |id| claude_checkout(home, id))
+}
+
+fn find_project_with(root: &Path, overrides: &HashMap<String, PathBuf>, project: &str, records: impl FnOnce(&str) -> Option<PathBuf>) -> Option<PathBuf> {
     if !valid_project(project) { return None; }
     crate::identity::checkout_for(root, project)
         .or_else(|| overrides.get(project).filter(|p| p.is_absolute() && p.is_dir()).cloned())
-        .or_else(|| claude_checkout(home, project))
+        .or_else(|| records(project))
+}
+
+fn claude_checkout_cached(home: &Path, project: &str) -> Option<PathBuf> {
+    let key = format!("{}\0{project}", home.display());
+    if let Some((at, hit)) = crate::lock_or_recover(&RECORDS).as_ref().and_then(|m| m.get(&key)) {
+        if at.elapsed() < RECORDS_TTL && hit.as_ref().map_or(true, |p| p.is_dir()) { return hit.clone(); }
+    }
+    let hit = claude_checkout(home, project);
+    crate::lock_or_recover(&RECORDS).get_or_insert_with(HashMap::new).insert(key, (std::time::Instant::now(), hit.clone()));
+    hit
 }
 
 fn claude_checkout(home: &Path, project: &str) -> Option<PathBuf> {
@@ -209,5 +232,26 @@ mod tests {
         assert_eq!(find_project(&root, &HashMap::new(), &t.0, "../escape"), None);
         fs::write(transcript, format!("{}{}\n", "{}\n".repeat(20), json!({"cwd": t.0.join("outside/my-app")}))).unwrap();
         assert_eq!(find_project(&root, &HashMap::new(), &t.0, "canonical"), None);
+    }
+
+    #[test]
+    fn records_lookup_is_cached_for_hits_and_misses() {
+        let t = Temp::new(); let records = t.dir(".claude/projects/-x"); let cwd = t.dir("away/cached-app");
+        assert_eq!(claude_checkout_cached(&t.0, "cached-app"), None);
+        fs::write(records.join("s.jsonl"), format!("{}\n", json!({"cwd": cwd}))).unwrap();
+        assert_eq!(claude_checkout_cached(&t.0, "cached-app"), None, "a miss is remembered for the TTL");
+        assert_eq!(claude_checkout(&t.0, "cached-app"), Some(cwd), "the uncached scan sees the new record");
+    }
+
+    #[test]
+    fn an_outside_edit_to_config_is_picked_up() {
+        let t = Temp::new(); let config = t.0.join("config.json"); let root = t.dir("code");
+        fs::write(&config, "{}").unwrap();
+        assert!(preferences(&config).projects_root.is_none());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&config, json!({"projectsRoot": root}).to_string()).unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        fs::File::options().write(true).open(&config).unwrap().set_modified(later).unwrap();
+        assert_eq!(preferences(&config).projects_root, Some(root));
     }
 }

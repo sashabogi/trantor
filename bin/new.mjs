@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { ensureEnrolled as enrollTofu, loadIdentity, signedPost } from "../hooks/lib/api.mjs";
 import { ensureEnrolled as enrollViaOwnerInvite } from "../lib/enroll.mjs";
 import { setAutonomy } from "../lib/autonomy.mjs";
-import { resolveHub, setProjectHub, writeProjectId, isProjectId } from "../lib/project.mjs";
+import { resolveHub, setProjectHub, writeProjectId, isProjectId, devRootFor } from "../lib/project.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -71,7 +71,7 @@ if (briefFile) {
 const dirArg = flag("dir");
 const devRoot = dirArg
   ? resolve(dirArg)
-  : (process.env.TRANTOR_DEV_ROOT ? resolve(process.env.TRANTOR_DEV_ROOT) : join(homedir(), "development"));
+  : resolve(devRootFor());
 if (dirArg && !isAbsolute(dirArg)) { /* relative --dir is allowed; resolved above */ }
 const dir = isAbsolute(name) ? name : join(devRoot, name);
 

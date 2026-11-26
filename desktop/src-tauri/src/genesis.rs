@@ -263,8 +263,7 @@ fn project_wake_reopen_args(project: &str) -> [&str; 2] {
 
 #[tauri::command]
 pub(crate) fn project_dev_root() -> String {
-    std::env::var("TRANTOR_DEV_ROOT")
-        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()))
+    crate::identity::dev_root().to_string_lossy().into_owned()
 }
 
 #[tauri::command]
