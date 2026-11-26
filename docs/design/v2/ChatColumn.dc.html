@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chat column</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0F12}
+:root{--v2-ease:cubic-bezier(.2,.7,.3,1)}
+.cc a{color:#8AA8FF;text-decoration:none;position:relative}
+.cc a:hover{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+.cc a .tip{opacity:0;pointer-events:none;transition:opacity 120ms var(--v2-ease)}
+.cc a:hover .tip{opacity:1}
+.cc button{font-family:inherit;cursor:pointer}
+.cc button:focus-visible,.cc a:focus-visible{outline:1px solid #8AA8FF;outline-offset:1px;border-radius:4px}
+.cc .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+.cc .code{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.92em;color:#C4C8CE;background:#111316;padding:1px 4px;border-radius:4px}
+.cc .row:hover{background:rgba(42,46,54,.4)}
+.cc .chev{transition:transform 120ms var(--v2-ease)}
+.cc .tick{transition:width 120ms var(--v2-ease)}
+.cc .tick:hover{width:14px}
+.cc .pill{transition:border-color 120ms var(--v2-ease)}
+.cc .pill:hover{border-color:#2E3A5A}
+.cc td,.cc th{padding:6px 10px;text-align:left}
+@keyframes cc-sweep{0%{left:-30%;opacity:0}15%{opacity:1}85%{opacity:1}100%{left:100%;opacity:0}}
+@keyframes cc-breathe{0%,100%{border-color:#22252B}50%{border-color:#2E3A5A}}
+@keyframes cc-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.cc .sweep{animation:cc-sweep 1.6s var(--v2-ease) infinite}
+.cc .breathe{animation:cc-breathe 2.4s ease-in-out infinite}
+.cc .pulse{animation:cc-pulse 1.2s ease-in-out infinite}
+.cc .field:focus{outline:none}
+.cc .ringinput{transition:box-shadow 180ms var(--v2-ease),border-color 180ms var(--v2-ease)}
+.cc .ringinput:focus{outline:none;border-color:#8AA8FF;box-shadow:0 0 0 3px rgba(138,168,255,.18),0 0 14px rgba(138,168,255,.14)}
+@media (prefers-reduced-motion: reduce){.cc .sweep,.cc .breathe,.cc .pulse{animation:none}.cc *{transition:none !important}}
+</style>
+</helmet>
+<div class="cc" style="width: 1440px; min-height: 1500px; background: #0E0F12; color: #E7E9EC; font-family: Inter, system-ui, sans-serif; font-size: 13px; padding: 40px 48px; box-sizing: border-box; display: flex; flex-direction: column; gap: 28px;">
+
+  <div style="max-width: 980px;">
+    <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #9AA0A8;">PROPOSAL · CARD #14327 · THE CHAT COLUMN, FOCUS AND LIFE · NOTHING HERE IS BUILT YET</div>
+    <h1 style="margin: 8px 0 0; font-size: 26px; font-weight: 650; letter-spacing: -0.01em;">A calmer chat column: one header, no bubbles on the reply, folded work, linked everything, a composer that glows</h1>
+    <p style="margin: 8px 0 0; color: #9AA0A8; font-size: 13px; line-height: 1.55;">The column is drawn at real size, 440px wide. Only Trantor's existing colours, type scale and radii are used; the few new tokens are on the strip at the bottom. Hover the links, the reply, the Latest pill and the chips. Everything respects reduced motion.</p>
+  </div>
+
+  <div style="display: flex; gap: 40px; align-items: flex-start;">
+
+    <!-- ===================== A · THE COLUMN ===================== -->
+    <section style="display: flex; flex-direction: column; gap: 10px; width: 440px; flex-shrink: 0;">
+      <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #8AA8FF;">A · THE COLUMN, 440PX, REAL SIZE</div>
+      <div style="width: 440px; height: 1180px; background: #0F1013; border-radius: 8px; display: flex; flex-direction: column; position: relative; overflow: hidden;">
+
+        <!-- the single 2.0 header -->
+        <div style="height: 40px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-bottom: 1px solid #1D2025;">
+          <span style="width: 8px; height: 8px; border-radius: 50%; background: #7CC49A;"></span>
+          <span style="font-size: 13px; font-weight: 600;">orchestrator</span>
+          <span class="mono" style="font-size: 11px; color: #6B717A;">fable</span>
+          <span style="flex: 1;"></span>
+          <button type="button" aria-label="Chat options" style="background: none; border: 0; color: #9AA0A8; width: 24px; height: 24px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><circle cx="3" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="13" cy="8" r="0.6"/></svg></button>
+        </div>
+
+        <!-- transcript -->
+        <div style="flex: 1; min-height: 0; position: relative; overflow: hidden;">
+
+          <!-- prompt ticks on the LEFT edge -->
+          <div aria-hidden="true" style="position: absolute; left: 3px; top: 18px; display: flex; flex-direction: column; gap: 4px;">
+            <span class="tick" style="width: 8px; height: 2px; background: #9AA0A8; opacity: 0.5; border-radius: 1px;"></span>
+            <span class="tick" style="width: 8px; height: 2px; background: #9AA0A8; opacity: 0.5; border-radius: 1px;"></span>
+            <span class="tick" style="width: 8px; height: 2px; background: #9AA0A8; opacity: 0.5; border-radius: 1px;"></span>
+            <span class="tick" style="width: 8px; height: 2px; background: #9AA0A8; opacity: 0.9; border-radius: 1px;"></span>
+            <span class="tick" style="width: 8px; height: 2px; background: #9AA0A8; opacity: 0.9; border-radius: 1px;"></span>
+            <span class="tick" style="width: 14px; height: 2.5px; background: #E7E9EC; border-radius: 1px;"></span>
+          </div>
+
+          <div style="position: absolute; inset: 0; overflow-y: auto; display: flex; flex-direction: column-reverse;">
+          <div style="padding: 12px 16px 8px; display: flex; flex-direction: column; gap: 8px;">
+          <!-- user bubble -->
+          <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+            <div style="max-width: 85%; background: #1E2128; border: 1px solid #2A2E36; border-radius: 12px 12px 4px 12px; padding: 8px 12px; font-size: 13px; line-height: 1.55;">Ship the 2.1.3 patch: check what codex-8 left on the composer card, run the root suite, and tell me if it is safe to tag.</div>
+          </div>
+
+          <!-- folded summary row -->
+          <div style="display: flex; flex-direction: column;">
+            <button type="button" class="row" style="min-height: 22px; display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; border-radius: 4px; padding: 0 4px; color: inherit; text-align: left;">
+              <span style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: #9AA0A8;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h4l1.2 1.5h5.8v6h-11z"/></svg></span>
+              <span style="font-size: 12px; color: #9AA0A8; font-weight: 400;">Explored 6 files, ran 4 commands, used 2 other tools</span>
+              <span style="flex: 1;"></span>
+              <span class="chev" style="opacity: 0.55; color: #9AA0A8; display: inline-flex;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></span>
+            </button>
+            <div style="height: 1px; margin: 4px 0 6px; background: linear-gradient(90deg, #2A2E36, transparent);"></div>
+          </div>
+
+          <!-- expanded tool group -->
+          <div style="display: flex; flex-direction: column; margin-top: 0;">
+            <button type="button" class="row" style="min-height: 22px; display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; border-radius: 4px; padding: 0 4px; color: inherit; text-align: left;">
+              <span style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: #9AA0A8;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5l3 3-3 3M8 11.5h5"/></svg></span>
+              <span style="font-size: 12px; color: #9AA0A8;">Edited 1 file, ran 2 commands, 1 failed</span>
+              <span style="flex: 1;"></span>
+              <span class="chev" style="opacity: 0.55; color: #9AA0A8; display: inline-flex; transform: rotate(90deg);"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></span>
+            </button>
+            <div style="margin: 2px 0 0 8px; border-left: 1px solid #22252B; padding-left: 10px; display: flex; flex-direction: column; gap: 2px;">
+
+              <!-- failed command, open -->
+              <div>
+                <div class="row" style="min-height: 22px; display: flex; align-items: center; gap: 8px; border-radius: 4px; padding: 0 4px;">
+                  <span style="width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; color: #E58A8A;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></span>
+                  <span style="font-size: 12px; color: #9AA0A8;">Ran</span>
+                  <span class="mono" style="font-size: 12px; color: #C4C8CE; font-weight: 500;">pnpm test --filter hub</span>
+                </div>
+                <div style="border: 1px solid #22252B; border-radius: 6px; margin: 4px 0 6px 12px; overflow: hidden;">
+                  <div style="background: #111316; padding: 6px 10px; display: flex; align-items: center; gap: 8px;">
+                    <span class="mono" style="font-size: 12px; color: #C4C8CE; flex: 1;">$ pnpm test --filter hub</span>
+                    <span class="mono" style="font-size: 10px; color: #6B717A;">14.2s</span>
+                    <span class="mono" style="font-size: 10px; color: #E58A8A; background: rgba(229,138,138,.12); border-radius: 4px; padding: 1px 6px;">exit 1</span>
+                  </div>
+                  <div style="border-top: 1px solid #22252B; padding: 6px 10px;">
+                    <div class="mono" style="font-size: 12px; color: #9AA0A8; line-height: 1.5;">FAIL hub/test/presence.test.mjs<br>expected 3 seats, received 2</div>
+                    <button type="button" style="margin-top: 4px; background: none; border: 0; padding: 0; color: #8AA8FF; font-size: 11px;">Show output</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- edit card -->
+              <div style="border: 1px solid #22252B; border-radius: 8px; padding: 10px 12px; margin: 2px 0 4px; display: flex; flex-direction: column; gap: 6px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <a href="#" class="mono" style="font-size: 12px; font-weight: 500;">Composer2.tsx</a>
+                  <span class="mono" style="font-size: 11px; color: #7CC49A;">+12</span>
+                  <span class="mono" style="font-size: 11px; color: #E58A8A;">-3</span>
+                  <span style="flex: 1;"></span>
+                  <a href="#" style="font-size: 11px;">Open diff</a>
+                </div>
+                <div class="mono" style="font-size: 11px; line-height: 1.55; border-radius: 4px; overflow: hidden;">
+                  <div style="background: rgba(229,138,138,.10); color: #C4C8CE; padding: 0 8px; white-space: pre;">- border: '1px solid #2A2E36',</div>
+                  <div style="background: rgba(229,138,138,.10); color: #C4C8CE; padding: 0 8px; white-space: pre;">- outline: '2px solid #8AA8FF',</div>
+                  <div style="background: rgba(124,196,154,.10); color: #C4C8CE; padding: 0 8px; white-space: pre;">+ border: focused ? focusEdge : edge,</div>
+                  <div style="background: rgba(124,196,154,.10); color: #C4C8CE; padding: 0 8px; white-space: pre;">+ boxShadow: focused ? focusRing : rest,</div>
+                  <div style="background: rgba(124,196,154,.10); color: #C4C8CE; padding: 0 8px; white-space: pre;">+ transition: 'all 180ms var(--v2-ease)',</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- assistant reply, hover pill visible -->
+          <div style="position: relative; padding-bottom: 0;">
+            <div style="font-size: 13px; line-height: 1.65; color: #E7E9EC;">
+              <p style="margin: 0 0 .7em;">It is safe to tag <span class="code">v2.1.3</span> once the composer fix lands. Here is where things stand.</p>
+              <ul style="margin: 0 0 .7em; padding-left: 1.4em; display: flex; flex-direction: column; gap: .2em;">
+                <li><strong style="font-weight: 600;">Composer focus:</strong> codex-8 finished the ring and edge in <a href="#">desktop/src/v2/ui/Composer2.tsx:200<span class="tip" style="position: absolute; left: 0; bottom: 22px; white-space: nowrap; background: #1E2128; border: 1px solid #2A2E36; border-radius: 6px; padding: 4px 8px; font-family: Inter, sans-serif; font-size: 11px; color: #C4C8CE; box-shadow: 0 8px 20px -10px rgba(0,0,0,.7); z-index: 3;">Open file at line 200</span></a>.
+                  <ul style="margin: .2em 0 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: .2em;">
+                    <li>Card <a href="#">#14306</a> tracks it, merged as <a href="#" class="mono" style="font-size: .92em;">9c1da74</a>.</li>
+                    <li>The old square outline lives in <a href="#" class="code" style="color: #8AA8FF;">desktop/src/v2/theme.css</a>, and is gone.</li>
+                  </ul>
+                </li>
+                <li><strong style="font-weight: 600;">Hub:</strong> unchanged, details in <a href="#">/Users/me/development/trantor/docs/RELEASE.md</a>.</li>
+                <li><strong style="font-weight: 600;">Docs:</strong> the notes are at <a href="#">https://trantor.dev/changelog</a>.</li>
+              </ul>
+              <p style="margin: 0 0 .7em;">Suite results by package:</p>
+
+              <!-- table -->
+              <div style="border: 1px solid #22252B; border-radius: 6px; overflow-x: auto; margin: 0 0 .7em;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.5;">
+                  <thead><tr style="background: #16181C;">
+                    <th style="font-size: 11px; font-weight: 600; color: #9AA0A8;">Package</th>
+                    <th style="font-size: 11px; font-weight: 600; color: #9AA0A8;">Seat</th>
+                    <th style="font-size: 11px; font-weight: 600; color: #9AA0A8;">Status</th>
+                    <th style="font-size: 11px; font-weight: 600; color: #9AA0A8; text-align: right;">Tests</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr style="border-top: 1px solid #1D2025;"><td style="font-weight: 500;">desktop</td><td>codex-8</td><td style="color: #7CC49A;">passing</td><td class="mono" style="text-align: right;">1,284</td></tr>
+                    <tr style="border-top: 1px solid #1D2025;"><td style="font-weight: 500;">cli</td><td>kimi-9</td><td style="color: #7CC49A;">passing</td><td class="mono" style="text-align: right;">902</td></tr>
+                    <tr style="border-top: 1px solid #1D2025;"><td style="font-weight: 500;">hub</td><td>glm-3</td><td style="color: #E58A8A;">1 failing</td><td class="mono" style="text-align: right;">377</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- code block -->
+              <div style="border: 1px solid #22252B; border-radius: 6px; overflow: hidden; margin: 0 0 .7em;">
+                <div style="height: 24px; background: #16181C; display: flex; align-items: center; padding: 0 4px 0 10px;">
+                  <span style="font-size: 10px; color: #9AA0A8;">bash</span>
+                  <span style="flex: 1;"></span>
+                  <button type="button" aria-label="Copy code" style="width: 20px; height: 20px; background: none; border: 0; color: #9AA0A8; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
+                </div>
+                <pre class="mono" style="margin: 0; background: #111316; font-size: 12px; line-height: 1.55; padding: 8px 10px; color: #C4C8CE; overflow-x: auto;">pnpm test --filter hub
+git tag v2.1.3 &amp;&amp; git push origin v2.1.3</pre>
+              </div>
+            </div>
+
+            <!-- hover action pill, bottom-right -->
+            <div style="position: absolute; right: 0; bottom: -12px; z-index: 2; background: #1E2128; border: 1px solid #2A2E36; border-radius: 6px; box-shadow: 0 8px 20px -10px rgba(0,0,0,.7); padding: 2px; display: flex; gap: 2px;">
+              <button type="button" aria-label="Copy reply" style="width: 24px; height: 24px; background: none; border: 0; color: #C4C8CE; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
+            </div>
+          </div>
+
+          <!-- footer -->
+          <div style="display: flex; align-items: center; gap: 10px; margin: 14px 0 6px;">
+            <span style="font-size: 12px; color: #9AA0A8; opacity: 0.85; white-space: nowrap;">Worked for 6m 05s</span>
+            <span style="flex: 1; height: 1px; background: linear-gradient(90deg, #2A2E36, transparent);"></span>
+          </div>
+
+          </div>
+          </div>
+        </div>
+
+        <!-- Latest pill + composer -->
+        <div style="position: relative; flex-shrink: 0;">
+        <div style="position: absolute; top: -16px; left: 50%; transform: translateX(-50%); z-index: 2;">
+          <button type="button" class="pill" style="height: 28px; border-radius: 999px; background: #1E2128; border: 1px solid #2A2E36; box-shadow: 0 8px 20px -10px rgba(0,0,0,.7); padding: 0 12px; color: #E7E9EC; font-size: 12px; display: inline-flex; align-items: center; gap: 6px;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v10M4 9l4 4 4-4"/></svg>Latest</button>
+        </div>
+
+        <!-- composer, focused -->
+        <div style="margin: 8px 16px 12px; border-radius: 12px; padding: 1px; background: linear-gradient(180deg, rgba(138,168,255,.80), rgba(138,168,255,.35)); box-shadow: 0 0 0 4px rgba(138,168,255,.20), 0 0 22px 2px rgba(138,168,255,.18), 0 12px 32px -16px rgba(0,0,0,.6); position: relative; overflow: hidden;">
+          <div style="background: #16181C; border-radius: 11px; padding: 10px 10px 8px; position: relative;">
+            <textarea class="field" aria-label="Message the orchestrator" rows="2" style="width: 100%; box-sizing: border-box; resize: none; border: 0; outline: none; background: transparent; color: #E7E9EC; font-family: Inter, system-ui, sans-serif; font-size: 13px; line-height: 1.65; padding: 0;">Tag it, then watch the release run and ping me when npm shows 2.1.3</textarea>
+            <div style="display: flex; align-items: center; gap: 6px; margin-top: 6px;">
+              <button type="button" class="pill" style="height: 24px; border-radius: 999px; border: 1px solid #22252B; background: transparent; color: #C4C8CE; font-size: 11px; padding: 0 10px;">orchestrator</button>
+              <button type="button" class="pill" style="height: 24px; border-radius: 999px; border: 1px solid #22252B; background: transparent; color: #C4C8CE; font-size: 11px; padding: 0 10px;">Ask first</button>
+              <button type="button" class="pill" style="height: 24px; border-radius: 999px; border: 1px solid #22252B; background: transparent; color: #C4C8CE; font-size: 11px; padding: 0 10px;">fable</button>
+              <span style="flex: 1;"></span>
+              <button type="button" aria-label="Send" style="width: 24px; height: 24px; border-radius: 999px; border: 0; background: #8AA8FF; color: #0E0F12; display: inline-flex; align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"/></svg></button>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== RIGHT ===================== -->
+    <div style="flex: 1; display: flex; flex-direction: column; gap: 32px; min-width: 0;">
+
+      <!-- B · composer states -->
+      <section style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #8AA8FF;">B · THE COMPOSER, UNFOCUSED, FOCUSED, BUSY</div>
+        <div style="background: #0F1013; border-radius: 8px; padding: 24px; display: flex; flex-direction: column; gap: 24px;">
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="font-size: 11px; color: #9AA0A8;">Unfocused. A quiet gradient hairline, soft resting shadow, no outline.</div>
+            <div style="max-width: 400px; border-radius: 12px; padding: 1px; background: linear-gradient(180deg, rgba(231,233,236,.14), rgba(231,233,236,.06)); box-shadow: inset 0 1px rgba(255,255,255,.04), 0 10px 28px -16px rgba(0,0,0,.55);">
+              <div style="background: #16181C; border-radius: 11px; padding: 10px 10px 8px;">
+                <div style="font-size: 13px; line-height: 1.65; color: #9AA0A8;">Message the orchestrator</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;"><span style="height: 24px; border-radius: 999px; border: 1px solid #22252B; color: #C4C8CE; font-size: 11px; padding: 0 10px; display: inline-flex; align-items: center;">orchestrator</span><span style="height: 24px; border-radius: 999px; border: 1px solid #22252B; color: #C4C8CE; font-size: 11px; padding: 0 10px; display: inline-flex; align-items: center;">Ask first</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="font-size: 11px; color: #9AA0A8;">Focused. The whole box glows over 180ms: edge goes accent, 70% on top fading to 30%.</div>
+            <div style="max-width: 400px; border-radius: 12px; padding: 1px; background: linear-gradient(180deg, rgba(138,168,255,.80), rgba(138,168,255,.35)); box-shadow: 0 0 0 4px rgba(138,168,255,.20), 0 0 22px 2px rgba(138,168,255,.18), 0 12px 32px -16px rgba(0,0,0,.6);">
+              <div style="background: #16181C; border-radius: 11px; padding: 10px 10px 8px;">
+                <div style="font-size: 13px; line-height: 1.65; color: #E7E9EC;">Run the root suite<span style="display: inline-block; width: 1px; height: 14px; background: #8AA8FF; vertical-align: -2px; margin-left: 1px;"></span></div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;"><span style="height: 24px; border-radius: 999px; border: 1px solid #22252B; color: #C4C8CE; font-size: 11px; padding: 0 10px; display: inline-flex; align-items: center;">orchestrator</span><span style="height: 24px; border-radius: 999px; border: 1px solid #22252B; color: #C4C8CE; font-size: 11px; padding: 0 10px; display: inline-flex; align-items: center;">Ask first</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="font-size: 11px; color: #9AA0A8;">Busy. A 1px accent sweep runs along the top edge, 1.6s loop (static when motion is reduced).</div>
+            <div style="max-width: 400px; position: relative; border-radius: 12px; padding: 1px; background: linear-gradient(180deg, rgba(231,233,236,.14), rgba(231,233,236,.06)); overflow: hidden; box-shadow: inset 0 1px rgba(255,255,255,.04), 0 10px 28px -16px rgba(0,0,0,.55);">
+              <span class="sweep" aria-hidden="true" style="position: absolute; top: 0; left: 30%; width: 30%; height: 1px; background: linear-gradient(90deg, transparent, #8AA8FF, transparent);"></span>
+              <div style="background: #16181C; border-radius: 11px; padding: 10px 10px 8px;">
+                <div style="font-size: 13px; line-height: 1.65; color: #9AA0A8;">codex-8 is working, add a note for it</div>
+                <div style="display: flex; gap: 6px; margin-top: 6px;"><span style="height: 24px; border-radius: 999px; border: 1px solid #22252B; color: #C4C8CE; font-size: 11px; padding: 0 10px; display: inline-flex; align-items: center;">Stop</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- C · app-wide focus and life -->
+      <section style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #8AA8FF;">C · APP-WIDE FOCUS AND LIFE</div>
+        <div style="background: #0B0C0F; border-radius: 8px; padding: 24px; display: flex; flex-direction: column; gap: 24px;">
+
+          <div style="display: flex; gap: 6px;">
+            <div style="flex: 1; height: 150px; background: #0F1013; border: 1px solid rgba(138,168,255,.35); border-radius: 8px; padding: 12px; box-sizing: border-box; transition: border-color 240ms var(--v2-ease);">
+              <div style="font-size: 11px; font-weight: 600; color: #E7E9EC;">Active pane</div>
+              <div style="font-size: 11px; color: #9AA0A8; margin-top: 4px; line-height: 1.5;">The one you last clicked or typed in. Edge becomes the active edge over 240ms. Only one at a time.</div>
+            </div>
+            <div style="flex: 1; height: 150px; background: #0F1013; border: 1px solid #22252B; border-radius: 8px; padding: 12px; box-sizing: border-box;">
+              <div style="font-size: 11px; font-weight: 600; color: #E7E9EC;">Idle pane</div>
+              <div style="font-size: 11px; color: #9AA0A8; margin-top: 4px; line-height: 1.5;">Plain edge. Nothing here wants you right now.</div>
+            </div>
+            <div class="breathe" style="flex: 1; height: 150px; background: #0F1013; border: 1px solid #22252B; border-radius: 8px; padding: 12px; box-sizing: border-box;">
+              <div style="font-size: 11px; font-weight: 600; color: #E7E9EC; display: flex; align-items: center; gap: 6px;"><span class="pulse" style="width: 6px; height: 6px; border-radius: 50%; background: #8AA8FF;"></span>codex-8 working</div>
+              <div style="font-size: 11px; color: #9AA0A8; margin-top: 4px; line-height: 1.5;">The edge breathes between edge and accent edge, 2.4s.</div>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 24px; align-items: flex-end;">
+            <div style="display: flex; flex-direction: column; gap: 6px; width: 280px;">
+              <label for="cc-in" style="font-size: 11px; color: #9AA0A8;">Focused text input, same ring language, smaller</label>
+              <input id="cc-in" class="ringinput" type="text" value="v2.1.3" style="height: 32px; box-sizing: border-box; background: #111316; border: 1px solid #8AA8FF; border-radius: 6px; padding: 0 10px; color: #E7E9EC; font-family: 'JetBrains Mono', monospace; font-size: 12px; box-shadow: 0 0 0 3px rgba(138,168,255,.18), 0 0 14px rgba(138,168,255,.14);">
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <span style="font-size: 11px; color: #9AA0A8;">Keyboard focus-visible: 1px accent outline, 1px offset</span>
+              <button type="button" style="height: 28px; background: #1E2128; border: 1px solid #2A2E36; border-radius: 6px; color: #E7E9EC; font-size: 12px; padding: 0 12px; outline: 1px solid #8AA8FF; outline-offset: 1px; align-self: flex-start;">Open the card</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- D · token strip -->
+      <section style="display: flex; flex-direction: column; gap: 10px;">
+        <div style="font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: #8AA8FF;">D · NEW TOKENS, PROPOSED</div>
+        <div style="background: #0B0C0F; border: 1px solid #22252B; border-radius: 8px; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px;">
+
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="width: 120px; height: 28px; border-radius: 8px; background: #16181C; box-shadow: 0 0 0 4px rgba(138,168,255,.20), 0 0 22px 2px rgba(138,168,255,.18), 0 12px 32px -16px rgba(0,0,0,.6); flex-shrink: 0;"></span>
+            <div><div class="mono" style="font-size: 12px; font-weight: 500;">--v2-focus-ring</div><div class="mono" style="font-size: 11px; color: #9AA0A8;">0 0 0 4px rgba(138,168,255,.20), 0 0 22px 2px rgba(138,168,255,.18), 0 12px 32px -16px rgba(0,0,0,.6)</div></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="width: 120px; height: 28px; border-radius: 8px; padding: 1px; box-sizing: border-box; background: linear-gradient(180deg, rgba(138,168,255,.80), rgba(138,168,255,.35)); flex-shrink: 0;"><span style="display: block; width: 100%; height: 100%; border-radius: 7px; background: #0B0C0F;"></span></span>
+            <div><div class="mono" style="font-size: 12px; font-weight: 500;">--v2-focus-edge</div><div class="mono" style="font-size: 11px; color: #9AA0A8;">accent 80% on top to 35% at the bottom, 1px gradient border</div></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="width: 120px; height: 28px; border-radius: 8px; border: 1px solid rgba(138,168,255,.35); box-sizing: border-box; flex-shrink: 0;"></span>
+            <div><div class="mono" style="font-size: 12px; font-weight: 500;">--v2-active-edge</div><div class="mono" style="font-size: 11px; color: #9AA0A8;">rgba(138,168,255,.35), the pane you are in</div></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="width: 120px; height: 1px; background: linear-gradient(90deg, #2A2E36, transparent); flex-shrink: 0;"></span>
+            <div><div class="mono" style="font-size: 12px; font-weight: 500;">--v2-hairline-fade</div><div class="mono" style="font-size: 11px; color: #9AA0A8;">linear-gradient(90deg, #2A2E36, transparent), 1px tall</div></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="width: 120px; flex-shrink: 0;"><a href="#" style="font-size: 13px;">Open the card</a></span>
+            <div><div class="mono" style="font-size: 12px; font-weight: 500;">--v2-link</div><div class="mono" style="font-size: 11px; color: #9AA0A8;">#8AA8FF, no underline until hover, then 1px with 2px offset</div></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="width: 120px; display: flex; gap: 4px; flex-shrink: 0;"><span style="width: 18px; height: 18px; border-radius: 4px; background: #2A2E36;"></span><span style="width: 18px; height: 18px; border-radius: 4px; background: #2A2E36;"></span><span style="width: 18px; height: 18px; border-radius: 4px; background: #2A2E36;"></span></span>
+            <div><div class="mono" style="font-size: 12px; font-weight: 500;">--v2-dur-1 120ms · --v2-dur-2 180ms · --v2-dur-3 240ms</div><div class="mono" style="font-size: 11px; color: #9AA0A8;">hover, chevron, pop, copy check · focus glow, border colour · pane activation</div></div>
+          </div>
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="width: 120px; height: 28px; flex-shrink: 0; display: flex; align-items: center;"><svg width="120" height="28" viewBox="0 0 120 28" fill="none" aria-hidden="true"><path d="M2 26C40 26 40 3 118 3" stroke="#8AA8FF" stroke-width="1.5" stroke-linecap="round"/><path d="M2 26L118 26" stroke="#22252B" stroke-width="1" stroke-dasharray="2 3"/></svg></span>
+            <div><div class="mono" style="font-size: 12px; font-weight: 500;">--v2-ease cubic-bezier(.2,.7,.3,1)</div><div class="mono" style="font-size: 11px; color: #9AA0A8;">pulse 1.2s (running tool icon) · breathe 2.4s (a pane where an agent works) · reduced motion: instant and static</div></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
