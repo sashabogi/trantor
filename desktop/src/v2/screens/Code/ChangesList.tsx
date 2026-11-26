@@ -93,7 +93,7 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
         <input id="v2-commit-msg" value={message} onChange={e => setMessage(e.target.value)} onKeyDown={onKey}
           placeholder="Message for your commit"
           className={`min-w-0 flex-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] py-1.5 pl-2.5 text-v2-base text-[var(--v2-text)] outline-none ${expanded ? "pr-9" : "pr-2.5"}`} />
-        {expanded && <span data-char-count className={`v2-mono pointer-events-none absolute right-2.5 text-v2-small ${length > 72 ? "text-[var(--v2-warn)]" : "text-[var(--v2-muted)]"}`}>{length}</span>}
+        {expanded && length > 0 && <span data-char-count className={`v2-mono pointer-events-none absolute right-2.5 text-v2-small ${length > 72 ? "text-[var(--v2-warn)]" : "text-[var(--v2-muted)]"}`}>{length}</span>}
         {!expanded && (
           <span className="relative shrink-0">
             <IconButton label="More commit actions" title="Amend or undo the last commit" size={28} onClick={() => setMoreOpen(o => !o)}><MoreHorizontal size={14} aria-hidden /></IconButton>
@@ -120,7 +120,7 @@ export function CommitBox({ project, snap, staged, onDone, onError }: {
             </div>
           )}
           <SplitButton label={amend ? "Amend commit" : `Commit ${staged} ${staged === 1 ? "file" : "files"}`} onPrimary={() => commit()} disabledReason={reason}
-            menuLabel="More commit actions" hint={<Kbd>⌘↵</Kbd>}
+            menuLabel="More commit actions" hint={<Kbd onAccent>⌘↵</Kbd>}
             items={[{ label: "Commit and push", onSelect: () => commit(true), disabledReason: reason ?? pushRefusal }, amendItem, undoItem]} />
         </>
       )}

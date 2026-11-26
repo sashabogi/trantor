@@ -53,8 +53,10 @@ export function ListRow({ depth = 0, indent, leading, name, meta, trailing, acti
   const body = (
     <>
       {leading}
-      <span className="min-w-0 shrink-[0.01] truncate">{name}</span>
-      {meta ? <span className="min-w-0 shrink truncate text-v2-small text-[var(--v2-faint)]">{meta}</span> : null}
+      {/* The name keeps its width (capped so a very long one still truncates); the folder takes what is
+          left and is the first thing to go. */}
+      <span data-row-name className="max-w-[70%] shrink-0 truncate">{name}</span>
+      {meta ? <span data-row-meta className="min-w-0 flex-1 truncate text-v2-small text-[var(--v2-faint)]">{meta}</span> : null}
       <span className="flex-1" />
       {trailing}
     </>

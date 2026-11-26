@@ -37,7 +37,10 @@ describe("ListRow", () => {
     const spans = [...host.querySelectorAll("span")];
     const name = spans.find(s => s.textContent === "Transcript.tsx");
     const meta = spans.find(s => s.textContent === "desktop/src/v2/screens");
-    expect(name?.className).toContain("shrink-[0.01]");
+    // the name keeps its width (only a very long one truncates, past 70%); the folder fills and goes first
+    expect(name?.className).toContain("shrink-0");
+    expect(name?.className).toContain("max-w-[70%]");
+    expect(meta?.className).toContain("flex-1");
     expect(meta?.className).toContain("truncate");
     expect(meta?.className).toContain("--v2-faint");
     expect(firstRow().style.paddingLeft).toBe("22px");
