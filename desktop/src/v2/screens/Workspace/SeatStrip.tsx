@@ -2,17 +2,15 @@
 // #14241: seats read as tabs joined to the workspace pane below, not pills.
 // #14365: a crew seat tab is just its compact astronaut; the name and what it is doing live in the aria-label, the hover card and the seat bar.
 import { useEffect, useState, type ReactNode } from "react";
-import { Columns2, Ellipsis, Grid2x2, ListChecks, Plus, Square } from "lucide-react";
+import { Clapperboard, Columns2, Ellipsis, Grid2x2, ListChecks, Plus, Square } from "lucide-react";
 import type { Card } from "../../../shared/api/client";
 import { ago } from "../../../shared/time";
-import { activityLine, seatState } from "../../ui/identity";
+import { activityLine, seatState, type SeatState } from "../../ui/identity";
 import { SeatAstronaut, seatBrandColor } from "../../ui/SeatAstronaut";
 import { Tabs, type TabSpec } from "../../ui/Tabs";
 import { ActionMenu } from "./ActionMenu";
-import { AgentDot } from "./AgentDot";
 import { PopMenu } from "./PopMenu";
 import { SeatHoverCard } from "./SeatHoverCard";
-import { SeatMark } from "./SeatMark";
 import { isCollapsedAgent, liveSeats, offlineNote, offlineSeats, type Layout, type SeatView } from "./seatModel";
 import type { Crew } from "./useCrew";
 import { cardOf, type MayDo } from "./useWorkspaceData";
@@ -43,6 +41,28 @@ function useNow(active: boolean): number {
 
 const shortLabel = (s: SeatView) => (s.agentInfo && s.label.length > TAB_LABEL_CHARS ? `${s.label.slice(0, TAB_LABEL_CHARS - 1)}…` : s.label);
 
+/** #14365: "Preview seat states" walks every tab through the five states, staggered by tab so several
+ *  show at once. Pictures only: no agent is touched. Three rounds, then it stops by itself. */
+export const PREVIEW_ORDER = ["working", "waiting", "needs", "ready", "idle"] as const satisfies readonly SeatState[];
+export const PREVIEW_STEP_MS = 3500;
+export const PREVIEW_STEPS = PREVIEW_ORDER.length * 3;
+export const previewState = (step: number, tabIndex: number): SeatState => PREVIEW_ORDER[(step + tabIndex) % PREVIEW_ORDER.length];
+
+type StatePreview = { step: number | null; start: () => void; stop: () => void };
+function usePreview(): StatePreview {
+  const [step, setStep] = useState<number | null>(null);
+  useEffect(() => {
+    if (step === null) return;
+    if (step >= PREVIEW_STEPS) { setStep(null); return; }
+    const t = setTimeout(() => setStep(n => (n === null ? null : n + 1)), PREVIEW_STEP_MS);
+    return () => clearTimeout(t);
+  }, [step]);
+  return { step, start: () => setStep(0), stop: () => setStep(null) };
+}
+
+/** A sub-agent has no presence of its own: running reads as working, finished as ready. */
+const agentState = (s: SeatView): SeatState => (s.agentInfo?.state === "running" ? "working" : "ready");
+
 export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLayout, crew, onDrill, cards, mayDo, needs }: {
   project: string; seats: SeatView[]; selectedKey: string | undefined; onSelect: (key: string) => void;
   layout: Layout; onLayout: (l: Layout) => void; crew: Crew; onDrill: () => void;
@@ -54,28 +74,25 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
   const now = useNow(seats.some(s => s.agentInfo?.state === "done"));
   const folded = liveSeats(seats).filter(s => isCollapsedAgent(s, now, selectedKey));
   const shown = liveSeats(seats).filter(s => !folded.includes(s));
+  const preview = usePreview();
   const quiet = "shrink-0 whitespace-nowrap rounded-md border-0 bg-transparent px-2 py-1 text-v2-small text-[var(--v2-muted)] hover:bg-[var(--v2-row-hover)] hover:text-[var(--v2-text)]";
-  const tabs: TabSpec[] = [...shown.filter(s => !s.isHelper && !s.agentInfo), ...shown.filter(s => s.isHelper), ...shown.filter(s => s.agentInfo)].map(s => {
-    const line = activityLine(s, { needs: needs[s.key] });
-    const iconOnly = !s.isHelper && !s.agentInfo;
+  // #14365: every tab is an astronaut now, crew seats, helpers and Claude sub-agents alike (a sub-agent
+  // wears Claude's mark). The name rides on the aria-label and the hover card.
+  const ordered = [...shown.filter(s => !s.isHelper && !s.agentInfo), ...shown.filter(s => s.isHelper), ...shown.filter(s => s.agentInfo)];
+  const tabs: TabSpec[] = ordered.map((s, i) => {
+    const live: SeatState = s.agentInfo ? agentState(s) : seatState(s);
+    const state = preview.step === null ? live : previewState(preview.step, i);
+    const vendor = s.agentInfo ? "claude" : s.brand;
+    const kind = s.agentInfo ? "sub-agent" : s.isHelper ? "helper" : null;
+    const line = s.agentInfo ? (live === "working" ? "running" : "finished") : activityLine(s, { needs: needs[s.key] });
     const hover = s.agentInfo ? undefined : <SeatHoverCard project={project} seat={s} card={cardOf(cards, s)} mayDo={mayDo} />;
-    if (iconOnly) {
-      return {
-        id: s.key, label: s.label, title: s.session, iconOnly, ariaLabel: `${s.label}, ${line}`,
-        topColor: seatBrandColor(s.brand) ?? undefined,
-        leading: <SeatAstronaut vendor={s.brand} name={s.label} state={seatState(s)} size={64} variant="full" surface={s.key === selectedKey ? "var(--v2-bg)" : "var(--v2-chrome)"} />,
-        hoverCard: hover,
-      };
-    }
     return {
-      id: s.key,
-      label: shortLabel(s),
-      title: s.agentInfo ? s.label : s.session,
+      id: s.key, label: shortLabel(s), title: s.agentInfo ? s.label : s.session, iconOnly: true,
+      ariaLabel: `${s.label}${kind ? ` (${kind})` : ""}, ${line}`,
+      topColor: seatBrandColor(vendor) ?? undefined,
       close: s.isHelper && !crew.busy,
       closeLabel: s.isHelper ? `Stop ${s.label}` : undefined,
-      leading: s.agentInfo ? <AgentDot running={s.agentInfo.state === "running"} /> : <SeatMark seat={s} ring="var(--v2-chrome)" />,
-      line2: <span style={{ color: s.presence === "needs-you" ? "var(--v2-warn)" : undefined }}>{line}</span>,
-      sub: s.isHelper || s.agentInfo ? <span className="rounded-sm bg-[var(--v2-sunken)] px-1 text-v2-micro text-[var(--v2-muted)]">{s.agentInfo ? "agent" : "helper"}</span> : undefined,
+      leading: <SeatAstronaut vendor={vendor} name={s.label} state={state} size={64} variant="full" surface={s.key === selectedKey ? "var(--v2-bg)" : "var(--v2-chrome)"} />,
       hoverCard: hover,
     };
   });
@@ -98,6 +115,12 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
               <button type="button" {...p} title={offline.map(s => `${s.label}, ${offlineNote(s)}`).join("\n")} className={quiet} data-open={open || undefined}>+{offline.length} offline</button>
             )} />
         )}
+        {preview.step !== null && (
+          <button type="button" onClick={preview.stop} title="Stop the state preview; the tabs go back to what each seat is really doing"
+            className={`${quiet} inline-flex items-center gap-1.5 text-[var(--v2-accent)]`}>
+            <Clapperboard size={12} aria-hidden />Previewing · Stop
+          </button>
+        )}
         <PopMenu heading="Add a seat" empty={crew.unavailableReason?.() ?? "Reading installed agents"}
           items={crew.available.map(a => ({ id: a.id, label: a.label, sub: `starts ${a.launch}`, disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.start(a.id) }))}
           trigger={p => (
@@ -118,6 +141,9 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
         <ActionMenu label="Strip actions"
           items={[
             { id: "drill", label: "Drill mode", icon: <ListChecks size={13} aria-hidden />, onPick: onDrill },
+            preview.step === null
+              ? { id: "preview", label: "Preview seat states", icon: <Clapperboard size={13} aria-hidden />, onPick: preview.start }
+              : { id: "preview", label: "Stop the state preview", icon: <Clapperboard size={13} aria-hidden />, onPick: preview.stop },
             { id: "all", label: "All seats", sub: { heading: "All seats", empty: "No seats yet",
               items: seats.map(s => ({ id: s.key, label: s.label, onPick: () => onSelect(s.key) })) } },
           ]}

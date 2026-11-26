@@ -160,7 +160,10 @@ describe("helper panes", () => {
     ];
     await mountScreen(fakeClient([]));
     const tabs = [...host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')];
-    expect(tabs.map(tabText)).toEqual([expect.stringContaining("codex-8, working on card 13970"), expect.stringContaining("glm-5, ready"), expect.stringContaining("reviewrunninghelper"), expect.stringContaining("reviewfinishedhelper")]);
+    expect(tabs.map(t => t.getAttribute("aria-label"))).toEqual([expect.stringContaining("codex-8, working on card 13970"), expect.stringContaining("glm-5, ready"), expect.stringMatching(/^review \(helper\), /), expect.stringMatching(/^review \(helper\), /)]);
+    // #14365: helpers are astronauts too, with no name text in the tab; with no known vendor the visor wears a prompt
+    expect(tabs[2].textContent).toBe("›_");
+    expect(tabs[2].querySelector('[data-variant="full"]')).not.toBeNull();
     await click(tabs[2]);
     expect(terminalAgents()).toEqual(["helper:w1:p2"]);
     expect(host.querySelector('input[placeholder*="Message"]')).toBeNull();
@@ -318,10 +321,28 @@ describe("middle column (#14351)", () => {
     expect([...host.querySelectorAll("button")].some(b => b.textContent === "Record")).toBe(false);
     await click(host.querySelector('button[aria-label="More strip actions"]'));
     const items = [...host.querySelectorAll<HTMLElement>('[role="menu"][aria-label="Strip actions"] [role="menuitem"]')];
-    expect(items.map(i => i.textContent)).toEqual(["Drill mode", "All seats"]);
+    expect(items.map(i => i.textContent)).toEqual(["Drill mode", "Preview seat states", "All seats"]);
     await act(async () => { items[0].click(); });
     await wait(10);
     expect(host.textContent).toContain("Drill Mode");
+  });
+
+  // #14365: the operator wanted to watch every state play; the preview walks the tabs through them,
+  // staggered so several show at once, without touching any agent, and stops on demand.
+  it("Preview seat states walks the tabs through the states and Stop puts them back", async () => {
+    await mountScreen(fakeClient([]));
+    const states = () => [...host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"] [data-variant="full"]')].map(e => e.getAttribute("data-state"));
+    const before = states();
+    await click(host.querySelector('button[aria-label="More strip actions"]'));
+    const item = [...host.querySelectorAll<HTMLElement>('[role="menu"][aria-label="Strip actions"] [role="menuitem"]')].find(i => i.textContent === "Preview seat states");
+    await act(async () => { item?.click(); });
+    const during = states();
+    expect(during[0]).toBe("working");
+    expect(during[1]).toBe("waiting");
+    expect(host.textContent).toContain("Previewing · Stop");
+    await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes("Previewing · Stop")) ?? null);
+    expect(states()).toEqual(before);
+    expect(host.textContent).not.toContain("Previewing · Stop");
   });
 
   it("the seat bar replaces the inspector: view tabs, card link, Message focuses the input, no disabled hand off", async () => {

@@ -81,7 +81,7 @@ function StackedTab<T extends string>({ t, on, i, tabbable, p, buttons, onKeyNav
   const rect = rest.shown && t.hoverCard ? box.current?.getBoundingClientRect() : undefined;
   const style: CSSProperties = t.iconOnly
     // #14365: icon tabs hold a full 64px seat astronaut (typing, tapping, waving), not just a head.
-    ? { transitionDuration: "var(--v2-dur-1)", width: 76 }
+    ? { transitionDuration: "var(--v2-dur-1)", width: t.close ? 92 : 76 }
     : { transitionDuration: "var(--v2-dur-1)", minWidth: small ? 96 : 120, maxWidth: small ? 120 : 220 };
   if (on) Object.assign(style, { background: p.pane, borderBottom: `1px solid ${p.pane}`, marginBottom: "-1px" });
   // A plain #rrggbb softens to ~70% with an alpha byte; anything else is used as given.

@@ -67,6 +67,8 @@ export function seatBrandColor(vendor: string, machineId?: string): string | nul
 type Vendor = { visor: string; gradient: boolean; mark: MarkPaths | null; mono: string };
 function vendorOf(vendor: string, machineId: string | undefined): Vendor {
   const brand = brandFor(vendor, undefined, machineId);
+  // A helper runs whatever command it was given, so no vendor is known: it wears a terminal prompt.
+  if (!brand && vendor === "helper") return { visor: "var(--v2-track)", gradient: false, mark: null, mono: "›_" };
   if (!brand) return { visor: "var(--v2-track)", gradient: false, mark: null, mono: vendor.replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "?" };
   const tint = dictGet(VISOR, brand.label) ?? "var(--v2-track)";
   return { visor: tint, gradient: tint === "gradient", mark: markOf(brand.svg), mono: "" };

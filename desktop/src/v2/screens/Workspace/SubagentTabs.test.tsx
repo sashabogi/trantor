@@ -80,12 +80,13 @@ const tabs = () => [...host.querySelectorAll<HTMLElement>('[role="tablist"][aria
 const tabFor = (text: string) => tabs().find(t => `${t.getAttribute("aria-label") ?? ""}${t.textContent}`.includes(text)) ?? null;
 
 describe("sub-agent tabs", () => {
-  it("gives each running sub-agent a read-only tab after the crew seats, with an agent badge and a pulsing dot", async () => {
+  it("gives each running sub-agent a read-only tab after the crew seats, as a Claude astronaut at work", async () => {
     agents = [agent("a1", "Review the diff", "running"), agent("a2", "Write the tests", "running")];
     await mount();
-    // #14365: the crew seat tab is icon-only, so its name is the aria-label.
-    expect(tabs().map(t => t.getAttribute("aria-label") ?? t.textContent)).toEqual([expect.stringContaining("codex-8"), expect.stringContaining("Review the diffrunningagent"), expect.stringContaining("Write the testsrunningagent")]);
-    expect(tabFor("Review the diff")?.querySelector('[role="img"][aria-label="Running"].v2-agent-pulse')).not.toBeNull();
+    // #14365: every tab is an astronaut; the name and kind ride on the aria-label.
+    expect(tabs().map(t => t.getAttribute("aria-label"))).toEqual([expect.stringContaining("codex-8"), "Review the diff (sub-agent), running", "Write the tests (sub-agent), running"]);
+    expect(tabFor("Review the diff")?.querySelector('[data-state="working"]')).not.toBeNull();
+    expect(tabFor("Review the diff")?.textContent).toBe("");
     await click(tabFor("Review the diff"));
     expect(host.querySelector('[data-testid="subagent-pane"]')?.getAttribute("data-agent-id")).toBe("a1");
     expect(host.querySelector('input#v2-seatmsg')).toBeNull();
