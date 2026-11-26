@@ -2,7 +2,34 @@
 use super::*;
 
 pub(crate) const RELEASES_URL: &str = "https://api.github.com/repos/sashabogi/trantor/releases?per_page=30";
-pub(crate) const APP_PATH: &str = "/Applications/Trantor.app";
+
+/// The `.app` bundle a running binary lives in: `.../Trantor.app/Contents/MacOS/<bin>` gives
+/// `.../Trantor.app`. None when the binary is not inside an `.app` bundle (dev build, bare binary).
+pub(crate) fn bundle_of_exe(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && app.extension()? == "app")
+        .then(|| app.to_path_buf())
+}
+
+/// Where an update may install: the running bundle, when it is a real app outside a mounted DMG.
+pub(crate) fn install_target(exe: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let move_msg = "Move Trantor to Applications first, then update from there.";
+    let app = bundle_of_exe(exe).ok_or_else(|| {
+        format!("Trantor is not running from an app bundle, so it cannot update itself. {move_msg}")
+    })?;
+    if app.starts_with("/Volumes/") {
+        return Err(format!("Trantor is running from a disk image. {move_msg}"));
+    }
+    let parent = app.parent().ok_or_else(|| move_msg.to_string())?;
+    if std::fs::metadata(parent).map(|m| m.permissions().readonly()).unwrap_or(true) {
+        return Err(format!("The folder holding Trantor is not writable. {move_msg}"));
+    }
+    Ok(app)
+}
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +167,11 @@ pub(crate) async fn app_update_install(url: String, asset_name: String) -> Resul
     {
         return Err("refusing non-GitHub download URL".into());
     }
+    let app_path = std::env::current_exe()
+        .map_err(|e| format!("could not locate the running app: {e}"))
+        .and_then(|exe| install_target(&exe))?;
+    let app_path = app_path.to_string_lossy().into_owned();
+    let app_path = app_path.as_str();
     let dmg = std::env::temp_dir().join(&asset_name);
     let bytes = reqwest::Client::new()
         .get(&url)
@@ -196,17 +228,17 @@ pub(crate) async fn app_update_install(url: String, asset_name: String) -> Resul
                 if mount.is_empty() { "none" } else { &mount }
             ));
         }
-        if std::path::Path::new(APP_PATH).exists() {
-            std::fs::remove_dir_all(APP_PATH)
+        if std::path::Path::new(app_path).exists() {
+            std::fs::remove_dir_all(app_path)
                 .map_err(|e| format!("could not remove old app: {e}"))?;
         }
         run(
             "/usr/bin/ditto",
-            &[src.to_str().unwrap_or_default(), APP_PATH],
+            &[src.to_str().unwrap_or_default(), app_path],
         )?;
         // the download carries quarantine; the user explicitly clicked Update — clear it so
         // Gatekeeper doesn't refuse the unsigned build on relaunch
-        let _ = run("/usr/bin/xattr", &["-dr", "com.apple.quarantine", APP_PATH]);
+        let _ = run("/usr/bin/xattr", &["-dr", "com.apple.quarantine", app_path]);
         Ok(())
     })();
     let _ = run("/usr/bin/hdiutil", &["detach", &mount, "-quiet"]);
@@ -216,7 +248,7 @@ pub(crate) async fn app_update_install(url: String, asset_name: String) -> Resul
     // -n: a fresh instance of the NEW bundle even though this (old) one is still alive for a
     // few more milliseconds. Then exit — the overlap is the handoff.
     let _ = identity_env::command("/usr/bin/open")
-        .args(["-n", APP_PATH])
+        .args(["-n", app_path])
         .spawn();
     std::thread::sleep(std::time::Duration::from_millis(300));
     std::process::exit(0);
@@ -368,6 +400,37 @@ pub(crate) async fn open_code(target: String, kind: String) -> Result<(), String
 #[cfg(test)]
 mod update_tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn bundle_is_derived_from_the_exe_path() {
+        assert_eq!(
+            bundle_of_exe(Path::new("/Applications/Trantor.app/Contents/MacOS/trantor-desktop")),
+            Some(PathBuf::from("/Applications/Trantor.app"))
+        );
+        assert_eq!(
+            bundle_of_exe(Path::new("/Users/a/Apps/Trantor.app/Contents/MacOS/x")),
+            Some(PathBuf::from("/Users/a/Apps/Trantor.app"))
+        );
+        assert_eq!(bundle_of_exe(Path::new("/repo/target/debug/trantor-desktop")), None);
+    }
+
+    #[test]
+    fn dmg_and_bare_binaries_refuse_with_move_to_applications() {
+        let dmg = install_target(Path::new("/Volumes/Trantor/Trantor.app/Contents/MacOS/x")).unwrap_err();
+        assert!(dmg.contains("Move Trantor to Applications first"));
+        let bare = install_target(Path::new("/repo/target/debug/x")).unwrap_err();
+        assert!(bare.contains("Move Trantor to Applications first"));
+    }
+
+    #[test]
+    fn a_writable_bundle_location_is_accepted() {
+        let dir = std::env::temp_dir().join(format!("trantor-14322-upd-{}", std::process::id()));
+        let exe = dir.join("Trantor.app/Contents/MacOS/x");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        assert_eq!(install_target(&exe), Ok(dir.join("Trantor.app")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // numeric-per-part is the whole point: a string compare calls "0.3.10" OLDER than "0.3.9"
     #[test]

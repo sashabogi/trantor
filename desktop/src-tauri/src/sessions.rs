@@ -380,11 +380,11 @@ fn visit_files(root: &Path, depth: usize, out: &mut Vec<PathBuf>, accept: fn(&Pa
 }
 
 fn project_cwds(project: &str, scope: &str) -> Vec<PathBuf> {
-    let home = home_dir();
-    let root = std::env::var("TRANTOR_DEV_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home.join("development"))
-        .join(project);
+    project_cwds_in(&crate::identity::dev_root(), &home_dir(), project, scope)
+}
+
+fn project_cwds_in(dev_root: &Path, home: &Path, project: &str, scope: &str) -> Vec<PathBuf> {
+    let root = dev_root.join(project);
     let mut paths = vec![root];
     if scope == "project" {
         let seats = home.join(".agent-bus/worktrees").join(project);
@@ -428,9 +428,12 @@ fn codex_session_cwd(path: &Path) -> String {
 }
 
 fn known_cwd_hashes() -> HashMap<String, String> {
-    let home = home_dir();
+    known_cwd_hashes_in(&crate::identity::dev_root(), &home_dir())
+}
+
+fn known_cwd_hashes_in(dev_root: &Path, home: &Path) -> HashMap<String, String> {
     let mut candidates = Vec::new();
-    for root in [home.join("development"), home.join(".agent-bus/worktrees")] {
+    for root in [dev_root.to_path_buf(), home.join(".agent-bus/worktrees")] {
         let Ok(level_one) = std::fs::read_dir(root) else {
             continue;
         };
@@ -552,14 +555,14 @@ fn is_same_or_child(path: &str, root: &Path) -> bool {
 }
 
 fn in_scope(row: &SessionRow, project: &str, scope: &str) -> bool {
+    in_scope_in(&crate::identity::dev_root(), &home_dir(), row, project, scope)
+}
+
+fn in_scope_in(dev_root: &Path, home: &Path, row: &SessionRow, project: &str, scope: &str) -> bool {
     if scope == "all" {
         return true;
     }
-    let home = home_dir();
-    let project_root = std::env::var("TRANTOR_DEV_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home.join("development"))
-        .join(project);
+    let project_root = dev_root.join(project);
     if scope == "worktree" {
         return is_same_or_child(&row.cwd, &project_root);
     }
@@ -734,6 +737,40 @@ pub async fn session_transcript(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tmp_root(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("trantor-14322-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn project_cwds_use_the_injected_projects_root() {
+        let paths = project_cwds_in(Path::new("/custom/code"), Path::new("/home/u"), "app", "worktree");
+        assert_eq!(paths, vec![PathBuf::from("/custom/code/app")]);
+    }
+
+    #[test]
+    fn scope_uses_the_injected_projects_root() {
+        let row = SessionRow {
+            id: "s".into(), harness: "codex".into(), title: "t".into(), last_message: String::new(),
+            message_count: 0, model: String::new(), branch: String::new(), updated_at: 0,
+            cwd: "/custom/code/app/src".into(),
+        };
+        assert!(in_scope_in(Path::new("/custom/code"), Path::new("/h"), &row, "app", "worktree"));
+        assert!(!in_scope_in(Path::new("/other"), Path::new("/h"), &row, "app", "worktree"));
+    }
+
+    #[test]
+    fn kimi_cwd_hashes_cover_the_injected_projects_root() {
+        let root = tmp_root("hash");
+        std::fs::create_dir_all(root.join("proj/sub")).unwrap();
+        let hashes = known_cwd_hashes_in(&root, Path::new("/nonexistent-home"));
+        let cwd = root.join("proj").to_string_lossy().to_string();
+        assert_eq!(hashes.get(&format!("{:x}", md5::compute(cwd.as_bytes()))), Some(&cwd));
+        let _ = std::fs::remove_dir_all(&root);
+    }
     use std::fs;
 
     fn fixture(name: &str) -> PathBuf {

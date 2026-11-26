@@ -138,8 +138,10 @@ fn trace(ms: u128, model: &str, chars: usize) {
 pub async fn ghost_complete(prefix: String, suffix: String, path: String) -> Result<String, String> {
     let t0 = Instant::now();
     let env_file = read_env_file();
-    let provider = pick_provider(&env_file)
-        .ok_or_else(|| "ghost: no QWEN_API_KEY or DEEPSEEK_API_KEY in ~/.agent-bus/.env".to_string())?;
+    // No key is a quiet "nothing to show", never an error per keystroke.
+    let Some(provider) = pick_provider(&env_file) else {
+        return Ok(String::new());
+    };
     let body = build_request_body(&provider, &prefix, &suffix, &path).to_string();
 
     let client = reqwest::Client::builder()
@@ -194,6 +196,16 @@ fn read_env_file() -> HashMap<String, String> {
 pub enum GhostEvent {
     Delta { id: String, text: String },
     Done { id: String, text: String, ttl_ms: u64, reason: String },
+    /// No provider key on this machine: completion is not available. Sent once per call so the UI
+    /// can show a single hint instead of an error per keystroke.
+    Unavailable { id: String, reason: String },
+}
+
+/// Why completion cannot run on this machine (a state, not a failure).
+pub const NO_KEY_REASON: &str = "Inline completion needs QWEN_API_KEY or DEEPSEEK_API_KEY in ~/.agent-bus/.env";
+
+fn unavailable_event(id: &str) -> GhostEvent {
+    GhostEvent::Unavailable { id: id.to_string(), reason: NO_KEY_REASON.to_string() }
 }
 
 /// The payload of one SSE `data:` line, or None for keep-alives, blanks and the `[DONE]` sentinel.
@@ -331,8 +343,10 @@ pub async fn ghost_complete_stream(
 ) -> Result<String, String> {
     let t0 = Instant::now();
     let env_file = read_env_file();
-    let provider = pick_provider(&env_file)
-        .ok_or_else(|| "ghost: no QWEN_API_KEY or DEEPSEEK_API_KEY in ~/.agent-bus/.env".to_string())?;
+    let Some(provider) = pick_provider(&env_file) else {
+        let _ = on_event.send(unavailable_event(&id));
+        return Ok(String::new());
+    };
     let body = build_stream_request_body(&provider, &head, &near, &suffix, &path).to_string();
 
     let cancel = register_cancel(&id);
@@ -489,6 +503,14 @@ mod tests {
         assert_eq!(deep.base, "https://api.deepseek.com/v1");
 
         assert!(pick_provider(&HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn no_key_is_a_typed_unavailable_event_not_an_error() {
+        let ev = serde_json::to_value(unavailable_event("g1")).unwrap();
+        assert_eq!(ev["kind"], "unavailable");
+        assert_eq!(ev["id"], "g1");
+        assert!(ev["reason"].as_str().unwrap().contains("QWEN_API_KEY"));
     }
 
     #[test]

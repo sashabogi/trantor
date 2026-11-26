@@ -448,8 +448,7 @@ fn pane_candidates(now_ms: u64) -> Vec<SessionCandidate> {
 /// Claude processes outside herdr panes (a plain terminal window), mapped to their project by cwd;
 /// a project that already has a pane row is that same session, so the pane row wins (#14030).
 fn process_candidates(now_ms: u64, covered: &[String]) -> Vec<SessionCandidate> {
-    let root = std::env::var("TRANTOR_DEV_ROOT")
-        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
+    let root = crate::identity::dev_root().to_string_lossy().into_owned();
     let pids = crate::local_sessions::shell_stdout("/usr/bin/pgrep", &["-x", "claude"])
         .lines()
         .map(|l| l.trim().to_string())

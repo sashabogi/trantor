@@ -292,8 +292,7 @@ fn scan(dir: &Path) -> Result<AskMap, String> {
     let bus_dir = crate::desktop_bus_dir();
     let session_rows =
         std::fs::read_to_string(bus_dir.join("orch-sessions.txt")).unwrap_or_default();
-    let dev_root = std::env::var("TRANTOR_DEV_ROOT")
-        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
+    let dev_root = crate::identity::dev_root().to_string_lossy().into_owned();
     let found = scan_with(
         dir,
         |ask| resolve_project_with(ask, &session_rows, &bus_dir, &dev_root),

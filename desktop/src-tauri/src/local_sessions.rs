@@ -283,8 +283,7 @@ pub(crate) fn pane_in_flight_with(
 /// machine (process truth) plus any project whose orch pane herdr can still name an agent for.
 #[tauri::command]
 pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
-    let root = std::env::var("TRANTOR_DEV_ROOT")
-        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
+    let root = crate::identity::dev_root().to_string_lossy().into_owned();
     let sh = |bin: &str, args: &[&str]| -> String {
         std::process::Command::new(bin)
             .args(args)

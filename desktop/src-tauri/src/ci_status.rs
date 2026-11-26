@@ -125,7 +125,8 @@ async fn read_status(dir: &Path, git: &Path, gh: Option<&Path>) -> String {
 #[tauri::command]
 pub(crate) async fn ci_status(project: String) -> Result<String, String> {
     let Some(dir) = crate::hub::project_dir(&project) else { return Ok(snapshot(None, None, None, false, false)); };
-    let path = std::env::var_os("PATH").unwrap_or_default();
+    // the login-shell PATH: a Finder-launched app has a bare one and misses ~/.local/bin, nvm, mise
+    let path = std::ffi::OsString::from(crate::hub::terminal_path());
     let gh = find_gh(&path, executable);
     Ok(read_status(&dir, Path::new("git"), gh.as_deref()).await)
 }
@@ -266,5 +267,10 @@ esac"#));
         assert_eq!(find_gh(path, |p| p != Path::new("/opt/homebrew/bin/gh")), Some(PathBuf::from("/usr/local/bin/gh")));
         assert_eq!(find_gh(path, |p| p == Path::new("/custom/bin/gh")), Some(PathBuf::from("/custom/bin/gh")));
         assert_eq!(find_gh(OsStr::new(""), |_| false), None);
+        let login = OsStr::new("/Users/x/.local/bin:/Users/x/.nvm/versions/node/v22/bin");
+        assert_eq!(
+            find_gh(login, |p| p == Path::new("/Users/x/.local/bin/gh")),
+            Some(PathBuf::from("/Users/x/.local/bin/gh"))
+        );
     }
 }
