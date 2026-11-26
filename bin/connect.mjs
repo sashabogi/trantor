@@ -7,6 +7,7 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parseJsonc } from "../lib/jsonc.mjs";
 import { resolveProjectInfo, resolveHubInfo, gitRoot, writeProjectId, PROJECT_MARKER } from "../lib/project.mjs";
 
 const DRY = process.argv.includes("--dry-run");
@@ -31,7 +32,9 @@ const report = (cli, status, detail = "") => out.push({ cli, status, detail });
 
 function patchJson(path, mutate) {
   const exists = existsSync(path);
-  const d = exists ? JSON.parse(readFileSync(path, "utf8")) : {};
+  let d;
+  try { d = exists ? parseJsonc(readFileSync(path, "utf8")) : {}; }
+  catch { return "unparseable, skipped (left untouched)"; }
   const before = JSON.stringify(d);
   mutate(d);
   if (JSON.stringify(d) === before) return "already wired";

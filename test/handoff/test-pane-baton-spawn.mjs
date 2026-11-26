@@ -24,7 +24,7 @@ const ok = (name, cond, detail = "") => {
 
 const DIR = "/tmp/proj/crebral-health";
 const FILE = "/tmp/handoffs/crebral-health-1789791538.json";
-const CONF = {};
+const CONF = { autoHandoffPrompt: true };
 
 /** A maybeSpawn call with every side effect captured instead of performed. */
 function call({ pane = "", hasOrch = false, file = FILE, platform = "darwin", conf = CONF, env = {} } = {}) {
@@ -82,6 +82,8 @@ console.log("\nthe non-pane paths are untouched");
   const linux = call({ pane: "w9:p1", platform: "linux" });
   ok("a non-darwin host spawns nothing", linux.res === false && linux.calls.length === 0);
 
+  const unset = call({ conf: {} });
+  ok("autoHandoffPrompt unset (the default) opens no window (#14322)", unset.res === false && unset.windows.length === 0, JSON.stringify(unset.windows));
   const declined = call({ hasOrch: true, conf: { autoHandoffPrompt: false } });
   ok("autoHandoffPrompt:false still declines before the orch-pane leg", declined.res === false && declined.calls.length === 0);
 }

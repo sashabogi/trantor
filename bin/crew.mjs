@@ -2,7 +2,7 @@
 import { seatProcesses } from "./crew/processes.mjs";
 import { allocatePersona } from "../lib/persona.mjs";
 import { join } from "node:path";
-import { call, createContext } from "./crew/core.mjs";
+import { call, createContext, commandExists } from "./crew/core.mjs";
 import { createCmuxAdapter, spawnCmux } from "./crew/cmux.mjs";
 import { createHerdrAdapter, spawnHerdr } from "./crew/herdr.mjs";
 import { resolveSpec, reportSkipped } from "./crew/models.mjs";
@@ -15,7 +15,7 @@ import { spawnTerminal, spawnTmux } from "./crew/tmux.mjs";
 import { epochMs, failedAgents, verifyCrew } from "./crew/verify.mjs";
 import { guardCrossProjectUp } from "./crew/worktrees.mjs";
 import { preflightFirstSeat } from "./crew/preflight.mjs";
-import { resolveAgentLaunchSpecs } from "../lib/agent-preferences.mjs";
+import { resolveAgentLaunchSpecs, seatCliProblem } from "../lib/agent-preferences.mjs";
 import { readConfig } from "../lib/project.mjs";
 
 const [command = "up", ...inputArgs] = process.argv.slice(2);
@@ -84,6 +84,11 @@ async function runUp(args, verify = true) {
   if (requested.disabled.length) {
     console.error(`[crew] ✗ ${requested.disabled.join(", ")} ${requested.disabled.length === 1 ? "is" : "are"} disabled in ~/.agent-bus/config.json — enable the seat in Settings → Agents`);
     return 1;
+  }
+  if (!ctx.dry) {
+    const missing = [...new Set(options.specs.map(spec => spec.split(":")[0]))]
+      .map(agent => seatCliProblem(agent, cli => commandExists(cli, ctx.env))).filter(Boolean);
+    if (missing.length) { for (const line of missing) console.error(line); return 1; }
   }
   prune(ctx, adapters);
   connect();

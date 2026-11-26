@@ -1,4 +1,4 @@
-node_modules/
+node_modules
 *.log
 # local runtime data (lives in ~/.agent-bus, never commit if a copy lands here)
 .agent-bus/

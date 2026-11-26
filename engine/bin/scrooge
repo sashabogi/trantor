@@ -86,6 +86,15 @@ def load_env_fallback():
     _load_env_file(ENV_FALLBACK)
 
 def load_registry():
+    # A fresh machine has no ~/.token-scrooge/registry.json until `trantor setup`/install.sh runs: seed it
+    # from the template shipped next to this script instead of dying with a traceback (#14322).
+    if not os.path.exists(REGISTRY):
+        tpl = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "registry.template.json")
+        if os.path.exists(tpl):
+            os.makedirs(SCROOGE_DIR, exist_ok=True)
+            shutil.copyfile(tpl, REGISTRY)
+            shutil.copyfile(tpl, os.path.join(SCROOGE_DIR, "registry.template.json"))
+            sys.stderr.write("[scrooge] seeded %s from the bundled template\n" % REGISTRY)
     with open(REGISTRY) as fh:
         return json.load(fh)
 

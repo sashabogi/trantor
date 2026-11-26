@@ -90,15 +90,17 @@ console.log("\nan index already exists — no second build");
   ok("and says nothing", !/indexing this project/.test(stderr));
 }
 
-console.log("\na healthy graft — builds, gitignores, announces");
+console.log("\na healthy graft — builds, excludes locally, announces");
 {
   const dir = project("healthy");
+  spawnSync("git", ["init", "-q", dir]);
   rmSync(logFor(dir), { force: true });
   const bin = fakeGraft("healthy", 'exit 0');
   const { stderr } = runOpen(dir, bin);
   ok("announces the background build", /indexing this project/.test(stderr));
   ok("names the log path so a failure is findable", stderr.includes(logFor(dir)), stderr.trim());
-  ok("adds graft/ to .gitignore", /^graft\/$/m.test(readFileSync(join(dir, ".gitignore"), "utf8")));
+  ok("hides graft/ in .git/info/exclude (#14322)", /^graft\/$/m.test(readFileSync(join(dir, ".git", "info", "exclude"), "utf8")));
+  ok("and leaves the project's .gitignore alone", !existsSync(join(dir, ".gitignore")));
 }
 
 console.log("\nTHE CASE THAT MATTERS: graft is on PATH but cannot parse");

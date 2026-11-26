@@ -3,7 +3,7 @@ import "../isolate-bus.mjs";
 // trantor tests — hermetic (no network: RELAY_URL points at a closed port).
 // Focus: the hook must ALWAYS emit valid JSON, even when injected handoff content
 // contains control chars / U+2028 / quotes (the non-deterministic bug we hit).
-import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, realpathSync, cpSync } from "node:fs";
+import { writeFileSync, mkdirSync, mkdtempSync, existsSync, readFileSync, rmSync, realpathSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -174,9 +174,12 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 // into another project and inundated a session that was waiting on its operator. The block is
 // badge-gated, so run the hook WITH TRANTOR_ORCH set and assert the rule text lands in context.
 {
+  // The doctrine block is opt-in (#14322): this bus opts in through config.buildDoctrine.
+  const doctrineBus = mkdtempSync(join(tmpdir(), "trantor-doctrine-bus-"));
+  writeFileSync(join(doctrineBus, "config.json"), JSON.stringify({ buildDoctrine: true }));
   const rOrch = spawnSync("node", ["hooks/sessionstart.mjs"], {
     input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
-    env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: proj, RELAY_URL: CLOSED, TRANTOR_ORCH: proj },
+    env: { ...drillEnv(), AGENT_BUS_DIR: doctrineBus, CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: proj, RELAY_URL: CLOSED, TRANTOR_ORCH: proj },
   });
   let octx = "";
   try { octx = JSON.parse(rOrch.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}

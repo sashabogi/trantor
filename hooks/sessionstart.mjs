@@ -7,7 +7,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, nestedProjects, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
+import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, nestedProjects, readConfig as readBusConfig, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { renderStateBlock, capSummary } from "./lib/handoff.mjs";
@@ -17,6 +17,7 @@ import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
+import { HUB_DOWN_LINE, loopbackUrl, shouldWarnUnpinned, wantsBuildDoctrine } from "./lib/start-gates.mjs";
 import { memoryStartLine } from "./lib/memory-start.mjs";
 import { staleResumeLine } from "./lib/cc-signals.mjs";
 import { machineLabel } from "../lib/machine-label.mjs";
@@ -27,7 +28,7 @@ import { machineLabel } from "../lib/machine-label.mjs";
 function buildDoctrineShortForm() {
   const doc = join(dirname(dirname(fileURLToPath(import.meta.url))), "docs", "BUILD-DOCTRINE.md");
   return `<trantor-build-doctrine>\n` +
-    `📐 **Build doctrine** (operator ruling 2026-09-04; rules with a gate each, not advice). Full text: ${doc}\n` +
+    `📐 **Build doctrine** (rules with a gate each, not advice). Full text: ${doc}\n` +
     `1. The real path is the gate — every card names its DRILL (what a person does on the built artifact and must see); nothing merges until you ran it and wrote the result on the card; unit tests are never sufficient; the seat that wrote the code never closes its own card to done (testing is the seat's last move, done is yours after the drill).\n` +
     `2. Red blocks merge — a red suite blocks merge; red for a day is an incident with a card; a flaky test is fixed or deleted within a week; no test inherits the runner's identity.\n` +
     `3. One owner per subsystem — one named owner per wave who reviews every change; cross-seat edits go through the owner over the bus; you own the gates and merges, no seat merges to main.\n` +
@@ -202,7 +203,11 @@ try {
 
   // fetch roster of OTHER online sessions
   let peers = [], hubAnswered = false;
-  try { peers = (await jget(`${url}/peers`, session)).peers || []; hubAnswered = true; } catch {}
+  try { const pr = await signedGet(`${url}/peers`, { timeoutMs: 2500, session }); hubAnswered = pr.status !== 0 && !pr.timedOut; peers = pr.json?.peers || []; } catch {}
+  if (!hubAnswered && loopbackUrl(url)) {
+    userBanner = userBanner ? `${userBanner}\n${HUB_DOWN_LINE}` : HUB_DOWN_LINE;
+    additionalContext += `<trantor-hub-down hub="${sanitize(url)}">${HUB_DOWN_LINE}</trantor-hub-down>\n`;
+  }
   const others = peers.filter(p => p.online && p.session !== session);
 
   process.stderr.write(`[trantor] registered as ${session} -> ${url} (via ${hubVia}, ${others.length} other live session(s))\n`);
@@ -211,7 +216,7 @@ try {
   // the bus its crew is on: pins route the known projects to the remote hub, and anything unpinned
   // drops to the global default. Two seats that believe they are the same project then read and
   // write different stores, each looking perfectly healthy. Never let that be silent.
-  if (hubVia === "global" || hubVia === "default") {
+  if (shouldWarnUnpinned(hubVia, url, knownProjects())) {
     const known = knownProjects();
     const O = "\x1b[1;38;5;208m", R = "\x1b[0m";
     const line = `🟠 ${O}"${project}" is not pinned to a hub${R} — falling back to ${url}. `
@@ -359,14 +364,14 @@ try {
   try {
     if (project && (process.env.TRANTOR_ORCH || "") === project) {
       additionalContext += `<trantor-orchestrator-role project="${sanitize(project)}">\n` +
-        `🎛️ **You are this project's ORCHESTRATOR — a project manager, not a coder** (operator ruling, 2026-08-31).\n` +
+        `🎛️ **You are this project's ORCHESTRATOR — a project manager, not a coder**.\n` +
         `- Building goes to the CREW: invoke the trantor:crew skill (Advisor → \`trantor up\` seats → contracts over the bus), or relay_scrooge for grunt one-shots.\n` +
         `- Spend your own tokens on design, contracts, supervision, integration and VERIFICATION — run the seats' tests yourself; bounce hollow dones.\n` +
         `- Write code yourself ONLY for small one-head seam work that needs this session's full context — and say so when you do.\n` +
         `- Check relay_inbox and the board before asking the operator anything a peer may already have answered.\n` +
         `- Dispatch rule: the target project is confirmed from the session's badge and cwd before any relay_send, relay_task_add or \`trantor up\` — an ambiguous instruction is not a project name; and a session asking the operator a question never triggers a wake (its messages batch until the answer).\n` +
         `</trantor-orchestrator-role>\n`;
-      additionalContext += buildDoctrineShortForm();
+      if (wantsBuildDoctrine(readBusConfig())) additionalContext += buildDoctrineShortForm();
       process.stderr.write(`[trantor] injected orchestrator-role doctrine for ${project}\n`);
     }
   } catch {}

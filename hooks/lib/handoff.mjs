@@ -821,8 +821,15 @@ export async function pingBus(projectName, id, conf = readConfig()) {
 }
 
 // Spawn a fresh same-agent session (macOS) that takes over via the handoff.
-// Default = ON (prompt with a timeout, default button "Open fresh session").
-// Disable with config.autoHandoffPrompt:false or env TRANTOR_NO_HANDOFF_SPAWN=1.
+// OPT-IN (#14322): only when ~/.agent-bus/config.json has "autoHandoffPrompt": true (a Terminal prompt
+// with a timeout, default button "Open fresh session"). env TRANTOR_NO_HANDOFF_SPAWN=1 is a hard off.
+export function autoHandoffEnabled(conf = readConfig(), env = process.env) {
+  return conf?.autoHandoffPrompt === true && env.TRANTOR_NO_HANDOFF_SPAWN !== "1";
+}
+// What the hook says instead of spawning: the handoff is on disk, here is how to continue.
+export function manualContinueLine(file = "") {
+  return `Auto handoff is off, so no new window was opened${file ? ` (handoff saved: ${file})` : ""}. To continue in a fresh session, run \`trantor handoff\` here, or start a new session in this project: it picks the handoff up and recaps it before you say anything. Turn on the auto prompt with "autoHandoffPrompt": true in ~/.agent-bus/config.json.`;
+}
 export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", deps = {}) {
   // Injection points, for the same reason spawnBaton has them: "A DRILL MUST BE ABLE TO SAY NO —
   // a path that spawns windows needs an off switch or it cannot be tested honestly." maybeSpawn had
@@ -844,7 +851,7 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
       _log(`[trantor] session lives in herdr pane ${_pane(_env)} — no Terminal window and no baton driver from here; the app (or the skill path) owns the replacement\n`);
       return false;
     }
-    if (conf.autoHandoffPrompt === false) return false;
+    if (!autoHandoffEnabled(conf, _env)) return false;
     if (_hasPane(basename(projectDir))) {
       _log(`[trantor] orch pane hosts ${basename(projectDir)} — no Terminal window; the app or the skill path claims the handoff
 `);

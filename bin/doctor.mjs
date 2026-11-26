@@ -8,7 +8,7 @@ import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, resolveProjectInfo, resolveHub, DEFAULT_HUB_URL, gitRoot, readProjectId, checkoutFor, orchSessionsPath, PROJECT_MARKER } from "../lib/project.mjs";
+import { resolveProject, resolveProjectInfo, resolveHub, DEFAULT_HUB_URL, gitRoot, readProjectId, checkoutFor, localCheckoutFor, orchSessionsPath, PROJECT_MARKER } from "../lib/project.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { scan } from "../lib/splitbrain.mjs";
@@ -89,11 +89,11 @@ section("project identity");
     : `if "${label}" is that project renamed: trantor project ${name}   (the pin, board and orchestrator row then follow the id)`;
   let orphans = 0;
   for (const name of orchRows) {
-    if (checkoutFor(name)) continue;
+    if (localCheckoutFor(name)) continue;
     orphans++;
     warn(`orphaned identity: ${name} has an orchestrator session row${pinned.includes(name) ? " and a hub pin" : ""} but no checkout on this machine carries it`, claim(name));
   }
-  const pinnedOnly = pinned.filter(n => !orchRows.includes(n) && !checkoutFor(n));
+  const pinnedOnly = pinned.filter(n => !orchRows.includes(n) && !localCheckoutFor(n));
   if (pinnedOnly.length) note(`${pinnedOnly.length} pinned project(s) with no checkout here (${pinnedOnly.slice(0, 8).join(", ")}${pinnedOnly.length > 8 ? ", …" : ""}) — fine when they live on another machine`);
   if (!orphans) ok("every orchestrated project still has its checkout");
 }

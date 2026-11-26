@@ -1,7 +1,7 @@
 import { basename, join } from "node:path";
 import { existsSync } from "node:fs";
 import { call } from "./core.mjs";
-import { checkoutFor, readProjectId } from "../../lib/project.mjs";
+import { checkoutFor, localCheckoutFor, devRootFor, readProjectId } from "../../lib/project.mjs";
 
 function gitRoot(dir) {
   const result = call("git", ["-C", dir, "rev-parse", "--show-toplevel"]);
@@ -22,12 +22,12 @@ export function resolveOrchestratorDir(ctx, projectArg) {
   }
   if (!projectArg || target === here) return { dir: ctx.dir, project: target };
   // By the project's id (#6724): a renamed checkout carries its marker and still answers.
-  const targetDir = checkoutFor(target, { ...ctx.env, HOME: ctx.home });
+  const targetDir = localCheckoutFor(target, ctx.dir, { ...ctx.env, HOME: ctx.home });
   if (targetDir) {
     console.error(`— opening ${target} in its checkout: ${targetDir} —`);
     return { dir: targetDir, project: target };
   }
-  throw new Error(`trantor open: '${target}' has no checkout under ${ctx.env.TRANTOR_DEV_ROOT || join(ctx.home, "development")} — cd into the project first`);
+  throw new Error(`trantor open: '${target}' has no checkout under ${devRootFor({ ...ctx.env, HOME: ctx.home })} — cd into the project first`);
 }
 
 function linkedByTest(env, badge, project) {

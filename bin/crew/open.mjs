@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
-import { spawn, execSync } from "node:child_process";
+import { basename, dirname, isAbsolute, join } from "node:path";
+import { spawn, execSync, execFileSync } from "node:child_process";
 import { call, parseJsonOutput } from "./core.mjs";
 import { createWorkspace, herdrCall, paneAlive, reportAgent, splitPane, workspaceList, workspacePane } from "./herdr.mjs";
 import { dropState, readRows, recordState } from "./state.mjs";
@@ -218,16 +218,26 @@ function hostPane(ctx, chosen, id) {
 // graph to serve. Non-blocking — the pane opens now, the ~7s build lands in the background; a no-op
 // if graft isn't installed or the index already exists (the graph self-refreshes per query after the
 // first build). Keeps the 20MB index out of the project's git.
+// Hide graft/ through .git/info/exclude, never the user's tracked .gitignore (#14322). Returns the file written, "" when not a git checkout.
+export function excludeGraftLocally(dir) {
+  try {
+    const out = execFileSync("git", ["-C", dir, "rev-parse", "--git-path", "info/exclude"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (!out) return "";
+    const file = isAbsolute(out) ? out : join(dir, out);
+    const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
+    if (/^\/?graft\/?$/m.test(cur)) return file;
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, cur + (cur && !cur.endsWith("\n") ? "\n" : "") + "graft/\n");
+    return file;
+  } catch { return ""; }
+}
+
 export function maybeBuildGraft(dir) {
   if (!dir) return;
   try { execSync("command -v graft", { stdio: "ignore", shell: "/bin/sh" }); } catch { return; }
   try {
     if (existsSync(join(dir, "graft", ".graph"))) return;
-    const gi = join(dir, ".gitignore");
-    try {
-      const cur = existsSync(gi) ? readFileSync(gi, "utf8") : "";
-      if (!/^graft\/?$/m.test(cur)) writeFileSync(gi, cur + (cur && !cur.endsWith("\n") ? "\n" : "") + "graft/\n");
-    } catch {}
+    excludeGraftLocally(dir);
     // The build is backgrounded, so its exit code cannot gate the pane, but a failure has to land
     // SOMEWHERE: under stdio:"ignore" a graft without native parsers (see deploy/setup.sh) failed in
     // silence while the line below still claimed an index was being built.

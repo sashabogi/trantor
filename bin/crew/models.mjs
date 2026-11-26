@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { call } from "./core.mjs";
+import { call, commandExists } from "./core.mjs";
+import { seatCliProblem } from "../../lib/agent-preferences.mjs";
 import { resolveEffort } from "../../lib/model-catalog.mjs";
 
 function routeModel(ctx, provider, candidates, task, difficulty) {
@@ -22,6 +23,8 @@ function routeModel(ctx, provider, candidates, task, difficulty) {
 
 export function resolveModel(ctx, agent, provider, task, difficulty) {
   const result = call("opencode", ["models", provider], { env: ctx.env });
+  const missing = seatCliProblem(agent, cli => commandExists(cli, ctx.env));
+  if (!ctx.dry && !result.ok && missing && !commandExists("opencode", ctx.env)) throw new Error(missing);
   const candidates = result.ok ? result.stdout.split(/\s+/).filter(Boolean).join(" ") : "";
   let model = routeModel(ctx, provider, candidates, task, difficulty);
   // An unavailable router must not erase seats from a layout preview. Never launch an unresolved model.

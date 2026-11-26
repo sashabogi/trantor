@@ -6,6 +6,7 @@ import { existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { devRootFor } from "../lib/project.mjs";
 import {
   readSeats, declareSeat, undeclareSeat, seatStatus,
   launchSeat, suggestSeats, projectForDir, waitForHerdr,
@@ -25,7 +26,7 @@ function printStatus() {
   if (!rows.length) {
     console.log("No seats declared yet.");
     console.log(`Declare the one you are standing in:  ${O}trantor seats add ${projectForDir(process.cwd())}${R}`);
-    console.log(`…or adopt every pinned project under a workspace:  ${O}trantor seats adopt ~/development${R}`);
+    console.log(`…or adopt every pinned project under a workspace:  ${O}trantor seats adopt ${devRootFor()}${R}`);
     return 0;
   }
   const w = Math.max(...rows.map(r => r.project.length), 7);
@@ -114,7 +115,7 @@ switch (sub) {
   }
 
   case "adopt": {
-    const workspace = resolve(rest[0] || join(homedir(), "development"));
+    const workspace = resolve(rest[0] || devRootFor());
     const found = suggestSeats(workspace);
     if (!found.length) { console.log(`nothing to adopt under ${workspace} (every pinned project is already declared, or has no directory there)`); break; }
     console.log(`Found ${found.length} pinned project(s) with a directory under ${workspace}:`);

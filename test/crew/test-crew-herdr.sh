@@ -55,6 +55,10 @@ esac
 exit 0
 EOF
 chmod +x "$TMP/fakebin/opencode"
+# The router now seeds a registry on a fresh HOME (#14322), so it answers instead of failing; give it priced
+# fixtures for the stub catalogs so dry runs still resolve a model for every provider seat.
+mkdir -p "$TMP/.token-scrooge"
+echo '{"glm-5.3-flash":{"coding":60,"cost_in":0.1,"cost_out":0.2},"qwen3.8-max":{"coding":76,"cost_in":2,"cost_out":6},"catalog-head":{"coding":60,"cost_in":0.1,"cost_out":0.2}}' > "$TMP/.token-scrooge/capabilities.json"
 cat > "$TMP/fakebin/herdr" <<EOF
 #!/bin/bash
 echo "herdr \$*" >> "$TMP/herdr.log"

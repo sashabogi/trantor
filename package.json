@@ -27,6 +27,8 @@
     "skills/",
     "deploy/",
     "configs/",
+    "kimi/",
+    "kimi.plugin.json",
     ".claude-plugin/",
     "README.md",
     "LICENSE",

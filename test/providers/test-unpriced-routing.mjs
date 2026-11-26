@@ -1,6 +1,6 @@
 // #11558: exercise the launcher and preview with isolated provider/pricing fixtures.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveModel, resolveSpec } from "../../bin/crew/models.mjs";
@@ -50,9 +50,11 @@ try {
   assert.throws(() => resolveModel(ctx, "qwen", "qwen", "code", "easy"), /no priced candidate/);
   assert.equal(resolveSpec(ctx, "qwen:qwen/deepseek-v4-pro", "code", "easy", []).model, "qwen/deepseek-v4-pro");
   assert.throws(() => resolveModel({ ...ctx, dry: true }, "qwen", "qwen", "code", "easy"), /no priced candidate/);
+  // #14322: a missing registry is seeded from the bundled template instead of crashing the router,
+  // so the router's own verdict (here the same refusal) surfaces rather than a misleading generic error.
   rmSync(join(store, "registry.json"));
-  assert.equal(resolveModel({ ...ctx, dry: true }, "qwen", "qwen", "code", "easy"), "qwen/<unresolved>");
-  assert.throws(() => resolveModel(ctx, "qwen", "qwen", "code", "easy"), /no priced model/);
+  assert.throws(() => resolveModel(ctx, "qwen", "qwen", "code", "easy"), /no priced candidate/);
+  assert.ok(existsSync(join(store, "registry.json")), "registry.json was seeded from engine/registry.template.json");
   console.log("PASS: Qwen launcher and preview, unpriced exclusion, heuristic guard, refusal and explicit override");
 } finally {
   rmSync(home, { recursive: true, force: true });

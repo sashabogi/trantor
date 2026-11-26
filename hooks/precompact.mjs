@@ -2,7 +2,7 @@
 // trantor PreCompact hook — cannot stop compaction, so it writes a whole-session handoff and (macOS,
 // by default) prompts to open a FRESH session that takes over; the at-the-wall backstop behind
 // the heartbeat's early warning (hooks/lib/handoff.mjs).
-import { readConfig, writeHandoff, pingBus, maybeSpawn, armBatonClose,
+import { readConfig, writeHandoff, pingBus, maybeSpawn, armBatonClose, autoHandoffEnabled, manualContinueLine,
          contextUsage, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty } from "./lib/handoff.mjs";
 import { basename } from "node:path";
 
@@ -12,6 +12,7 @@ function readStdin() {
     setTimeout(() => res(d), 100); });
 }
 
+let noteLine = "";
 try {
   const input = JSON.parse((await readStdin()) || "{}");
   // input.cwd FIRST — every hook must derive the project the SAME way, or two hooks in one
@@ -39,6 +40,9 @@ try {
     process.stderr.write(`[trantor] compaction trigger "${trigger}" is not auto/manual (idle compaction?) — handoff refreshed only, no fresh session\n`);
   } else if (alreadyHandedOff(sessionId, cur)) {
     process.stderr.write(`[trantor] fresh session already spawned for this window — handoff refreshed only\n`);
+  } else if (!autoHandoffEnabled(conf)) {
+    process.stderr.write(`[trantor] ${manualContinueLine(file)}\n`);
+    noteLine = manualContinueLine(file);
   } else if (maybeSpawn(projectDir, conf)) {
     markHandedOff(sessionId, cur);
     // baton pass at the wall. Close THIS window ONLY when config.autoCloseOriginal is true: an auto
@@ -51,5 +55,5 @@ try {
 } catch (err) {
   process.stderr.write(`[trantor] precompact error: ${err?.message || err}\n`);
 }
-process.stdout.write("{}");
+process.stdout.write(noteLine ? JSON.stringify({ systemMessage: noteLine }) : "{}");
 process.exit(0);

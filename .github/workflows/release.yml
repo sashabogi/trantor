@@ -67,9 +67,12 @@ jobs:
         run: |
           PKG=$(node -p "require('./package.json').version")
           PLUGIN=$(node -p "require('./.claude-plugin/plugin.json').version")
-          echo "package.json=$PKG  plugin.json=$PLUGIN"
-          if [ "$PKG" != "$PLUGIN" ]; then
-            echo "::error::version skew — package.json $PKG vs .claude-plugin/plugin.json $PLUGIN. Bump both."
+          MARKET=$(node -p "require('./.claude-plugin/marketplace.json').metadata.version")
+          MARKET_PLUGIN=$(node -p "require('./.claude-plugin/marketplace.json').plugins[0].version")
+          KIMI=$(node -p "require('./kimi.plugin.json').version")
+          echo "package.json=$PKG  plugin.json=$PLUGIN  marketplace=$MARKET/$MARKET_PLUGIN  kimi=$KIMI"
+          if [ "$PKG" != "$PLUGIN" ] || [ "$PKG" != "$MARKET" ] || [ "$PKG" != "$MARKET_PLUGIN" ] || [ "$PKG" != "$KIMI" ]; then
+            echo "::error::version skew — package.json $PKG vs plugin.json $PLUGIN, marketplace.json $MARKET/$MARKET_PLUGIN, kimi.plugin.json $KIMI. Bump all four."
             exit 1
           fi
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then

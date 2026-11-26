@@ -85,7 +85,7 @@ ok("sessionstart: model still gets the <trantor-update> context block",
 
 seedStamp({ checkedAt: nowSec(), latest: inst });               // already on latest
 const quiet = runHook();
-ok("sessionstart: NO systemMessage when already on latest", !("systemMessage" in quiet));
+ok("sessionstart: NO update systemMessage when already on latest (a hub-down line may still show, #14322)", !/update/i.test(String(quiet.systemMessage || "")));
 ok("sessionstart: NO <trantor-update> block when already on latest",
    !/<trantor-update/.test(quiet.hookSpecificOutput?.additionalContext || ""));
 

@@ -15,7 +15,7 @@ import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSy
 import { execFileSync } from "node:child_process";
 import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject, writeOrchSession, checkoutFor, devRootFor, readOrchSession } from "../lib/project.mjs";
+import { resolveProject, writeOrchSession, checkoutFor, localCheckoutFor, devRootFor, readOrchSession } from "../lib/project.mjs";
 
 const D = "\x1b[2m", B = "\x1b[1m", Y = "\x1b[33m", G = "\x1b[32m", R = "\x1b[0m";
 const args = process.argv.slice(2);
@@ -24,7 +24,7 @@ const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : n
 const project = args.find(a => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--session")
   || resolveProject(process.cwd());
 // The checkout is found by the project's ID (#6724): a renamed directory still answers.
-const dir = checkoutFor(project);
+const dir = localCheckoutFor(project);
 if (!dir) {
   console.error(`no local checkout for ${project} (looked in ${devRootFor()})`);
   process.exit(1);

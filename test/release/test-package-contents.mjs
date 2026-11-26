@@ -50,7 +50,7 @@ ok("no file the CLI can spawn is missing from the tarball", missing.length === 0
 
 // The two the plugin surface needs, which no subcommand references by path.
 console.log("\nthe plugin manifest ships (update-check reads it at runtime)");
-for (const p of [".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "package.json"]) {
+for (const p of [".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "package.json", "kimi.plugin.json", "kimi/bridge.mjs"]) {
   ok(`${p} is in the tarball`, shipped.has(p));
 }
 
@@ -60,6 +60,14 @@ const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.ur
 const plugin = JSON.parse(readFileSync(new URL("../../.claude-plugin/plugin.json", import.meta.url), "utf8")).version;
 ok("package.json and .claude-plugin/plugin.json carry the same version", pkg === plugin,
   `package.json=${pkg} plugin.json=${plugin}`);
+
+// #14322: marketplace.json and kimi.plugin.json had drifted to 0.17.x; every manifest carries one version.
+const readJson = (rel) => JSON.parse(readFileSync(new URL(`../../${rel}`, import.meta.url), "utf8"));
+const market = readJson(".claude-plugin/marketplace.json");
+ok("marketplace.json (metadata and plugin entry) carries the package version",
+  market.metadata?.version === pkg && market.plugins?.every(p => p.version === pkg),
+  `metadata=${market.metadata?.version} plugins=${market.plugins?.map(p => p.version)}`);
+ok("kimi.plugin.json carries the package version", readJson("kimi.plugin.json").version === pkg);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
