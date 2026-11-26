@@ -366,9 +366,9 @@ export function TerminalPane({
   if (attachError === "notAnAgent") {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2,#2A2E36)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2,#C4C8CE)]">
           <div>This pane exists, but herdr is not tracking anything running in it, so there is no terminal to show.</div>
-          <div className="mt-2 text-[var(--v2-muted)]">
+          <div className="mt-2 text-[var(--v2-muted,#9AA0A8)]">
             That usually means the seat&rsquo;s process exited. It comes back on the seat&rsquo;s next turn.
           </div>
         </div>
@@ -378,9 +378,9 @@ export function TerminalPane({
   if (remoteError) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2,#2A2E36)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2,#C4C8CE)]">
           <div>SSH to {peer?.machine || "the remote machine"} is unavailable.</div>
-          <div className="mt-2 break-words text-[var(--v2-muted)]">{remoteError}</div>
+          <div className="mt-2 break-words text-[var(--v2-muted,#9AA0A8)]">{remoteError}</div>
         </div>
       </div>
     );
@@ -388,9 +388,9 @@ export function TerminalPane({
   if (remoteMissing) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2,#2A2E36)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2,#C4C8CE)]">
           <div>No herdr pane for {agent} was found on {peer?.machine}.</div>
-          <div className="mt-2 text-[var(--v2-muted)]">The seat may have stopped or its pane record may be stale.</div>
+          <div className="mt-2 text-[var(--v2-muted,#9AA0A8)]">The seat may have stopped or its pane record may be stale.</div>
         </div>
       </div>
     );
@@ -399,9 +399,9 @@ export function TerminalPane({
     const machine = peer.machine?.trim();
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2,#2A2E36)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2,#C4C8CE)]">
           <div>{agent} is running on {machine || "another machine"}.</div>
-          <div className="mt-2 text-[var(--v2-muted)]">Live state: {peer.status || "online"}.</div>
+          <div className="mt-2 text-[var(--v2-muted,#9AA0A8)]">Live state: {peer.status || "online"}.</div>
         </div>
       </div>
     );
@@ -409,7 +409,7 @@ export function TerminalPane({
   if (!surface) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2,#2A2E36)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2,#C4C8CE)]">
           {/* "Wake" starts the ORCHESTRATOR, which is only the right verb on the orchestrator's
               own pane — the same verb the sidebar's hover button carries, so the two doors into
               one action can never read as two actions. Offering it on a seat meant clicking it
@@ -423,16 +423,16 @@ export function TerminalPane({
                 type="button"
                 onClick={attachOpenSession}
                 disabled={opening}
-                className="mt-3 rounded-md border-0 bg-[var(--v2-ok)] px-3 py-1.5 text-v2-body font-semibold text-[var(--v2-ink)] disabled:opacity-60"
+                className="mt-3 rounded-md border-0 bg-[var(--v2-ok,#7CC49A)] px-3 py-1.5 text-v2-body font-semibold text-[var(--v2-ink,#0E0F12)] disabled:opacity-60"
               >
                 {opening ? "Waking…" : "Wake session"}
               </button>
-              {openError && <div className="mt-2 text-v2-small text-[var(--v2-bad)]">{openError}</div>}
+              {openError && <div className="mt-2 text-v2-small text-[var(--v2-bad,#E58A8A)]">{openError}</div>}
             </>
           ) : (
             <>
               <div>{agent} has no terminal pane — it is not running under this crew.</div>
-              <div className="mt-2 text-[var(--v2-muted)]">
+              <div className="mt-2 text-[var(--v2-muted,#9AA0A8)]">
                 Start it with <span className="v2-mono">trantor up {agent}</span>. Its past work is
                 still in the record rail either way.
               </div>
@@ -444,7 +444,7 @@ export function TerminalPane({
   }
   return (
     <div
-      className={`relative min-h-0 flex-1 bg-[var(--v2-terminal)] transition-shadow ${dragOver ? "ring-1 ring-inset ring-[var(--v2-accent)]" : ""}`}
+      className={`relative min-h-0 flex-1 bg-[var(--v2-terminal,#111316)] transition-shadow ${dragOver ? "ring-1 ring-inset ring-[var(--v2-accent,#8AA8FF)]" : ""}`}
       data-pane={surface}
       data-drag-over={dragOver}
       data-interactive={interactive}
@@ -452,7 +452,7 @@ export function TerminalPane({
     >
       <div ref={hostRef} className="h-full min-h-0 px-2 pt-1" />
       {latencyMs !== null && latencyMs >= SLOW_ECHO_MS && (
-        <div className="v2-mono absolute right-2 top-1 text-v2-micro text-[var(--v2-faint)]">
+        <div className="v2-mono absolute right-2 top-1 text-v2-micro text-[var(--v2-faint,#6B717A)]">
           echo {latencyMs}ms
         </div>
       )}
