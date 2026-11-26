@@ -825,7 +825,14 @@ pub(crate) fn herdr_seats() -> Result<String, String> {
     };
     // #14264: helpers have no hub peer, so their pane supplies liveness and completion.
     let seats: Vec<_> = parse_herdr_seats(&raw).into_iter().filter_map(|seat| {
-        let status = if seat.kind == "helper" { Some(herdr::agent_status(&seat.surface)?) } else { None };
+        // #14264: a helper has no hub peer, so its pane is its liveness: no status, no row.
+        // #14365: the orchestrator never publishes a working status to the hub, so its pane's
+        // status is asked too (best effort: a pane that does not answer still shows its row).
+        let status = match seat.kind.as_str() {
+            "helper" => Some(herdr::agent_status(&seat.surface)?),
+            "orch" => herdr::agent_status(&seat.surface),
+            _ => None,
+        };
         Some(HerdrSeatState { seat, status })
     }).collect();
     serde_json::to_string(&seats).map_err(|e| e.to_string())

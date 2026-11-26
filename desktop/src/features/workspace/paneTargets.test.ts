@@ -27,6 +27,17 @@ describe("paneTargets", () => {
     expect(lead.status).toBe("working");
   });
 
+  // #14365: the orchestrator's astronaut sat on "ready" while it worked, because the hub never hears a
+  // working status from the operator's own session. herdr watches the pane and wins when it answered.
+  it("the orchestrator's activity comes from its herdr pane when the pane answered", () => {
+    const idleHost = { ...host, status: "idle" };
+    expect(paneTargets([codex], { ...orch, status: "working" }, idleHost, "trantor")[0].status).toBe("working");
+    expect(paneTargets([codex], { ...orch, status: "blocked" }, idleHost, "trantor")[0].status).toBe("blocked");
+    expect(paneTargets([codex], { ...orch, status: "idle" }, { ...host, status: "working" }, "trantor")[0].status).toBe("idle");
+    // no pane answer: the hub's word stands
+    expect(paneTargets([codex], { ...orch, status: null }, { ...host, status: "working" }, "trantor")[0].status).toBe("working");
+  });
+
   it("without a host peer the orchestrator brands from its own pane name", () => {
     const [lead] = paneTargets([], orch, undefined, "trantor");
     expect(lead.agent).toBe("orchestrator");

@@ -29,6 +29,8 @@ export function seatState(seat: Pick<SeatStateInput, "presence" | "words">): Sea
   const w = seat.words.toLowerCase();
   if (w.startsWith("waiting")) return "waiting";
   if (w === "idle" || w === "finished") return "idle";
+  // a parked or stalled seat cannot take work: it sleeps rather than giving a thumbs up (#14365)
+  if (/^(parked|stalled|cut at)/.test(w)) return "idle";
   return "ready";
 }
 

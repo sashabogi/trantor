@@ -39,3 +39,15 @@ describe("seat state language", () => {
     expect(activityLine(seat("working", "working", "working · reviewing the plan", true))).toBe("reviewing the plan");
   });
 });
+
+// #14365: codex-8's account hit its usage limit and the runner parked it until next month, but the
+// tab gave a thumbs up as if it were ready. A parked or stalled seat sleeps and says why.
+describe("benched seats", () => {
+  it("a parked or stalled seat sleeps, and its line says why", () => {
+    const parked = { presence: "ready" as const, words: "parked (exhausted)" };
+    expect(seatState(parked)).toBe("idle");
+    expect(activityLine(parked)).toBe("parked (exhausted)");
+    expect(seatState({ presence: "ready", words: "stalled · no activity" })).toBe("idle");
+    expect(seatState({ presence: "ready", words: "ready" })).toBe("ready");
+  });
+});

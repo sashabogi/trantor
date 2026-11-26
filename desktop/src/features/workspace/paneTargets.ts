@@ -4,6 +4,7 @@
 // herdr pane name surfaceFor resolves the terminal by; `brand` is the tab's mark (#5890).
 import type { Peer } from "../../shared/api/client";
 import type { HerdrSeat } from "./herdr";
+import { seatActivity } from "./seatActivity";
 
 export type PaneTarget = {
   key: string;
@@ -59,7 +60,9 @@ export function paneTargets(seats: Peer[], orch: HerdrSeat | null, host: Peer | 
     session: host?.session ?? `${project} orchestrator`,
     online: host ? !!host.online : true,
     lastSeen: host?.lastSeen,
-    status: host?.status,
+    // #14365: the orchestrator never publishes a working status to the hub, so its tab read "ready"
+    // while it worked. herdr watches its pane: when that answered, it wins over the hub's word.
+    status: orch.status ? seatActivity({ agent_status: orch.status }, host?.status) : host?.status,
     isOrchestrator: true,
   }, ...rows];
 }

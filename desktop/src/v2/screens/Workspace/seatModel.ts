@@ -61,12 +61,21 @@ export function presenceOf(t: PaneTarget, holds: FileHold[]): Presence {
   return "ready";
 }
 
+/** #14365: a runner that cannot work says so in its hub status ("parked (exhausted)", "stalled · no
+ *  activity"). The status reader knew only working/blocked/down, so a seat out of quota until next
+ *  month read as "ready" and its astronaut gave a thumbs up. Such a seat now says what it is. */
+export function benchedWords(status: string | null | undefined): string | null {
+  const s = (status ?? "").trim();
+  return /^(parked|stalled|cut at)/i.test(s) ? s : null;
+}
+
 export function seatViews(targets: PaneTarget[], holds: FileHold[], helpers: HerdrSeat[] = [], subagents: SubagentInfo[] = []): SeatView[] {
   const crew = targets.map(t => {
     const presence = presenceOf(t, holds);
+    const benched = presence === "ready" ? benchedWords(t.status) : null;
     return {
       key: t.key, label: t.label, agent: t.agent, brand: t.brand, session: t.session, presence,
-      words: WORDS[presence], lastSeen: t.lastSeen, machine: t.machine, isOrchestrator: t.isOrchestrator, target: t,
+      words: benched ?? WORDS[presence], lastSeen: t.lastSeen, machine: t.machine, isOrchestrator: t.isOrchestrator, target: t,
     };
   });
   // #14264: helpers stay after crew and use pane IDs so labels can repeat without attaching the wrong terminal.
