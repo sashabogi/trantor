@@ -32,12 +32,22 @@ const report = (cli, status, detail = "") => out.push({ cli, status, detail });
 
 function patchJson(path, mutate) {
   const exists = existsSync(path);
-  let d;
-  try { d = exists ? parseJsonc(readFileSync(path, "utf8")) : {}; }
+  let d, raw = "";
+  try { raw = exists ? readFileSync(path, "utf8") : ""; d = exists ? parseJsonc(raw) : {}; }
   catch { return "unparseable, skipped (left untouched)"; }
   const before = JSON.stringify(d);
   mutate(d);
   if (JSON.stringify(d) === before) return "already wired";
+  // A JSONC file (comments, trailing commas) would lose its comments if rewritten as JSON:
+  // leave it as the user wrote it and say what to add.
+  let strict = true;
+  try { if (exists) JSON.parse(raw); } catch { strict = false; }
+  if (!strict) {
+    // Name the keys only: the file can hold the user's own secrets, so no values are printed.
+    const was = parseJsonc(raw);
+    const keys = Object.keys(d).filter(k => JSON.stringify(d[k]) !== JSON.stringify(was[k]));
+    return `has comments, left untouched: add the Trantor entry under ${keys.join(", ") || "the top level"} by hand`;
+  }
   if (!DRY) {
     if (exists) backup(path); else mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(d, null, 2) + "\n");

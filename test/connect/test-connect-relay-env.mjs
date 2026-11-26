@@ -238,6 +238,19 @@ process.exit(result.status ?? 1);
   rmSync(t.work, { recursive: true, force: true });
 }
 
+// 11. #14322: an opencode config with comments is JSONC. connect must not rewrite it as JSON (the
+// user's comments would vanish): it leaves the file byte for byte and names the key to add.
+{
+  const body = '{\n  // my model\n  "model": "x/y",\n  "provider": { "k": { "apiKey": "sk-secret" } },\n}\n';
+  const t = setup(["opencode"], {}, { ".config/opencode/opencode.json": body });
+  const r = t.run();
+  ok("a JSONC opencode config is left byte for byte",
+    readFileSync(join(t.home, ".config/opencode/opencode.json"), "utf8") === body);
+  ok("connect says what to add by hand, naming the key", /has comments, left untouched.*\bmcp\b/.test(r.stdout), r.stdout.slice(0, 400));
+  ok("and never prints a value from the user's config", !r.stdout.includes("sk-secret"));
+  rmSync(t.work, { recursive: true, force: true });
+}
+
 function relayCommand(home, rel, key = "mcpServers") {
   try { return JSON.parse(readFileSync(join(home, rel), "utf8"))?.[key]?.relay?.args?.[0] || ""; } catch { return ""; }
 }
