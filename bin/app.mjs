@@ -13,6 +13,7 @@ import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { cleanLaunchEnv } from "../lib/launch-env.mjs";
+import { newestDmgRelease } from "../lib/app-release.mjs";
 
 const REPO = "sashabogi/trantor";
 const APP = "/Applications/Trantor.app";
@@ -69,16 +70,10 @@ async function latestAppRelease() {
   if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   const r = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, { headers, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`GitHub API ${r.status} — ${(await r.text()).slice(0, 200)}`);
-  const isDmg = a => /^Trantor[_-].*\.dmg$/.test(a.name);
-  for (const rel of await r.json()) {
-    const assets = (rel.assets || []).filter(isDmg);
-    if (!assets.length) continue;
-    const asset = assets.find(a => a.name.includes(`_${ARCH_TAG}`)) || assets[0];
-    if (!asset.name.includes(`_${ARCH_TAG}`)) console.error(`⚠ no ${ARCH_TAG} build in ${rel.tag_name} — using ${asset.name} (may not run on this Mac)`);
-    const version = (asset.name.match(/[_-]([0-9]+(?:\.[0-9]+)*)[_-]/) || [])[1] || rel.tag_name.replace(/^app-v?|^v/, "");
-    return { tag: rel.tag_name, version, asset };
-  }
-  throw new Error("no release with a Trantor DMG asset found");
+  const best = newestDmgRelease(await r.json(), ARCH_TAG);
+  if (!best) throw new Error("no release with a Trantor DMG asset found");
+  if (!best.asset.name.includes(`_${ARCH_TAG}`)) console.error(`⚠ no ${ARCH_TAG} build in ${best.tag} — using ${best.asset.name} (may not run on this Mac)`);
+  return best;
 }
 
 const rel = await latestAppRelease().catch(e => { console.error(`trantor app: ${e.message}`); process.exit(1); });

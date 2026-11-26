@@ -118,7 +118,17 @@ pub(crate) async fn app_update_check(app: tauri::AppHandle) -> Result<AppUpdate,
     let body = r.text().await.map_err(|e| e.to_string())?;
     let releases: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
 
+    let (tag, asset_name, url, size, latest) =
+        newest_dmg_release(&releases).ok_or("no release with a Trantor DMG asset found")?;
+    Ok(AppUpdate { update_available: version_newer(&latest, &current), url, size, current, latest, tag, asset_name })
+}
+
+/// The highest-versioned release carrying a Trantor DMG: (tag, asset name, url, size, version).
+/// GitHub's list is NOT in version order: it sorts tag names as text, so app-v2.1.10 came back
+/// ninth, after app-v2.1.2, and taking the first entry told a 2.1.9 install it was current.
+pub(crate) fn newest_dmg_release(releases: &serde_json::Value) -> Option<(String, String, String, u64, String)> {
     let empty: Vec<serde_json::Value> = Vec::new();
+    let mut best: Option<(String, String, String, u64, String)> = None;
     for rel in releases.as_array().unwrap_or(&empty) {
         let assets = rel["assets"].as_array().unwrap_or(&empty);
         let dmgs: Vec<&serde_json::Value> = assets
@@ -128,7 +138,7 @@ pub(crate) async fn app_update_check(app: tauri::AppHandle) -> Result<AppUpdate,
                 n.starts_with("Trantor") && n.ends_with(".dmg")
             })
             .collect();
-        if dmgs.is_empty() {
+        if dmgs.is_empty() || rel["draft"].as_bool() == Some(true) {
             continue;
         }
         let asset: &serde_json::Value = dmgs
@@ -138,21 +148,15 @@ pub(crate) async fn app_update_check(app: tauri::AppHandle) -> Result<AppUpdate,
             .unwrap_or(dmgs[0]);
         let tag = rel["tag_name"].as_str().unwrap_or("").to_string();
         let asset_name = asset["name"].as_str().unwrap_or("").to_string();
-        let latest = asset_version(&asset_name, &tag);
-        return Ok(AppUpdate {
-            update_available: version_newer(&latest, &current),
-            url: asset["browser_download_url"]
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            size: asset["size"].as_u64().unwrap_or(0),
-            current,
-            latest,
-            tag,
-            asset_name,
-        });
+        let version = asset_version(&asset_name, &tag);
+        if best.as_ref().is_some_and(|b| !version_newer(&version, &b.4)) {
+            continue;
+        }
+        let url = asset["browser_download_url"].as_str().unwrap_or("").to_string();
+        let size = asset["size"].as_u64().unwrap_or(0);
+        best = Some((tag, asset_name, url, size, version));
     }
-    Err("no release with a Trantor DMG asset found".into())
+    best
 }
 
 /// Download the DMG, swap /Applications/Trantor.app, relaunch. On success this process EXITS —
@@ -405,6 +409,20 @@ pub(crate) async fn open_code(target: String, kind: String) -> Result<(), String
 mod update_tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn newest_release_is_the_highest_version_not_the_first_listed() {
+        // GitHub's own order on 2026-11-26: 2.1.9 first, 2.1.10 after 2.1.2.
+        let rel = |v: &str| serde_json::json!({ "tag_name": format!("app-v{v}"), "draft": false,
+            "assets": [{ "name": format!("Trantor_{v}_aarch64.dmg"), "browser_download_url": format!("https://github.com/x/{v}.dmg"), "size": 1 }] });
+        let list = serde_json::json!([rel("2.1.9"), rel("2.1.8"), rel("2.1.2"), rel("2.1.10"), rel("2.1.1"), rel("2.0.9")]);
+        let (tag, asset, url, _, version) = newest_dmg_release(&list).unwrap();
+        assert_eq!((tag.as_str(), asset.as_str(), version.as_str()), ("app-v2.1.10", "Trantor_2.1.10_aarch64.dmg", "2.1.10"));
+        assert!(url.ends_with("/2.1.10.dmg"));
+        assert!(version_newer(&version, "2.1.9"));
+        let none = serde_json::json!([{ "tag_name": "v1", "assets": [{ "name": "notes.txt" }] }]);
+        assert!(newest_dmg_release(&none).is_none());
+    }
 
     #[test]
     fn bundle_is_derived_from_the_exe_path() {
