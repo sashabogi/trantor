@@ -10,7 +10,7 @@ function harness(resolved: ResolvedPath | null = null) {
   const deps: OpenLinkDeps = {
     navigate: (screen: Screen, project?: string) => { log.push(`navigate:${screen}:${project ?? ""}`); },
     openUrl: url => { log.push(`url:${url}`); },
-    openExternalPath: path => { log.push(`external:${path}`); },
+    revealExternalPath: path => { log.push(`reveal:${path}`); },
     setIntent: (project, intent) => { intents.push({ project, intent }); },
     openCard: (project, id) => { log.push(`card:${project}:${id}`); },
     resolvePath: async (project, raw) => { log.push(`resolve:${project}:${raw}`); return resolved; },
@@ -62,11 +62,18 @@ describe("openLink", () => {
     expect(h.log).toContain("navigate:code:trantor");
   });
 
-  it("a path outside the checkout opens with the system, not in Code", async () => {
+  it("a path outside the checkout is only revealed in Finder, never opened, and not in Code", async () => {
     const h = harness({ path: "/Users/me/notes.md", dir: false, inside: false });
     await openLink("trantor", link("path", "~/notes.md"), h.deps);
-    expect(h.log).toEqual(["resolve:trantor:~/notes.md", "external:/Users/me/notes.md"]);
+    expect(h.log).toEqual(["resolve:trantor:~/notes.md", "reveal:/Users/me/notes.md"]);
     expect(h.intents).toEqual([]);
+  });
+
+  it("a url that is not http or https is never handed to the opener", async () => {
+    const h = harness(null);
+    await openLink("trantor", link("url", "file:///Applications/Calculator.app"), h.deps);
+    await openLink("trantor", link("url", "javascript:alert(1)"), h.deps);
+    expect(h.log).toEqual([]);
   });
 
   it("a path that no longer resolves does nothing", async () => {
