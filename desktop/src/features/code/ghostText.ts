@@ -16,7 +16,9 @@ let ghostSeq = 0;
 /** One streaming event from ghost.rs, keyed by the request id this module generated. */
 type GhostStreamEvent =
   | { kind: "delta"; id: string; text: string }
-  | { kind: "done"; id: string; text: string; ttl_ms: number; reason: string };
+  | { kind: "done"; id: string; text: string; ttl_ms: number; reason: string }
+  // No provider key on this machine: ghost.rs answers "" and says why once, never an error.
+  | { kind: "unavailable"; id: string; reason: string };
 
 function getEnabled(): boolean {
   try {
