@@ -44,6 +44,23 @@ pub(crate) const ICON_SUBROOTS: &[&str] = &[
     "desktop",
 ];
 
+/// Framework starter art that says nothing about the project: every `create-next-app` repo ships the
+/// same favicon, so nine projects would wear one identical triangle. These are skipped like a miss,
+/// and the search goes on to the next candidate (or the monogram).
+pub(crate) const STOCK_ART_SHA256: &[&str] = &[
+    // create-next-app's default src/app/favicon.ico (25,931 bytes)
+    "2b8ad2d33455a8f736fc3a8ebf8f0bdea8848ad4c0db48a2833bd0f9cd775932",
+];
+
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub(crate) fn is_stock_art(bytes: &[u8]) -> bool {
+    STOCK_ART_SHA256.contains(&sha256_hex(bytes).as_str())
+}
+
 pub(crate) fn mime_for(path: &std::path::Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "png" => Some("image/png"),
@@ -87,6 +104,9 @@ pub(crate) fn project_icon(project: String) -> Option<String> {
             let Ok(bytes) = std::fs::read(&p) else {
                 continue;
             };
+            if is_stock_art(&bytes) {
+                continue;
+            }
             return Some(format!("data:{};base64,{}", mime, b64(&bytes)));
         }
     }
@@ -145,6 +165,14 @@ mod icon_tests {
         // PNG magic — the real payload starts with bytes that are not valid UTF-8.
         assert_eq!(b64(&[0x89, 0x50, 0x4E, 0x47]), "iVBORw==");
         assert_eq!(b64(&[0xFF, 0xFF, 0xFF]), "////");
+    }
+
+    #[test]
+    fn stock_starter_art_is_recognised_by_content_and_real_art_is_not() {
+        // the digest is lowercase hex of SHA-256 (the empty input's well-known value)
+        assert_eq!(sha256_hex(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert!(STOCK_ART_SHA256.iter().all(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())));
+        assert!(!is_stock_art(b"\x89PNG a project's own logo"));
     }
 
     #[test]
