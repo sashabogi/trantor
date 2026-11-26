@@ -372,8 +372,9 @@ board — no code change, no waiting for us to add it.
 
 A PreCompact hook writes a rich handoff before Claude Code compacts; a fresh session in the
 same project **takes over with a brand-new full context window**. Works manually from any
-agent via `relay_handoff`. Optional macOS auto-prompt (`autoHandoffPrompt` in
-`~/.agent-bus/config.json`) offers to open the fresh session for you, with a timeout.
+agent via `relay_handoff`. Optional macOS auto-prompt (`"autoHandoffPrompt": true` in
+`~/.agent-bus/config.json`, off by default since 0.18.135) opens the fresh session for you in
+Terminal.app. Without it the handoff is still written, and the hook says how to continue.
 
 Since 0.18.18 the succession is a machine, not a ritual: at 90% context the running agent is
 told to finish or checkpoint and author the boundary handoff itself; the app's banner counts
@@ -440,7 +441,8 @@ trantor setup | doctor | connect | profile | provider | models
   the AXe pin.
 
 - **`trantor new <name>`** — project genesis in one command: makes the dir under your dev root
-  (`TRANTOR_DEV_ROOT` or `~/development`), git on main (or `--from <git-url>`, or `--adopt` an
+  (`TRANTOR_DEV_ROOT`, else the Projects folder chosen in the app's Settings, stored as
+  `projectsRoot` in `~/.agent-bus/config.json`, else `~/development`), git on main (or `--from <git-url>`, or `--adopt` an
   existing folder), installs the auto-card hook, posts the brief to the hub, and opens the first
   card "genesis: <name>". `--json` for machines. It never spawns a session — firing the crew
   stays your call. Two paths in: **blank** (no brief) wakes the orchestrator plainly and you work

@@ -1,6 +1,6 @@
 {
   "name": "trantor",
-  "version": "0.18.134",
+  "version": "0.18.135",
   "description": "Trantor — the hub-world for AI agent crews: live message bus, presence, project Kanban/flow board + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek). This manifest makes Kimi Code CLI a first-class ORCHESTRATOR, mirroring .claude-plugin/plugin.json. Hooks are the CANONICAL hooks/** executed through the kimi dialect bridge (kimi/bridge.mjs) — docs/KIMI-BRIDGE-CONTRACT.md.",
   "interface": {
     "displayName": "Trantor",
