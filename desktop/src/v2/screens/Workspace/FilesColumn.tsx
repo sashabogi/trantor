@@ -1,3 +1,4 @@
+import { useActivePane } from "../../ui/useActivePane";
 // The source control sidebar on the left of the Workspace (#14044): Changes, Files and Recent
 // commits fed by useScopeGit, collapsible to a rail, resizable (#13987 drill). #14047: a Branches
 // and seats row click selects that seat in the strip, and the main checkout row selects the orchestrator.
@@ -40,9 +41,10 @@ function ScmColumn(p: FilesColumnProps) {
 }
 
 export function FilesColumn(p: FilesColumnProps) {
+  const pane = useActivePane();
   if (!p.col.open) {
     return (
-      <aside aria-label="Files rail" style={{ width: FILES_RAIL_WIDTH }}
+      <aside {...pane} aria-label="Files rail" style={{ width: FILES_RAIL_WIDTH }}
         className="flex min-h-0 shrink-0 flex-col items-center overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)] py-2">
         <IconButton label="Open files" title="Open the source control sidebar" size={30} onClick={() => p.col.setOpen(true)}><Files size={16} aria-hidden /></IconButton>
       </aside>
@@ -52,7 +54,7 @@ export function FilesColumn(p: FilesColumnProps) {
     <aside aria-label="Source control" style={{ width: p.col.width, minWidth: FILES_MIN_WIDTH, maxWidth: "40%" }}
       className="relative flex min-h-0 shrink-0 flex-col">
       {/* #14250: the pane is a panel inside a plain wrapper, so the splitter strip can live in the gap outside the border. */}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)]">
+      <div {...pane} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)]">
         <ScmColumn {...p} />
       </div>
       <Splitter orientation="columns" edge="right" label="Resize files" title="Drag to resize, double-click to reset"

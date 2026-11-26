@@ -49,6 +49,25 @@ function type(text: string) {
 }
 
 describe("Composer2", () => {
+  it("puts focus on the rounded container and leaves the text field without an outline class", () => {
+    act(() => root.render(<Harness onSend={() => {}} />));
+    const composer = q("[data-v2-composer]");
+    expect(composer?.classList.contains("v2-composer")).toBe(true);
+    expect(composer?.classList.contains("rounded-xl")).toBe(true);
+    expect(composer?.contains(host.querySelector("textarea"))).toBe(true);
+    expect(host.querySelector("textarea")?.className).not.toMatch(/outline|ring/);
+    expect(q("[data-group=agent] button")?.className).toContain("h-6");
+    expect(q("[data-group=agent] button")?.className).toContain("bg-transparent");
+  });
+
+  it("shows an aria-hidden top-edge sweep only while busy", () => {
+    act(() => root.render(<Harness onSend={() => {}} extra={{ busy: true }} />));
+    expect(q("[data-v2-composer] > .v2-composer-sweep")?.getAttribute("aria-hidden")).toBe("true");
+    expect(q(".v2-composer-sweep > .v2-sweep")).not.toBeNull();
+    act(() => root.render(<Harness onSend={() => {}} extra={{ busy: false }} />));
+    expect(q(".v2-composer-sweep")).toBeNull();
+  });
+
   it("starts at two rows and grows to fit the text, up to a ceiling (#14254)", () => {
     const heightOf = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "scrollHeight");
     let content = 0;

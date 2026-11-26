@@ -106,6 +106,31 @@ const chipFor = (name: string) => [...host.querySelectorAll('[role="tab"]')].fin
 const terminalAgents = () => [...host.querySelectorAll("[data-testid=terminal]")].map(t => t.getAttribute("data-agent"));
 
 describe("seat strip", () => {
+  it("activates Workspace panes and reflects each focused or tiled seat's working state", async () => {
+    await mountScreen(fakeClient([]));
+    const terminal = host.querySelector('[data-testid="terminal"]');
+    const work = terminal?.closest("[data-v2-pane]");
+    expect(work?.getAttribute("data-working")).toBe("true");
+    await act(async () => terminal?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(work?.getAttribute("data-active")).toBe("true");
+    const chat = host.querySelector('aside[aria-label="Chat column"] [data-v2-pane]');
+    expect(chat).not.toBeNull();
+    await act(async () => chat?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(work?.hasAttribute("data-active")).toBe(false);
+    expect(chat?.getAttribute("data-active")).toBe("true");
+    expect(host.querySelector('aside[aria-label="Files rail"]')?.hasAttribute("data-v2-pane")).toBe(true);
+    await click(host.querySelector('button[aria-label="Open files"]'));
+    expect(host.querySelector('aside[aria-label="Source control"] [data-v2-pane]')).not.toBeNull();
+    await click(chipFor("glm-5"));
+    expect(work?.hasAttribute("data-working")).toBe(false);
+    await click(host.querySelector('[role="group"][aria-label="Layout"] button[title="Grid: every seat"]'));
+    const tiles = [...host.querySelectorAll('[data-testid="terminal"]')].map(t => t.closest("[data-v2-pane]"));
+    expect(tiles.map(t => t?.hasAttribute("data-working"))).toEqual([true, false]);
+    await act(async () => tiles[0]?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+    expect(host.querySelectorAll("[data-v2-pane][data-active]")).toHaveLength(1);
+    expect(tiles[0]?.getAttribute("data-active")).toBe("true");
+  });
+
   it("shows a tab per live seat of this project, the offline count and the add button (#14241)", async () => {
     await mountScreen(fakeClient([]));
     expect(host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')).toHaveLength(2);

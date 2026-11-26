@@ -1,3 +1,4 @@
+import { useActivePane } from "../../ui/useActivePane";
 // The project Workspace screen: seat strip, inspector, work area and the project panel (#13987).
 // The shell already renders the project header and lens tabs; this is everything under them.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -80,6 +81,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
 
   const seats = useMemo(() => data.seats ?? [], [data.seats]);
   const selected = pickSeat(seats, selKey);
+  const pane = useActivePane(layout === "focus" && selected?.presence === "working");
   const diff = useSeatDiff(project, selected, tab === "changes");
   const pickLayout = useCallback((l: Layout) => {
     setLayout(l);
@@ -127,7 +129,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
       <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
         scopeName={scope ?? "project checkout"} seats={seatInfos} onPickScope={pickScope}
         onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} onShownScope={setShownScope} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
+      <div {...pane} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
         {data.error && data.seats !== null && <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>}
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />

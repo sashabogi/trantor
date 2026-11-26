@@ -48,6 +48,15 @@ const open = () => act(async () => { chip()?.click(); });
 const pick = (label: string) => act(async () => { rows().find(r => r.textContent?.startsWith(label))?.click(); });
 
 describe("ComposerAdapter mode menu", () => {
+  it("floats the composer without a separator and follows Chat's working state", async () => {
+    ipc(claudeAt("default"));
+    await mount({ working: true });
+    expect(host.querySelector(".v2-composer-float")?.className).not.toContain("border-t");
+    expect(host.querySelector(".v2-composer-float .v2-sweep")).not.toBeNull();
+    await mount({ working: false });
+    expect(host.querySelector(".v2-sweep")).toBeNull();
+  });
+
   it("sends a clicked suggestion pill through pane_send once and tells Chat it was handled", async () => {
     ipc(claudeAt("default"));
     const handled: string[] = [];

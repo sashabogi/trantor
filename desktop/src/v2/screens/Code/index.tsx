@@ -1,3 +1,4 @@
+import { useActivePane } from "../../ui/useActivePane";
 // Trantor 2.0 Code and Git (#13988): icon bar, tabs, source control with history and changes, branch
 // picker, PR and merge-conflict tabs. Real data from the classic git and file commands only.
 // #14241: the source tab's list runs full height beside the panel column, so its shared state
@@ -117,6 +118,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     setOverride(true);
   };
   useCodeCommands({ project, scope, refresh, onError: setNotice, showSearch: () => { setSide("search"); setOverride(true); } });
+  const sourcePane = useActivePane();
+  const editorPane = useActivePane();
   const changeCount = snap ? new Set(snap.status.map(s => s.path)).size : 0;
 
   return (
@@ -131,14 +134,14 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
       {/* #14241: on the source tab the changes list is its own full-height panel; the bottom panel sits under the editor only. */}
       {/* #14268: with Explorer or Search open the list is not drawn, so the diff keeps the room. */}
       {tabs.active.kind === "source" && snap && (!visible || side === "source") && (
-        <div data-testid="source-list-panel" className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
+        <div {...sourcePane} data-testid="source-list-panel" className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
           <SourceListColumn project={project} snap={snap} view={view} seats={seatNames} rows={rows} onRows={setHistoryRows}
             selected={selectedChange} onSelect={setPicked} selectedKey={key} onSelectKey={setKey}
             onMutated={refresh} onOpenConflict={openConflict} />
         </div>
       )}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-[6px]">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
+        <div {...editorPane} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
           <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
             onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
             onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />

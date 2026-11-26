@@ -11,6 +11,7 @@ import { ChipMenu, ChoiceIcon, ChoiceRow, LevelPills, MenuHeading, type Choice }
 export type { Choice } from "./ComposerMenu";
 
 export type Composer2Props = {
+  busy?: boolean;
   value: string;
   onChange: (value: string) => void;
   /** Called with the trimmed text on Enter or the send button; the parent clears `value`. */
@@ -101,7 +102,7 @@ function AgentChip(p: Composer2Props) {
   const label = parts.length > 1 ? parts.join(", ") : `Answers: ${who}`;
   return (
     <ChipMenu group="agent" label={label} title={parts.length > 1 ? `${parts.join(" · ")}. Click to change.` : `Answers: ${who}`}
-      menuLabel={hasMode ? "Mode and permission" : "Permission level"} className="py-[2px] pr-[6px] pl-[3px]" onOpen={p.onModeMenuOpen}
+      menuLabel={hasMode ? "Mode and permission" : "Permission level"} className="py-0 pr-[6px] pl-[3px]" onOpen={p.onModeMenuOpen}
       chip={<>
         <Avatar name={p.agent} llm={brandOfModel(p.model.id)} size={20} />
         {hasMode && <span className={`ml-[5px] whitespace-nowrap ${modeNow ? "text-[var(--v2-text)]" : "text-[var(--v2-muted)]"}`}>{modeName}</span>}
@@ -146,7 +147,7 @@ function ModelChip(p: Composer2Props) {
   const label = hasEffort ? `Model: ${p.model.label}, effort: ${at >= 0 ? effortName : "not set"}` : `Model: ${p.model.label}`;
   return (
     <ChipMenu group="model" label={label} title={`Model: ${p.model.id}${hasEffort ? ` · effort ${at >= 0 ? effortName : "not set"}` : ""}${canModel || canEffort ? ". Click to change." : ""}`}
-      menuLabel="Model and effort" className="shrink py-[3px] pr-[7px] pl-[8px]"
+      menuLabel="Model and effort" className="shrink py-0 pr-[7px] pl-[8px]"
       chip={<>
         <span aria-hidden className="h-[8px] w-[8px] flex-none rounded-full" style={{ background: modelHue(p.model.id) }} />
         <span className="ml-[5px] truncate text-[var(--v2-text)]">{p.model.label}</span>
@@ -197,11 +198,12 @@ export function Composer2(p: Composer2Props) {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
   };
   return (
-    <div ref={att?.rootRef} className="flex min-w-0 flex-col gap-2 rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-[10px]">
+    <div ref={att?.rootRef} data-v2-composer className="v2-composer flex min-w-0 flex-col gap-1.5 rounded-xl px-2.5 pt-2.5 pb-2">
+      {p.busy && <span className="v2-composer-sweep" aria-hidden="true"><span className="v2-sweep" /></span>}
       <label htmlFor={id} className="sr-only">{p.label}</label>
       <textarea id={id} ref={box} rows={2} value={p.value} placeholder={p.placeholder}
         onChange={e => p.onChange(e.target.value)} onKeyDown={onKey} onPaste={att?.onPaste}
-        className="resize-none overflow-y-auto border-0 bg-transparent p-[2px] text-v2-base leading-relaxed text-[var(--v2-text)] outline-none placeholder:text-[var(--v2-muted)]" />
+        className="v2-composer-field resize-none overflow-y-auto border-0 bg-transparent p-[2px] text-v2-base text-[var(--v2-text)] placeholder:text-[var(--v2-muted)]" />
       {att && <AttachmentRow chips={att.chips} onRemove={att.remove} />}
       {att?.error && <div role="status" className="text-v2-small text-[var(--v2-warn)]">{att.error}</div>}
       <div className="relative flex min-w-0 items-center gap-1.5">

@@ -1,3 +1,4 @@
+import { useActivePane } from "../../ui/useActivePane";
 // The chat column's frame: a drag handle on its left edge, and a thin rail when it is closed (#13987 drill).
 // #14241: the handle is the shared Splitter, grip and accent line included.
 import type { ReactNode, RefObject } from "react";
@@ -9,9 +10,10 @@ import { CHAT_COLUMN, MIN_WIDTH, RAIL_WIDTH, maxFor, workspaceWidth, type useCha
 type Column = ReturnType<typeof useChatColumn>;
 
 export function ChatColumn({ col, workspace, children }: { col: Column; workspace: RefObject<HTMLElement | null>; children: ReactNode }) {
+  const pane = useActivePane();
   if (!col.open) {
     return (
-      <aside aria-label="Chat rail" style={{ width: RAIL_WIDTH }}
+      <aside {...pane} aria-label="Chat rail" style={{ width: RAIL_WIDTH }}
         className="flex min-h-0 shrink-0 flex-col items-center overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)] py-2">
         <IconButton label="Open chat" title="Open chat" size={30} onClick={() => col.setOpen(true)}><MessageCircle size={16} aria-hidden /></IconButton>
       </aside>
@@ -21,7 +23,7 @@ export function ChatColumn({ col, workspace, children }: { col: Column; workspac
     <aside aria-label="Chat column" style={{ width: col.width, minWidth: MIN_WIDTH, maxWidth: "60%" }}
       className="relative flex min-h-0 shrink-0">
       {/* #14250: the pane is a panel inside a plain wrapper, so the splitter strip can live in the gap outside the border. */}
-      <div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)]">
+      <div {...pane} className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-side)]">
         {children}
       </div>
       <Splitter orientation="columns" edge="left" label="Resize chat" title="Drag to resize, double-click to reset"

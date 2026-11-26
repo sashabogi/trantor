@@ -131,16 +131,18 @@ export function ComposerAdapter(p: ClassicProps) {
     modeReading: mode.reading, onModeMenuOpen: mode.read,
   } : {};
   return (
-    <div className="flex flex-col gap-1.5 border-t border-[var(--v2-edge)] px-3 pb-3 pt-2.5">
-      {shown && <div role="status" className="text-v2-body text-[var(--v2-warn)]">{shown}</div>}
-      <Composer2 value={value} onChange={v => { setValue(v); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
-        permissionHeading={PERMISSION_HEADING}
-        label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
-        agent="orchestrator" model={{ id: p.model || "unknown", label: shownModel(p.model) }}
-        modelChoices={claude ? MODEL_CHOICES : undefined} modelValue={modelChoiceOf(p.model || "")} onModelChange={pickModel}
-        effort={claude ? effort : undefined} effortChoices={EFFORT_CHOICES} onEffortChange={pickEffort}
-        permission={harness.auto ? "auto" : "ask"} permissionChoices={PERMISSION_CHOICES} onPermissionChange={next => harness.set(next === "auto")}
-        contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason} />
+    <div className="v2-composer-gutter">
+      <div className="v2-composer-float flex flex-col gap-1.5">
+        {shown && <div role="status" className="text-v2-body text-[var(--v2-warn)]">{shown}</div>}
+        <Composer2 busy={p.working} value={value} onChange={v => { setValue(v); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
+          permissionHeading={PERMISSION_HEADING}
+          label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
+          agent="orchestrator" model={{ id: p.model || "unknown", label: shownModel(p.model) }}
+          modelChoices={claude ? MODEL_CHOICES : undefined} modelValue={modelChoiceOf(p.model || "")} onModelChange={pickModel}
+          effort={claude ? effort : undefined} effortChoices={EFFORT_CHOICES} onEffortChange={pickEffort}
+          permission={harness.auto ? "auto" : "ask"} permissionChoices={PERMISSION_CHOICES} onPermissionChange={next => harness.set(next === "auto")}
+          contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason} />
+      </div>
     </div>
   );
 }

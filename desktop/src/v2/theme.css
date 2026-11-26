@@ -51,6 +51,20 @@
   --v2-shadow-menu-up: 0 -12px 32px rgba(0, 0, 0, 0.5);
   --v2-shadow-dialog: 0 16px 40px rgba(0, 0, 0, 0.5);
   --v2-shadow-sheet: 0 20px 60px rgba(0, 0, 0, 0.55);
+  --v2-focus-ring: 0 0 0 4px rgba(138,168,255,.20), 0 0 22px 2px rgba(138,168,255,.18), 0 12px 32px -16px rgba(0,0,0,.6);
+  --v2-focus-ring-sm: 0 0 0 3px rgba(138,168,255,.18), 0 0 14px rgba(138,168,255,.14);
+  --v2-focus-edge-top: rgba(138,168,255,.80);
+  --v2-focus-edge-bottom: rgba(138,168,255,.35);
+  --v2-active-edge: rgba(138,168,255,.35);
+  --v2-hairline-fade: linear-gradient(90deg, var(--v2-edge-2), transparent);
+  --v2-link: var(--v2-accent);
+  --v2-dur-1: 120ms;
+  --v2-dur-2: 180ms;
+  --v2-dur-3: 240ms;
+  --v2-ease: cubic-bezier(.2,.7,.3,1);
+  --v2-composer-edge-top: rgba(231,233,236,.14);
+  --v2-composer-edge-bottom: rgba(231,233,236,.06);
+  --v2-composer-shadow: inset 0 1px rgba(255,255,255,.04), 0 10px 28px -16px rgba(0,0,0,.55);
   --v2-font: Inter, system-ui, -apple-system, "Helvetica Neue", sans-serif;
   --v2-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
 }
@@ -67,7 +81,7 @@
 
 .v2-root button { font-family: inherit; cursor: pointer; }
 .v2-root button:disabled { cursor: not-allowed; }
-.v2-root :focus-visible { outline: 2px solid var(--v2-accent); outline-offset: 1px; }
+.v2-root :focus-visible { outline: 1px solid var(--v2-accent); outline-offset: 1px; }
 .v2-root ::selection { background: rgba(138, 168, 255, 0.28); }
 .v2-mono { font-family: var(--v2-mono); }
 .v2-hover:hover:not(:disabled) { background: var(--v2-raised); color: var(--v2-text); }
@@ -90,7 +104,6 @@
 /* #13984 drill: the classic Start a project sheet wears Graphite inside the 2.0 shell. */
 .v2-genesis .tr-card { background: var(--v2-panel-2); border: 1px solid var(--v2-edge-2); color: var(--v2-text); }
 .v2-genesis .tr-input { background: var(--v2-panel); border: 1px solid var(--v2-edge-2); color: var(--v2-text); }
-.v2-genesis .tr-input:focus { outline: 2px solid var(--v2-accent); outline-offset: 0; }
 .v2-genesis .tr-seg > button[data-on="true"] { background: var(--v2-accent-soft); color: var(--v2-text); }
 
 /* Change markers beside editor lines: added, changed, removed against HEAD, in the git status colours. */
@@ -122,3 +135,75 @@
 .v2-commit-new { background: var(--v2-accent-soft); animation: v2-commit-new 2500ms ease-out 1 forwards; }
 @keyframes v2-commit-new { to { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .v2-agent-pulse, .v2-commit-new { animation: none; } }
+
+/* #14327: pane edges and field focus share the artboard's motion and glow. */
+[data-v2-pane] {
+  --v2-pane-edge: var(--v2-edge);
+  border: 1px solid var(--v2-edge);
+  transition: border-color var(--v2-dur-3) var(--v2-ease);
+}
+[data-v2-pane][data-working] { animation: v2-breathe 2.4s var(--v2-ease) infinite; }
+[data-v2-pane][data-active] { --v2-pane-edge: var(--v2-active-edge); border-color: var(--v2-active-edge); }
+.v2-root :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select, textarea):not(.v2-composer-field):not(.xterm-helper-textarea):not(.inputarea) {
+  transition: box-shadow var(--v2-dur-2) var(--v2-ease), border-color var(--v2-dur-2) var(--v2-ease);
+}
+.v2-root :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select, textarea):not(.v2-composer-field):not(.xterm-helper-textarea):not(.inputarea):focus {
+  outline: none;
+  border-color: var(--v2-accent);
+  box-shadow: var(--v2-focus-ring-sm);
+}
+.v2-composer {
+  position: relative;
+  border: 1px solid transparent;
+  background: linear-gradient(var(--v2-panel-2), var(--v2-panel-2)) padding-box,
+    linear-gradient(180deg, var(--v2-composer-edge-top), var(--v2-composer-edge-bottom)) border-box;
+  box-shadow: var(--v2-composer-shadow);
+  transition: box-shadow var(--v2-dur-2) var(--v2-ease);
+}
+.v2-composer::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg, var(--v2-focus-edge-top), var(--v2-focus-edge-bottom));
+  mask: linear-gradient(var(--v2-knob) 0 0) content-box, linear-gradient(var(--v2-knob) 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--v2-dur-2) var(--v2-ease);
+}
+.v2-composer:focus-within { box-shadow: var(--v2-focus-ring); }
+.v2-composer:focus-within::before { opacity: 1; }
+.v2-composer .v2-composer-field {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  line-height: 1.65;
+}
+.v2-composer-gutter { container-type: inline-size; }
+.v2-composer-float { margin: 8px 16px 12px; }
+@container (max-width: 420px) { .v2-composer-float { margin-inline: 12px; } }
+.v2-composer-sweep { position: absolute; inset: -1px 0 auto; height: 1px; overflow: hidden; pointer-events: none; }
+.v2-sweep {
+  position: absolute;
+  left: 30%;
+  width: 30%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--v2-accent), transparent);
+  animation: v2-sweep 1.6s var(--v2-ease) infinite;
+}
+.v2-pulse { animation: v2-pulse 1.2s var(--v2-ease) infinite; }
+.v2-breathe { animation: v2-breathe 2.4s var(--v2-ease) infinite; }
+.v2-pop { animation: v2-pop var(--v2-dur-1) var(--v2-ease); }
+@keyframes v2-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes v2-breathe { 0%, 100% { border-color: var(--v2-pane-edge, var(--v2-edge)); } 50% { border-color: var(--v2-accent-edge); } }
+@keyframes v2-sweep { 0% { left: -30%; opacity: 0; } 15%, 85% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
+@keyframes v2-pop { from { opacity: 0; transform: translateY(4px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) {
+  :root { --v2-dur-1: 0ms; --v2-dur-2: 0ms; --v2-dur-3: 0ms; }
+  .v2-root *, .v2-root *::before, .v2-root *::after,
+  [data-v2-pane], .v2-pulse, .v2-breathe, .v2-sweep, .v2-pop,
+  .v2-composer, .v2-composer::before { animation: none !important; transition: none !important; }
+  [data-v2-pane][data-working]:not([data-active]), .v2-breathe { border-color: var(--v2-accent-edge); }
+}

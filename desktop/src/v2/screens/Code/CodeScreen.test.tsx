@@ -175,6 +175,27 @@ const button = (text: string) => [...host.querySelectorAll("button")].find(b => 
 describe("panes as panels (#14250)", () => {
   beforeEach(() => { localStorage.setItem(MODE_KEY, "developer"); });
 
+  it("shares activation across Code's editor, source list, terminal, sidebar and chat frames", async () => {
+    await mount();
+    const panels = [...host.querySelectorAll("[data-v2-pane]")];
+    expect(panels).toHaveLength(5);
+    expect(host.querySelector('[data-testid="code-main"]')?.closest("[data-v2-pane]")).not.toBeNull();
+    expect(host.querySelector('[data-testid="source-list-panel"]')?.hasAttribute("data-v2-pane")).toBe(true);
+    expect(host.querySelector('section[aria-label="Bottom panel"]')?.hasAttribute("data-v2-pane")).toBe(true);
+    for (const panel of panels) {
+      await act(async () => panel.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })));
+      expect(host.querySelectorAll("[data-active]")).toHaveLength(1);
+      expect(panel.getAttribute("data-active")).toBe("true");
+    }
+    await click('button[aria-label="Explorer"]');
+    expect(host.querySelector('aside[aria-label="Explorer"]')?.hasAttribute("data-v2-pane")).toBe(true);
+    await click('button[aria-label="Open the chat"]');
+    const chat = host.querySelector('aside[aria-label="Chat"]');
+    await act(async () => chat?.querySelector("textarea")?.focus());
+    expect(chat?.getAttribute("data-active")).toBe("true");
+    expect(host.querySelectorAll("[data-active]")).toHaveLength(1);
+  });
+
   it("the screen is a chrome ground with 6px padding and gap; the icon bar and folded chat are panels", async () => {
     await mount();
     const ground = host.querySelector('[data-testid="code-screen"]');

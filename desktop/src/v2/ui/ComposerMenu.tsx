@@ -14,7 +14,7 @@ export type Choice = {
   tone?: "warn";
 };
 
-const PILL = "inline-flex min-w-0 items-center rounded-full border border-[var(--v2-edge-2)] bg-[var(--v2-raised)] text-v2-body font-medium";
+const PILL = "inline-flex h-6 min-w-0 items-center rounded-full border border-[var(--v2-edge)] bg-transparent text-v2-small";
 
 export function ChoiceIcon({ choice, size = 13 }: { choice?: Choice; size?: number }) {
   if (choice?.icon === "zap") return <Zap size={size} aria-hidden />;
