@@ -473,7 +473,9 @@ console.log("\nA session whose only sends are acks owes nothing, and a real cont
   }
   await get2(`/inbox?session=${encodeURIComponent(AO)}`);
   {
-    const { so, se } = await runStop4();
+    // #14235: the hook fail-opens ({} and silent stderr) on any transient hub read error, and a slow CI runner hit it; re-run until it answers (a block is persisted, so a retry after a silent allow is safe), 60s bound.
+    let { so, se } = await runStop4();
+    for (let i = 0; i < 12 && so.trim() === "{}" && !se.trim(); i++) { await sleep(500); ({ so, se } = await runStop4()); }
     let o = {}; try { o = JSON.parse(so || "{}"); } catch {}
     ok("the stop guard BLOCKS on the real stalled contract", o.decision === "block", `stdout=${so.slice(0, 120)} stderr=${se.slice(0, 300)}`);
     ok("…and its reason names the seat that owes it, not an ack", /qwen:life/.test(o.reason || "") && !/nothing here needs you/.test(o.reason || ""),

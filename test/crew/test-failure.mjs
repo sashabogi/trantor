@@ -110,6 +110,9 @@ async function drill(agent, script, opts = {}) {
   const waitStart = Date.now();
   if (opts.until) {
     while (!opts.until(sends) && Date.now() - waitStart < (opts.deadlineMs ?? 30000)) await sleep(100);
+  } else if (opts.untilHome) {
+    // #14235: a fixed 4s wait ended before a loaded CI runner ran the woken turn; wait on the run count instead.
+    while (!opts.untilHome(HOME) && Date.now() - waitStart < (opts.deadlineMs ?? 30000)) await sleep(100);
   } else {
     await sleep(opts.waitMs ?? 2500);
   }
@@ -416,13 +419,13 @@ async function drill(agent, script, opts = {}) {
     // seat only on `contract:`-shaped text (shouldWake line 869), and the #6228 fence drops
     // foreign-project senders. "real contract:" used to fail BOTH — its sender predate the fence
     // and its text predates the shape net — so the wake batched and no second turn ever ran.
-    { inbox: [fyi, { text: "contract: do the thing" }], waitMs: 4000, keepHome: true });
+    { inbox: [fyi, { text: "contract: do the thing" }], untilHome: (h) => runsOf(h) >= 2, keepHome: true });
   ok("#5760: a real direct still wakes, and exactly one extra turn runs", runsOf(b.home) === 2);
   ok("#5760: the FYI rides that turn as CONTEXT, not as the wake",
      (() => { try { return readFileSync(join(b.home, ".agent-bus", "turn-opencode-tt-fail-opencode.txt"), "utf8").includes("same-project-sessions"); } catch { return false; } })());
 
   const c = await drill("opencode", counter,
-    { inbox: [{ from: "hub:duty", text: "🤝 OVERSEER file-conflict: you and x:tt are working on overlapping ground (src/a.ts)." }], waitMs: 4000, keepHome: true });
+    { inbox: [{ from: "hub:duty", text: "🤝 OVERSEER file-conflict: you and x:tt are working on overlapping ground (src/a.ts)." }], untilHome: (h) => runsOf(h) >= 2, keepHome: true });
   ok("#5760: a file-conflict warning STILL wakes — that one is actionable now", runsOf(c.home) === 2);
 }
 

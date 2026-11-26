@@ -141,7 +141,8 @@ if (stallFile) {
     reportLiveness(now, Math.max(tr, cli));
     if (heavyWait.waiting) { lastErrAt = now; continue; }
     if (tr > freshCut || cli > freshCut || wk > freshCut || now - lastErrAt < windowMs) {           // producing work: alive
-      if (box && extensions < Number(box.extensionsMax) && now + poll + SLACK >= deadline) {
+      // #14235: re-read the stamp just before extending, so a turn that ended during this pass is not extended and announced after the runner counted.
+      if (box && extensions < Number(box.extensionsMax) && now + poll + SLACK >= deadline && (() => { const t = readStamp(); return t && t.turn === armed.turn; })()) {
         extensions++;
         deadline += Number(box.extendMs);
         try { writeFileSync(box.deadlineFile, String(Math.floor(deadline / 1000))); } catch {}

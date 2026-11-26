@@ -1132,11 +1132,7 @@ exit $turn_exit`;
   const cut = !!TURN_MAX_MS && (boxed || stallCut);
   // #7761: how far the watchdog moved the box, one EXTF row per extension. boxMs is the box the
   // turn actually had, so a ceiling cut reads as the ceiling, never as the 20-minute default.
-  let extensions = 0;
-  try { extensions = readFileSync(EXTF, "utf8").split("\n").filter(Boolean).length; } catch {}
-  const boxMs = TURN_MAX_MS + extensions * TURN_EXTEND_MS;
   try { unlinkSync(DEADLINEF); } catch {}
-  try { unlinkSync(EXTF); } catch {}
   // DRAIN before classifying, never on a CUT turn (the sweep killed the scrubber, its marker never
   // comes). bash 3.2 `wait` skips process substitutions, so wait for DRAINF, bounded.
   if (!cut) {
@@ -1146,6 +1142,11 @@ exit $turn_exit`;
   try { unlinkSync(DRAINF); } catch {}
   killWatchdog();                        // #6206: turn over — the watchdog dies NOW, it does not sleep on
   try { unlinkSync(STAMPF); } catch {}   // disarm any survivor: the stamp is gone
+  // #14235: count extensions only after the watchdog is dead and disarmed, or it appends one more after this read and the assigner hears a notice the ledger lacks.
+  let extensions = 0;
+  try { extensions = readFileSync(EXTF, "utf8").split("\n").filter(Boolean).length; } catch {}
+  const boxMs = TURN_MAX_MS + extensions * TURN_EXTEND_MS;
+  try { unlinkSync(EXTF); } catch {}
   if (cut) {
     const saved = snapshotBeforeCut(TURN_DIR, stallCut ? "stall" : "box");
     if (!saved.ok) log(`cut WIP snapshot failed: ${saved.error}`);
