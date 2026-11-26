@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use serde::Serialize;
+
 /// Days since 1970-01-01 from a civil date (Howard Hinnant's `days_from_civil`): the one date
 /// fact this file needs without a date crate, valid across the whole Gregorian range.
 fn days_from_civil(y: i64, m: u64, d: u64) -> i64 {
@@ -101,6 +103,180 @@ pub(crate) fn edit_target_path(name: &str, input: &serde_json::Value, cwd: &str)
     Some(raw.to_string())
 }
 
+/// One line of a changed-lines preview: `op` is "+" or "-".
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct DiffLine {
+    pub(crate) op: &'static str,
+    pub(crate) text: String,
+}
+
+/// Structured facts about one tool call (#14327), so the chat can fold, phrase and preview it
+/// without re-parsing the summary string. Every field is absent when it does not apply.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub(crate) struct ToolFacts {
+    /// "explore" | "edit" | "write" | "command" | "commit" | "todo" | "other"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool_kind: Option<&'static str>,
+    /// Target paths, absolute against the row's cwd.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) paths: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) added: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) removed: Option<u32>,
+    /// Up to DIFF_LINES changed lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) diff: Option<Vec<DiffLine>>,
+}
+
+const DIFF_LINES: usize = 8;
+
+const EXPLORE_COMMANDS: &[&str] = &["cat", "head", "tail", "grep", "rg", "ls", "find", "wc", "cd", "pwd"];
+
+/// Does one shell segment run `git commit` (allowing `git -C dir commit`, `git -c k=v commit`)?
+fn segment_is_git_commit(words: &[&str]) -> bool {
+    if words.first() != Some(&"git") {
+        return false;
+    }
+    let mut i = 1;
+    while i < words.len() {
+        let w = words[i];
+        if w == "-C" || w == "-c" {
+            i += 2;
+            continue;
+        }
+        if w.starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return w == "commit";
+    }
+    false
+}
+
+fn segment_is_explore(words: &[&str]) -> bool {
+    match words.first() {
+        Some(&"sed") => words.iter().any(|w| *w == "-n" || (w.starts_with("-n") && !w.starts_with("--"))),
+        Some(w) => EXPLORE_COMMANDS.contains(w),
+        None => false,
+    }
+}
+
+/// "commit" when any segment of the command line runs `git commit`; "explore" when every segment
+/// is a read-only look (cat/sed -n/head/tail/grep/rg/ls/find/wc); otherwise "command".
+pub(crate) fn classify_command(command: &str) -> &'static str {
+    let spaced = command.replace("&&", "\n").replace("||", "\n").replace([';', '|'], "\n");
+    let segments: Vec<Vec<&str>> = spaced
+        .lines()
+        .map(|seg| seg.split_whitespace().collect::<Vec<_>>())
+        .filter(|w| !w.is_empty())
+        .collect();
+    if segments.iter().any(|w| segment_is_git_commit(w)) {
+        return "commit";
+    }
+    if !segments.is_empty() && segments.iter().all(|w| segment_is_explore(w)) {
+        return "explore";
+    }
+    "command"
+}
+
+fn absolute(raw: &str, cwd: &str) -> String {
+    if raw.starts_with('/') || raw.starts_with('~') || cwd.is_empty() {
+        raw.to_string()
+    } else {
+        format!("{}/{}", cwd.trim_end_matches('/'), raw.trim_start_matches("./"))
+    }
+}
+
+/// Lines changed between two strings: identical leading and trailing lines are not changes.
+fn changed_lines(old: &str, new: &str) -> (Vec<String>, Vec<String>) {
+    let o: Vec<&str> = old.lines().collect();
+    let n: Vec<&str> = new.lines().collect();
+    let mut head = 0;
+    while head < o.len() && head < n.len() && o[head] == n[head] {
+        head += 1;
+    }
+    let mut tail = 0;
+    while tail < o.len() - head && tail < n.len() - head && o[o.len() - 1 - tail] == n[n.len() - 1 - tail] {
+        tail += 1;
+    }
+    (
+        o[head..o.len() - tail].iter().map(|s| s.to_string()).collect(),
+        n[head..n.len() - tail].iter().map(|s| s.to_string()).collect(),
+    )
+}
+
+/// Classify a tool call and pull out what the chat shows about it.
+pub(crate) fn tool_facts(name: &str, input: &serde_json::Value, cwd: &str) -> ToolFacts {
+    let str_of = |k: &str| input.get(k).and_then(|v| v.as_str());
+    let mut facts = ToolFacts::default();
+    match name {
+        "Read" | "Edit" | "MultiEdit" | "Write" | "NotebookEdit" => {
+            if let Some(p) = str_of("file_path").or_else(|| str_of("notebook_path")) {
+                facts.paths = Some(vec![absolute(p, cwd)]);
+            }
+        }
+        "Grep" | "Glob" | "LS" => {
+            let p = str_of("path").map(|p| absolute(p, cwd)).or_else(|| (!cwd.is_empty()).then(|| cwd.to_string()));
+            facts.paths = p.map(|p| vec![p]);
+        }
+        _ => {}
+    }
+    facts.tool_kind = Some(match name {
+        "Read" | "Grep" | "Glob" | "LS" | "WebFetch" | "WebSearch" => "explore",
+        "Edit" | "MultiEdit" | "NotebookEdit" => "edit",
+        "Write" => "write",
+        "TodoWrite" => "todo",
+        "Bash" => classify_command(str_of("command").unwrap_or("")),
+        _ => "other",
+    });
+    let removed_lines: Vec<String>;
+    let added_lines: Vec<String>;
+    match name {
+        "Edit" => {
+            (removed_lines, added_lines) = changed_lines(str_of("old_string").unwrap_or(""), str_of("new_string").unwrap_or(""));
+        }
+        "MultiEdit" => {
+            let mut r = Vec::new();
+            let mut a = Vec::new();
+            for e in input.get("edits").and_then(|e| e.as_array()).into_iter().flatten() {
+                let old = e.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+                let new = e.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+                let (er, ea) = changed_lines(old, new);
+                r.extend(er);
+                a.extend(ea);
+            }
+            removed_lines = r;
+            added_lines = a;
+        }
+        "Write" => {
+            removed_lines = Vec::new();
+            added_lines = str_of("content").unwrap_or("").lines().map(String::from).collect();
+        }
+        _ => return facts,
+    }
+    facts.added = Some(added_lines.len() as u32);
+    facts.removed = Some(removed_lines.len() as u32);
+    let diff: Vec<DiffLine> = removed_lines
+        .into_iter()
+        .map(|text| DiffLine { op: "-", text })
+        .chain(added_lines.into_iter().map(|text| DiffLine { op: "+", text }))
+        .take(DIFF_LINES)
+        .collect();
+    facts.diff = Some(diff);
+    facts
+}
+
+/// Exit code of a Bash result: the "Exit code N" line the CLI prepends to a failing command's
+/// output; a clean result without it is 0; an error without the line is unknown (None).
+pub(crate) fn bash_exit_code(preview: &str, is_error: bool) -> Option<i32> {
+    let first = preview.lines().next().unwrap_or("").trim();
+    if let Some(n) = first.strip_prefix("Exit code ") {
+        return n.trim().parse().ok();
+    }
+    if is_error { None } else { Some(0) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +306,79 @@ mod tests {
             Some("desktop/src/v2/shell/shellMode.ts")
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn facts(name: &str, input: serde_json::Value) -> ToolFacts {
+        tool_facts(name, &input, "/repo")
+    }
+
+    #[test]
+    fn commands_classify_as_explore_commit_or_command() {
+        for c in ["cat a.ts", "sed -n 1,20p a.ts", "head -5 x | wc -l", "cd /repo && rg foo src", "ls -la", "find . -name x", "tail -f log"] {
+            assert_eq!(classify_command(c), "explore", "{c}");
+        }
+        for c in ["git commit -m x", "git add . && git commit -m 'y'", "git -C /r commit --amend"] {
+            assert_eq!(classify_command(c), "commit", "{c}");
+        }
+        for c in ["sed -i s/a/b/ f", "npm test", "cat a && npm test", "git status", "git log --grep=commit", ""] {
+            assert_eq!(classify_command(c), "command", "{c}");
+        }
+    }
+
+    #[test]
+    fn tools_classify_by_name_with_absolute_paths() {
+        let r = facts("Read", serde_json::json!({ "file_path": "src/a.ts" }));
+        assert_eq!(r.tool_kind, Some("explore"));
+        assert_eq!(r.paths, Some(vec!["/repo/src/a.ts".to_string()]));
+        let g = facts("Grep", serde_json::json!({ "pattern": "x" }));
+        assert_eq!(g.paths, Some(vec!["/repo".to_string()]), "a search with no path covers the cwd");
+        assert_eq!(facts("Glob", serde_json::json!({ "pattern": "*.rs", "path": "/abs" })).paths, Some(vec!["/abs".to_string()]));
+        assert_eq!(facts("TodoWrite", serde_json::json!({})).tool_kind, Some("todo"));
+        assert_eq!(facts("WebFetch", serde_json::json!({ "url": "u" })).tool_kind, Some("explore"));
+        assert_eq!(facts("Task", serde_json::json!({})).tool_kind, Some("other"));
+        assert_eq!(facts("Bash", serde_json::json!({ "command": "npm test" })).tool_kind, Some("command"));
+        assert_eq!(facts("Bash", serde_json::json!({ "command": "git commit -m x" })).tool_kind, Some("commit"));
+    }
+
+    #[test]
+    fn an_edit_counts_only_changed_lines_and_keeps_a_diff_preview() {
+        let f = facts(
+            "Edit",
+            serde_json::json!({ "file_path": "/repo/a.ts", "old_string": "keep\nold1\nold2\ntail", "new_string": "keep\nnew1\ntail" }),
+        );
+        assert_eq!(f.tool_kind, Some("edit"));
+        assert_eq!((f.added, f.removed), (Some(1), Some(2)));
+        let d = f.diff.unwrap();
+        assert_eq!(d.iter().map(|l| format!("{}{}", l.op, l.text)).collect::<Vec<_>>(), ["-old1", "-old2", "+new1"]);
+    }
+
+    #[test]
+    fn a_multi_edit_sums_its_edits_and_the_diff_is_capped_at_eight_lines() {
+        let f = facts(
+            "MultiEdit",
+            serde_json::json!({ "file_path": "/repo/a.ts", "edits": [
+                { "old_string": "a", "new_string": "b" },
+                { "old_string": "", "new_string": "1\n2\n3\n4\n5\n6\n7\n8\n9" },
+            ] }),
+        );
+        assert_eq!((f.added, f.removed), (Some(10), Some(1)));
+        assert_eq!(f.diff.unwrap().len(), 8);
+    }
+
+    #[test]
+    fn a_write_counts_its_lines_as_added() {
+        let f = facts("Write", serde_json::json!({ "file_path": "/repo/n.md", "content": "a\nb\nc\n" }));
+        assert_eq!(f.tool_kind, Some("write"));
+        assert_eq!((f.added, f.removed), (Some(3), Some(0)));
+        assert_eq!(f.diff.unwrap()[0], DiffLine { op: "+", text: "a".into() });
+        assert_eq!(facts("Read", serde_json::json!({ "file_path": "/repo/a" })).added, None);
+    }
+
+    #[test]
+    fn bash_exit_codes_come_from_the_convention_or_stay_unknown() {
+        assert_eq!(bash_exit_code("Exit code 2\nboom", true), Some(2));
+        assert_eq!(bash_exit_code("fine", false), Some(0));
+        assert_eq!(bash_exit_code("interrupted", true), None);
+        assert_eq!(bash_exit_code("Exit code x", true), None);
     }
 }

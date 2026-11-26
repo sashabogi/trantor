@@ -51,14 +51,14 @@ function CardsPane({ cards }: { cards: Card[] }) {
 }
 
 export type SidebarProps = {
-  view: SideView; client: HubClient; project: string; scope: string | null; seats: SeatInfo[]; state: ScopeState;
+  view: SideView; explorerKey?: number; client: HubClient; project: string; scope: string | null; seats: SeatInfo[]; state: ScopeState;
   selected: string | null; onOpenFile: OpenAt; onOpenChange: (path: string) => void; onOpenCommit: (sha: string) => void;
   onMutated: () => void; onOpenSource: () => void; onPickSeat: (seat: string | null) => void; onOpenConflict: (path: string) => void;
 };
 
 function Body(p: SidebarProps) {
   const cards = useTasks(p.client, p.project);
-  if (p.view === "explorer") return <div className="min-h-0 flex-1 overflow-y-auto"><ExplorerTree project={p.project} seat={p.scope} onOpen={p.onOpenFile} /></div>;
+  if (p.view === "explorer") return <div className="min-h-0 flex-1 overflow-y-auto"><ExplorerTree key={p.explorerKey ?? 0} project={p.project} seat={p.scope} onOpen={p.onOpenFile} /></div>;
   if (p.view === "search") return <SearchPane project={p.project} scope={p.scope} onOpen={p.onOpenFile} onMutated={p.onMutated} />;
   if (p.view === "agents") return <AgentsPane seats={p.seats} scope={p.scope} onPick={p.onPickSeat} />;
   return <CardsPane cards={cards} />;

@@ -1,8 +1,10 @@
-// A one-shot note from one lens to the next: "open this file", "show source control", "show this
-// change's diff" or "show this commit" (#13987, #14044). Workspace sets it then navigates; Code
-// takes it on mount, or at once when it is already showing that project.
+// A one-shot note from one lens to the next: "open this file" (at a line and column when given),
+// "reveal this folder", "show source control", "show this change's diff" or "show this commit"
+// (#13987, #14044, #14327). Workspace sets it then navigates; Code takes it on mount, or at once
+// when it is already showing that project.
 export type OpenIntent =
-  | { kind: "file"; path: string; seat?: string }
+  | { kind: "file"; path: string; line?: number; col?: number; seat?: string }
+  | { kind: "folder"; path: string; seat?: string }
   | { kind: "source-control"; seat?: string }
   | { kind: "change"; path: string; seat?: string }
   | { kind: "commit"; sha: string; seat?: string };

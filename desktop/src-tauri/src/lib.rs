@@ -38,6 +38,7 @@ mod output_log;
 mod problems;
 mod chat;
 mod transcript_facts;
+mod link_exists;
 mod watchers;
 mod panes;
 mod pane_mode;

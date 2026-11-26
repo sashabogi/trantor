@@ -17,6 +17,7 @@ import { keepInputsPlain } from "./shell/plainInputs";
 import { AgentCliBanner } from "./shell/AgentCliBanner";
 import { Rail } from "./shell/Rail";
 import { BottomBar } from "./shell/BottomBar";
+import { CardSheet } from "./shell/CardSheet";
 import { ProjectFrame } from "./shell/ProjectFrame";
 import { AllProjects, ClassicLens, MessagesLens } from "./shell/ClassicLenses";
 import { DashboardScreen } from "./screens/Dashboard";
@@ -179,6 +180,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
         <OnboardingFlow me={data.me} project={data.active || data.projects[0] || ""} forced={onboarding.forced}
           onCliInstalled={localHub.retry} onClose={onboarding.close} />
       )}
+      <CardSheet client={data.client} />
       <ShortcutLayer project={data.active} screen={screen} mode={mode} onMode={onMode} onNavigate={onNavigate} onSearch={togglePalette} />
     </div>
   );

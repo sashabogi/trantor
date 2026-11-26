@@ -11,7 +11,7 @@ export type Row = { entry: FileEntry; depth: number };
 export type Counts = { plus: number | null; minus: number | null };
 type Git = { status: GitPath[]; counts: Map<string, Counts> };
 
-const expandedKey = (project: string, seat: string | null) => `trantor.v2.explorer.expanded.${project}.${seat ?? "project"}`;
+export const expandedKey = (project: string, seat: string | null) => `trantor.v2.explorer.expanded.${project}.${seat ?? "project"}`;
 function readExpanded(key: string): string[] {
   try {
     const v: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");

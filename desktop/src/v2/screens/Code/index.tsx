@@ -5,6 +5,7 @@ import { useActivePane } from "../../ui/useActivePane";
 // (the picked file, the chips, the history rows) lives here instead of inside SourceControlTab.
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { takeOpenIntent, watchOpenIntent } from "../../shell/openIntent";
+import { revealFolder } from "./revealFolder";
 import type { Card } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
 import { BottomPanel } from "../../ui/BottomPanel";
@@ -68,6 +69,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const mode = useShellMode();
   const branchRefusal = branchMutationRefusal(scope, mode) ?? (seats.find(seat => seat.seat === scope)?.presence === "working" ? `${scope} is working; change its worktree after the turn ends` : null);
   const acts = useMemo(() => ({ addToChat, copy, branchRefusal }), [addToChat, branchRefusal]);
+  // #14327: bumped when a folder is revealed, so a mounted Explorer reads the folders now left open.
+  const [explorerShown, setExplorerShown] = useState(0);
   const [reveal, setReveal] = useState<{ tab: string; line: number; column?: number; nonce: number } | null>(null);
   const openFile = (path: string, line?: number, column?: number) => {
     const id = `file:${scope ?? ""}:${path}`;
@@ -88,8 +91,16 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
       const seat = intent.seat ?? null;
       setScope(seat);
       setKey(null);
-      if (intent.kind === "file") openTab({ id: `file:${seat ?? ""}:${intent.path}`, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
-      else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
+      if (intent.kind === "file") {
+        const id = `file:${seat ?? ""}:${intent.path}`;
+        openTab({ id, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
+        if (intent.line) setReveal({ tab: id, line: intent.line, column: intent.col, nonce: Date.now() });
+      } else if (intent.kind === "folder") {
+        revealFolder(project, seat, intent.path);
+        setExplorerShown(n => n + 1);
+        setSide("explorer");
+        setOverride(true);
+      } else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
       else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
       else activateTab("source");
     };
@@ -127,7 +138,7 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
     <div className="flex min-h-[600px] min-w-0 flex-1 gap-[6px] bg-[var(--v2-chrome)] p-[6px]" data-testid="code-screen">
       <IconBar active={side} folded={!visible} onPick={onIcon} changeCount={changeCount} />
       {visible && (
-        <Sidebar view={side} client={client} project={project} scope={scope} seats={seats} state={state} selected={changeFocus}
+        <Sidebar view={side} explorerKey={explorerShown} client={client} project={project} scope={scope} seats={seats} state={state} selected={changeFocus}
           onOpenFile={openFile} onOpenChange={openChange} onMutated={refresh} onOpenSource={() => { tabs.activate("source"); setOverride(false); }}
           onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}

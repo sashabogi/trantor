@@ -73,6 +73,9 @@ pub(crate) struct ChatBlock {
     /// for every other block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) path: Option<String>,
+    /// Tool-call facts (#14327): kind, absolute paths, changed-line counts and a diff preview.
+    #[serde(flatten)]
+    pub(crate) facts: crate::transcript_facts::ToolFacts,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -399,6 +402,12 @@ pub(crate) struct ChatToolResult {
     pub(crate) tool_id: String,
     pub(crate) ok: bool,
     pub(crate) preview: String,
+    /// Bash only: the command's exit code when the result states it (#14327).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_code: Option<i32>,
+    /// Milliseconds between the tool_use row and its tool_result row, when both carry a time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) duration_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -667,6 +676,8 @@ where
 {
     let mut turns: Vec<ChatTurn> = Vec::new();
     let mut results: Vec<ChatToolResult> = Vec::new();
+    // tool_use id -> (tool name, row time), so a later result can state its duration and exit code.
+    let mut pending_calls: std::collections::HashMap<String, (String, Option<u64>)> = std::collections::HashMap::new();
     let mut receipt_texts: Vec<String> = Vec::new();
     let mut turn_ended = false;
     let mut meta = ChatMeta {
@@ -725,6 +736,7 @@ where
                                     tool_id: None,
                                     ask: None,
                                     path: None,
+                                    facts: Default::default(),
                                 }],
                                 ts: None,
                                 queued: None,
@@ -748,6 +760,7 @@ where
                                     tool_id: None,
                                     ask: None,
                                     path: None,
+                                    facts: Default::default(),
                                 }],
                                 ts: crate::transcript_facts::row_ts(&v),
                                 queued: Some(true),
@@ -775,6 +788,7 @@ where
                             tool_id: None,
                             ask: None,
                             path: None,
+                            facts: Default::default(),
                         }],
                         ts: None,
                         queued: None,
@@ -829,6 +843,7 @@ where
                         tool_id: None,
                         ask: None,
                         path: None,
+                        facts: Default::default(),
                     }],
                     ts: None,
                     queued: None,
@@ -848,6 +863,7 @@ where
                     tool_id: None,
                     ask: None,
                     path: None,
+                    facts: Default::default(),
                 })
             }
             serde_json::Value::Array(items) => {
@@ -867,6 +883,7 @@ where
                                 tool_id: None,
                                 ask: None,
                                 path: None,
+                                facts: Default::default(),
                             });
                         }
                         Some("thinking") => {
@@ -885,6 +902,7 @@ where
                                 tool_id: None,
                                 ask: None,
                                 path: None,
+                                facts: Default::default(),
                             });
                         }
                         Some("tool_use") => {
@@ -892,6 +910,9 @@ where
                             let empty = serde_json::Value::Null;
                             let input = b.get("input").unwrap_or(&empty);
                             let cwd = v.get("cwd").and_then(|c| c.as_str()).unwrap_or("");
+                            if let Some(id) = b.get("id").and_then(|i| i.as_str()) {
+                                pending_calls.insert(id.to_string(), (name.to_string(), crate::transcript_facts::row_ts(&v)));
+                            }
                             blocks.push(ChatBlock {
                                 kind: "tool".into(),
                                 text: tool_summary(name, input),
@@ -899,19 +920,24 @@ where
                                 tool_id: b.get("id").and_then(|i| i.as_str()).map(String::from),
                                 ask: if name == "AskUserQuestion" { parse_ask_questions(input) } else { None },
                                 path: crate::transcript_facts::edit_target_path(name, input, cwd),
+                                facts: crate::transcript_facts::tool_facts(name, input, cwd),
                             });
                         }
                         Some("tool_result") => {
                             if let Some(id) = b.get("tool_use_id").and_then(|i| i.as_str()) {
                                 let empty = serde_json::Value::Null;
-                                results.push(ChatToolResult {
-                                    tool_id: id.to_string(),
-                                    ok: !b
-                                        .get("is_error")
-                                        .and_then(|e| e.as_bool())
-                                        .unwrap_or(false),
-                                    preview: preview_of(b.get("content").unwrap_or(&empty)),
-                                });
+                                let ok = !b.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
+                                let preview = preview_of(b.get("content").unwrap_or(&empty));
+                                let call = pending_calls.get(id);
+                                let exit_code = match call {
+                                    Some((name, _)) if name == "Bash" => crate::transcript_facts::bash_exit_code(&preview, !ok),
+                                    _ => None,
+                                };
+                                let duration_ms = match (call.and_then(|(_, t)| *t), crate::transcript_facts::row_ts(&v)) {
+                                    (Some(start), Some(end)) if end >= start => Some(end - start),
+                                    _ => None,
+                                };
+                                results.push(ChatToolResult { tool_id: id.to_string(), ok, preview, exit_code, duration_ms });
                             }
                         }
                         Some("image") => blocks.push(ChatBlock {
@@ -921,6 +947,7 @@ where
                             tool_id: None,
                             ask: None,
                             path: None,
+                            facts: Default::default(),
                         }),
                         _ => {}
                     }
@@ -1216,5 +1243,49 @@ mod timeline_facts_tests {
         assert_eq!(snap.turns[0].queued, Some(true));
         assert_eq!(snap.turns[0].ts, Some(1_795_597_200_000));
     }
-}
 
+    /// A tool call's kind and a result's exit code and duration come off the transcript rows (#14327).
+    #[test]
+    fn tool_blocks_and_results_carry_facts() {
+        let call = serde_json::json!({
+            "type": "assistant", "cwd": "/repo", "timestamp": "2026-11-25T09:00:00.000Z",
+            "message": { "role": "assistant", "content": [
+                { "type": "tool_use", "id": "b1", "name": "Bash", "input": { "command": "git commit -m x" } },
+                { "type": "tool_use", "id": "e1", "name": "Edit",
+                  "input": { "file_path": "/repo/a.ts", "old_string": "a", "new_string": "b\nc" } },
+            ] },
+        })
+        .to_string();
+        let result = serde_json::json!({
+            "type": "user", "timestamp": "2026-11-25T09:00:02.500Z",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "b1", "is_error": true, "content": "Exit code 1\nnope" },
+                { "type": "tool_result", "tool_use_id": "e1", "content": "ok" },
+            ] },
+        })
+        .to_string();
+        let snap = decode_chat_lines_with_context_window([call, result], 2, 200_000);
+        let blocks = &snap.turns[0].blocks;
+        assert_eq!(blocks[0].facts.tool_kind, Some("commit"));
+        assert_eq!((blocks[1].facts.added, blocks[1].facts.removed), (Some(2), Some(1)));
+        assert_eq!(snap.results[0].exit_code, Some(1));
+        assert_eq!(snap.results[0].duration_ms, Some(2_500));
+        assert_eq!(snap.results[1].exit_code, None, "only Bash has an exit code");
+        let json = serde_json::to_value(&blocks[0]).unwrap();
+        assert_eq!(json["tool_kind"], "commit", "facts flatten onto the block");
+        assert!(json.get("diff").is_none(), "absent facts are not serialized");
+    }
+
+    /// A result whose call arrived in an earlier batch has no start time: duration stays absent.
+    #[test]
+    fn a_result_without_its_call_has_no_duration() {
+        let result = serde_json::json!({
+            "type": "user", "timestamp": "2026-11-25T09:00:02.500Z",
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "zz", "content": "ok" } ] },
+        })
+        .to_string();
+        let snap = decode_chat_lines_with_context_window([result], 1, 200_000);
+        assert_eq!(snap.results[0].duration_ms, None);
+    }
+}

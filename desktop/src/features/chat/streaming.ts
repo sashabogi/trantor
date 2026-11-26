@@ -6,13 +6,23 @@ export type AskOption = { label: string; description: string };
 /** One AskUserQuestion question. `ask` on a Block carries an array because the tool CAN ask
  *  several at once, though a single question is the common case. */
 export type AskQuestion = { header: string; question: string; multiSelect: boolean; options: AskOption[] };
-export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string; ask?: AskQuestion[]; path?: string };
+/** What a tool call is, classified by the backend from the tool name and, for Bash, the command (#14327). */
+export type ToolKind = "explore" | "edit" | "write" | "command" | "commit" | "todo" | "other";
+/** One changed line of an edit preview. */
+export type DiffLine = { op: "+" | "-"; text: string };
+/** Tool blocks may carry the backend's facts (#14327), all optional: `tool_kind`, `paths` (absolute
+ *  against the row's cwd), and for edits and writes `added`/`removed` counts plus up to 8 `diff` lines. */
+export type Block = {
+  kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string; ask?: AskQuestion[]; path?: string;
+  tool_kind?: ToolKind; paths?: string[]; added?: number; removed?: number; diff?: DiffLine[];
+};
 /** `queued`: sent while the agent was mid-turn and NOT yet seen by the session — the middle of
  *  the three delivery states (sent, queued, seen); cleared when the dequeue marker arrives.
  *  `ts`: epoch ms from the row that opened the turn, absent stays absent (#14084). `endTs`: epoch
  *  ms of the LAST row folded into a grouped turn, so worked time spans the reply's tail (#14250). */
 export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[]; queued?: boolean; ts?: number; endTs?: number };
-export type ToolResult = { tool_id: string; ok: boolean; preview: string };
+/** `exit_code`: Bash only, when the result states it. `duration_ms`: tool_result row time minus tool_use row time (#14327). */
+export type ToolResult = { tool_id: string; ok: boolean; preview: string; exit_code?: number; duration_ms?: number };
 /** The context window as the transcript's usage rows report it (#5508). `tokens`/`frac` are null
  *  until an assistant row with usage has been seen; `window` is 0 when unset — an unknown window
  *  renders as absent, never as a guessed default that would look like knowledge. */

@@ -3,10 +3,11 @@
 // changed file's diff, or a commit in History — instead of dropping it.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
 import { setOpenIntent, takeOpenIntent } from "../../shell/openIntent";
+import { expandedKey } from "../../ui/useExplorerData";
 import { CodeScreen } from "./index";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
@@ -53,7 +54,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); takeOpenIntent("trantor"); });
+afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.unstubAllGlobals(); takeOpenIntent("trantor"); });
 
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 30)); });
 const mount = async () => { await act(async () => { root.render(<CodeScreen client={client} project="trantor" onNavigate={() => undefined} />); }); await flush(); await flush(); };
@@ -67,6 +68,25 @@ describe("open intent", () => {
     // The Monaco editor is lazy; its fallback proves the file tab, not Source control, is the main view.
     expect(host.textContent).toContain("Opening the editor");
     expect(host.textContent).toContain("codex-8");
+    expect(takeOpenIntent("trantor")).toBeUndefined();
+  });
+
+  // #14327: the editor is Monaco, which does not run under happy-dom, so the line is proven only as far
+  // as the tab opening and the intent being consumed; the reveal state is the one search results use (#14074).
+  it("a file intent with a line and column opens the file's tab and is consumed", async () => {
+    setOpenIntent("trantor", { kind: "file", path: "src/a.ts", line: 42, col: 7 });
+    await mount();
+    expect(activeTab()).toContain("a.ts");
+    expect(takeOpenIntent("trantor")).toBeUndefined();
+  });
+
+  it("a folder intent opens the Explorer with that folder and the ones above it left open", async () => {
+    const mem = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); }, removeItem: (k: string) => { mem.delete(k); } });
+    setOpenIntent("trantor", { kind: "folder", path: "desktop/src" });
+    await mount();
+    expect(host.querySelector('aside[aria-label="Explorer"]')).not.toBeNull();
+    expect(JSON.parse(mem.get(expandedKey("trantor", null)) ?? "[]")).toEqual(["desktop", "desktop/src"]);
     expect(takeOpenIntent("trantor")).toBeUndefined();
   });
 
