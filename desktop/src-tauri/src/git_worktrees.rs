@@ -8,6 +8,9 @@ use super::*;
 /// A worktree with no activity for this long, no lock and no fresh commit is stale noise.
 pub(crate) const ACTIVE_WINDOW_SECS: u64 = 2 * 60 * 60;
 
+/// How many changed paths a row carries; the count stays the whole truth.
+pub(crate) const FILES_SHOWN: usize = 5;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct AgentWorktree {
     pub(crate) path: String,
@@ -19,6 +22,8 @@ pub(crate) struct AgentWorktree {
     /// unix seconds: newest of the index and HEAD mtimes and the HEAD commit time.
     pub(crate) last_activity: u64,
     pub(crate) changed: u64,
+    /// up to `FILES_SHOWN` changed paths (worktree-relative), most recently modified first; `changed` is the full count.
+    pub(crate) files: Vec<String>,
     /// commits on this worktree's HEAD that the main branch does not have.
     pub(crate) ahead: u64,
 }
@@ -105,9 +110,14 @@ async fn main_branch_ref(repo: &Path) -> Option<String> {
     None
 }
 
-async fn changed_files(dir: &Path) -> u64 {
+/// The full changed count plus the newest few paths (a deleted path has no mtime and sorts last).
+async fn changed_files(dir: &Path) -> (u64, Vec<String>) {
     let raw = git_quiet(dir, &["status", "--porcelain=v1", "-z", "--untracked-files=normal"]).await;
-    raw.map_or(0, |r| parse_porcelain_v1(&r).len() as u64)
+    let entries = raw.map_or_else(Vec::new, |r| parse_porcelain_v1(&r));
+    let count = entries.len() as u64;
+    let mut paths: Vec<(u64, String)> = entries.into_iter().map(|e| (mtime_secs(&dir.join(&e.path)), e.path)).collect();
+    paths.sort_by(|a, b| b.0.cmp(&a.0));
+    (count, paths.into_iter().take(FILES_SHOWN).map(|(_, p)| p).collect())
 }
 
 /// The repo's linked worktrees, active ones only unless `all`. `now` is injected so tests can age them.
@@ -128,7 +138,7 @@ pub(crate) async fn list_worktrees_at(repo: &Path, all: bool, now: u64) -> Resul
         let touched = mtime_secs(&gitdir.join("index")).max(mtime_secs(&gitdir.join("HEAD")));
         let last_activity = touched.max(commit_at);
         let recent = |t: u64| now.saturating_sub(t) <= ACTIVE_WINDOW_SECS;
-        let changed = if all || raw.locked || recent(touched) || recent(commit_at) { changed_files(&dir).await } else { 0 };
+        let (changed, files) = if all || raw.locked || recent(touched) || recent(commit_at) { changed_files(&dir).await } else { (0, Vec::new()) };
         let active = raw.locked || recent(commit_at) || (changed > 0 && recent(last_activity));
         if !all && !active {
             continue;
@@ -142,7 +152,7 @@ pub(crate) async fn list_worktrees_at(repo: &Path, all: bool, now: u64) -> Resul
         };
         let kind = worktree_kind(&raw.path, raw.branch.as_deref()).to_string();
         out.push(AgentWorktree {
-            path: raw.path, branch: raw.branch, head: raw.head, locked: raw.locked, kind, last_activity, changed, ahead,
+            path: raw.path, branch: raw.branch, head: raw.head, locked: raw.locked, kind, last_activity, changed, files, ahead,
         });
     }
     out.sort_by(|a, b| b.last_activity.cmp(&a.last_activity));

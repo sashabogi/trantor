@@ -13,6 +13,8 @@ export type AgentWorktree = {
   /** unix seconds */
   last_activity: number;
   changed: number;
+  /** up to 5 changed paths, worktree-relative, newest first; `changed` is the full count */
+  files?: string[];
   ahead: number;
 };
 

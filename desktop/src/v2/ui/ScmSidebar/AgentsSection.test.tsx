@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ScmSidebar } from "./index";
+import { takeOpenIntent } from "../../shell/openIntent";
 import { CommitsSection } from "./CommitsSection";
 import { useScopeGit } from "../../screens/Code/useScopeGit";
 import type { ScopeSnapshot } from "../../screens/Code/useScopeGit";
@@ -16,8 +17,8 @@ import type { ScopeSnapshot } from "../../screens/Code/useScopeGit";
 
 const nowSec = () => Math.floor(Date.now() / 1000);
 const WORKTREES = [
-  { path: "/repo/.claude/worktrees/agent-a3b04308faa", branch: "worktree-agent-a3b04308faa", head: "aaa", locked: true, kind: "agent", last_activity: nowSec() - 5, changed: 3, ahead: 1 },
-  { path: "/tmp/scratchpad/wt-codex", branch: "work/codex", head: "bbb", locked: false, kind: "helper", last_activity: nowSec() - 30 * 60, changed: 1, ahead: 0 },
+  { path: "/repo/.claude/worktrees/agent-a3b04308faa", branch: "worktree-agent-a3b04308faa", head: "aaa", locked: true, kind: "agent", last_activity: nowSec() - 5, changed: 3, ahead: 1, files: ["desktop/src/App.tsx", "README.md", "src/a.ts"] },
+  { path: "/tmp/scratchpad/wt-codex", branch: "work/codex", head: "bbb", locked: false, kind: "helper", last_activity: nowSec() - 30 * 60, changed: 1, ahead: 0, files: ["idle.txt"] },
   { path: "/home/.agent-bus/worktrees/trantor/glm", branch: "seat/glm", head: "ccc", locked: false, kind: "seat", last_activity: nowSec(), changed: 9, ahead: 9 },
 ];
 const LOG = [{ sha: "abc1234def", author: "a", when: "2 hours ago", subject: "first commit" }];
@@ -109,6 +110,39 @@ describe("Agents working", () => {
     expect(calls.some(c => c.command === "git_panel" && c.args.agent === "wt:/repo/.claude/worktrees/agent-a3b04308faa")).toBe(true);
     expect(host.querySelector("[data-agent-row]")?.getAttribute("aria-pressed")).toBe("true");
     expect(host.querySelector("header")?.textContent).toContain("agent a3b0430");
+  });
+});
+
+describe("Agents working: changed files", () => {
+  const fileRows = (row: Element) => [...row.parentElement!.querySelectorAll<HTMLButtonElement>("button[data-agent-file]")];
+
+  it("a live row lists its changed files, base name then folder, and an idle row lists none", async () => {
+    await renderSidebar();
+    const [live, idle] = agentRows();
+    const files = fileRows(live);
+    expect(files.map(f => f.textContent)).toEqual(["App.tsxdesktop/src", "README.md", "a.tssrc"]);
+    expect(files[0].querySelector("span")?.textContent).toBe("App.tsx");
+    expect(fileRows(idle)).toHaveLength(0);
+    expect(idle.parentElement?.textContent).not.toContain("idle.txt");
+  });
+
+  it("says how many more files changed than are listed, and shows nothing extra when all are listed", async () => {
+    worktreeReply = [{ ...WORKTREES[0], changed: 9, files: ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts"] }];
+    await renderSidebar();
+    const row = agentRows()[0];
+    expect(fileRows(row)).toHaveLength(3);
+    expect(row.parentElement?.textContent).toContain("+6 more");
+    worktreeReply = [{ ...WORKTREES[0], changed: 3 }];
+    await act(async () => { root.unmount(); });
+    root = createRoot(host);
+    await renderSidebar();
+    expect(agentRows()[0].parentElement?.textContent).not.toContain("more");
+  });
+
+  it("a file click opens that worktree's file through the open intent, scoped to the worktree", async () => {
+    await renderSidebar();
+    await click(fileRows(agentRows()[0])[1]);
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "file", path: "README.md", seat: "wt:/repo/.claude/worktrees/agent-a3b04308faa" });
   });
 });
 

@@ -141,3 +141,26 @@ fn file_reads_accept_a_listed_worktree_and_file_writes_still_refuse_it() {
     assert!(source_root_read("acme", Some("bad/seat")).is_err());
     let _ = std::fs::remove_dir_all(&f.tmp);
 }
+
+#[tokio::test]
+async fn a_row_names_up_to_five_changed_paths_newest_first_and_keeps_the_full_count() {
+    let f = fixture("files");
+    // a.txt (unstaged) and new.txt (untracked) exist; add a staged file and four more untracked ones.
+    std::fs::write(f.agent.join("staged.txt"), "s\n").unwrap();
+    git(&f.agent, &["add", "staged.txt"]);
+    for n in ["u1.txt", "u2.txt", "u5.txt", "u4.txt"] {
+        std::fs::write(f.agent.join(n), "x\n").unwrap();
+    }
+    let at = |secs: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+    let base = now() - 1000;
+    for (i, n) in ["a.txt", "new.txt", "staged.txt", "u1.txt", "u2.txt", "u4.txt", "u5.txt"].iter().enumerate() {
+        std::fs::File::options().write(true).open(f.agent.join(n)).unwrap().set_modified(at(base + i as u64 * 10)).unwrap();
+    }
+    let rows = list_worktrees_at(&f.repo, false, now()).await.unwrap();
+    let agent = rows.iter().find(|r| r.kind == "agent" && r.branch.as_deref() == Some("worktree-agent-abc123")).unwrap();
+    assert_eq!(agent.changed, 7);
+    assert_eq!(agent.files, vec!["u5.txt", "u4.txt", "u2.txt", "u1.txt", "staged.txt"]);
+    let helper = rows.iter().find(|r| r.kind == "helper").unwrap();
+    assert!(helper.files.is_empty());
+    let _ = std::fs::remove_dir_all(&f.tmp);
+}

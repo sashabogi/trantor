@@ -160,7 +160,7 @@ function ScmSidebarView(p: ViewProps) {
         </CollapsibleSection>
         {p.worktrees.length > 0 && (
           <CollapsibleSection section="agents" title="Agents working" badge={<CountBadge n={p.worktrees.length} />}>
-            <AgentsSection worktrees={p.worktrees} scope={p.scope} onPickScope={p.onPickScope} />
+            <AgentsSection project={p.project} worktrees={p.worktrees} scope={p.scope} onPickScope={p.onPickScope} />
           </CollapsibleSection>
         )}
         <CollapsibleSection section="branches" title="Branches and seats" badge={<CountBadge n={1 + p.seats.length} />}>
