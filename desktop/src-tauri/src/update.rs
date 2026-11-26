@@ -24,6 +24,10 @@ pub(crate) fn install_target(exe: &std::path::Path) -> Result<std::path::PathBuf
     if app.starts_with("/Volumes/") {
         return Err(format!("Trantor is running from a disk image. {move_msg}"));
     }
+    // Gatekeeper runs a quarantined app opened from Downloads from a read-only randomized copy.
+    if app.components().any(|c| c.as_os_str() == "AppTranslocation") {
+        return Err(format!("macOS is running Trantor from a temporary read-only copy. {move_msg}"));
+    }
     let parent = app.parent().ok_or_else(|| move_msg.to_string())?;
     if std::fs::metadata(parent).map(|m| m.permissions().readonly()).unwrap_or(true) {
         return Err(format!("The folder holding Trantor is not writable. {move_msg}"));
@@ -419,6 +423,8 @@ mod update_tests {
     fn dmg_and_bare_binaries_refuse_with_move_to_applications() {
         let dmg = install_target(Path::new("/Volumes/Trantor/Trantor.app/Contents/MacOS/x")).unwrap_err();
         assert!(dmg.contains("Move Trantor to Applications first"));
+        let moved = install_target(Path::new("/private/var/folders/ab/T/AppTranslocation/1F2E/d/Trantor.app/Contents/MacOS/x")).unwrap_err();
+        assert!(moved.contains("temporary read-only copy") && moved.contains("Move Trantor to Applications first"));
         let bare = install_target(Path::new("/repo/target/debug/x")).unwrap_err();
         assert!(bare.contains("Move Trantor to Applications first"));
     }
