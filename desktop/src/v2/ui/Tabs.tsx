@@ -26,6 +26,9 @@ export type TabSpec<T extends string = string> = {
   line2?: ReactNode;
   /** Stacked variant only: shown in a fixed card above the tab after it has been hovered for a short rest. */
   hoverCard?: ReactNode;
+  /** #14365: stacked variant only: the tab is just its leading mark (about 40px wide), named for assistive tech by ariaLabel. */
+  iconOnly?: boolean;
+  ariaLabel?: string;
 };
 
 export type TabsProps<T extends string> = {
@@ -72,24 +75,26 @@ function StackedTab<T extends string>({ t, on, i, tabbable, p, buttons, onKeyNav
 }) {
   const rest = useRest();
   const box = useRef<HTMLDivElement | null>(null);
-  const small = p.crowded && !on;
+  const small = p.crowded && !on && !t.iconOnly;
   const rect = rest.shown && t.hoverCard ? box.current?.getBoundingClientRect() : undefined;
-  const style: CSSProperties = { transitionDuration: "var(--v2-dur-1)", minWidth: small ? 96 : 120, maxWidth: small ? 120 : 220 };
+  const style: CSSProperties = t.iconOnly
+    ? { transitionDuration: "var(--v2-dur-1)", width: 40 }
+    : { transitionDuration: "var(--v2-dur-1)", minWidth: small ? 96 : 120, maxWidth: small ? 120 : 220 };
   if (on) Object.assign(style, { background: p.pane, borderBottom: `1px solid ${p.pane}`, marginBottom: "-1px" });
   return (
     <div ref={box} {...rest.props} data-active={on || undefined}
       className={`relative flex shrink-0 items-center rounded-t-md border-x border-t-2 transition-colors ${on ? "border-x-[var(--v2-edge)] border-t-[var(--v2-accent)]" : "border-x-transparent border-t-transparent hover:bg-[var(--v2-row-hover)]"}`}
       style={style}>
-      <button type="button" role="tab" id={t.buttonId} aria-selected={on} aria-controls={t.controls} title={t.title}
+      <button type="button" role="tab" id={t.buttonId} aria-selected={on} aria-controls={t.controls} aria-label={t.ariaLabel} title={t.title}
         tabIndex={i === tabbable ? 0 : -1} ref={el => { buttons.current[i] = el; }}
         onClick={() => p.onSelect(t.id)} onKeyDown={e => onKeyNav(e, i)}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 border-0 bg-transparent px-2.5 py-1 text-left">
+        className={`flex h-full min-w-0 flex-1 items-center border-0 bg-transparent py-1 ${t.iconOnly ? "justify-center px-1" : "gap-2 px-2.5 text-left"}`}>
         {t.leading}
-        <span className="flex min-w-0 flex-1 flex-col">
+        {!t.iconOnly && <span className="flex min-w-0 flex-1 flex-col">
           <span className={`truncate text-v2-body font-semibold ${on ? "text-[var(--v2-text)]" : "text-[var(--v2-text-2)]"}`}>{t.label}</span>
           {!small && t.line2 && <span className="truncate text-v2-small text-[var(--v2-muted)]">{t.line2}</span>}
-        </span>
-        {t.sub}
+        </span>}
+        {!t.iconOnly && t.sub}
       </button>
       {t.close && p.onClose && (
         <IconButton label={t.closeLabel ?? `Close ${t.label}`} title={t.closeLabel ?? "Close tab"} size={18} onClick={() => p.onClose?.(t.id)}>

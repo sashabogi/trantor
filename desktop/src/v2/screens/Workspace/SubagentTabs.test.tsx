@@ -76,13 +76,15 @@ const mount = async (onNavigate: (to: string) => void = () => {}) => {
 };
 const click = (el: Element | null) => act(async () => { if (el instanceof HTMLElement) el.click(); });
 const tabs = () => [...host.querySelectorAll<HTMLElement>('[role="tablist"][aria-label="Seats"] [role="tab"]')];
-const tabFor = (text: string) => tabs().find(t => t.textContent?.includes(text)) ?? null;
+// #14365: crew tabs are icon-only, matched by aria-label; agent tabs by text.
+const tabFor = (text: string) => tabs().find(t => `${t.getAttribute("aria-label") ?? ""}${t.textContent}`.includes(text)) ?? null;
 
 describe("sub-agent tabs", () => {
   it("gives each running sub-agent a read-only tab after the crew seats, with an agent badge and a pulsing dot", async () => {
     agents = [agent("a1", "Review the diff", "running"), agent("a2", "Write the tests", "running")];
     await mount();
-    expect(tabs().map(t => t.textContent)).toEqual([expect.stringContaining("codex-8"), expect.stringContaining("Review the diffrunningagent"), expect.stringContaining("Write the testsrunningagent")]);
+    // #14365: the crew seat tab is icon-only, so its name is the aria-label.
+    expect(tabs().map(t => t.getAttribute("aria-label") ?? t.textContent)).toEqual([expect.stringContaining("codex-8"), expect.stringContaining("Review the diffrunningagent"), expect.stringContaining("Write the testsrunningagent")]);
     expect(tabFor("Review the diff")?.querySelector('[role="img"][aria-label="Running"].v2-agent-pulse')).not.toBeNull();
     await click(tabFor("Review the diff"));
     expect(host.querySelector('[data-testid="subagent-pane"]')?.getAttribute("data-agent-id")).toBe("a1");

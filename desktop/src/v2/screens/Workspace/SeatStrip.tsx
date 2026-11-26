@@ -1,10 +1,12 @@
 // The seat strip: one tab per live seat, +N offline, add seat, the layout switch and Record (#13987).
 // #14241: seats read as tabs joined to the workspace pane below, not pills.
+// #14365: a crew seat tab is just its compact astronaut; the name and what it is doing live in the aria-label, the hover card and the seat bar.
 import { useEffect, useState, type ReactNode } from "react";
 import { Columns2, Ellipsis, Grid2x2, ListChecks, Plus, Square } from "lucide-react";
 import type { Card } from "../../../shared/api/client";
 import { ago } from "../../../shared/time";
-import { activityLine } from "../../ui/identity";
+import { activityLine, seatState } from "../../ui/identity";
+import { SeatAstronaut } from "../../ui/SeatAstronaut";
 import { Tabs, type TabSpec } from "../../ui/Tabs";
 import { ActionMenu } from "./ActionMenu";
 import { AgentDot } from "./AgentDot";
@@ -21,7 +23,7 @@ const LAYOUTS: readonly { value: Layout; title: string; icon: ReactNode }[] = [
   { value: "grid", title: "Grid: every seat", icon: <Grid2x2 size={12} aria-hidden /> },
 ];
 
-/** More tabs than this and the inactive ones shrink to a shared width. */
+/** More tabs than this and the inactive labelled tabs (helpers, agents) shrink to a shared width; icon tabs never shrink. */
 export const CROWDED_TABS = 6;
 
 const TICK_MS = 30_000;
@@ -55,6 +57,15 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
   const quiet = "shrink-0 whitespace-nowrap rounded-md border-0 bg-transparent px-2 py-1 text-v2-small text-[var(--v2-muted)] hover:bg-[var(--v2-row-hover)] hover:text-[var(--v2-text)]";
   const tabs: TabSpec[] = [...shown.filter(s => !s.isHelper && !s.agentInfo), ...shown.filter(s => s.isHelper), ...shown.filter(s => s.agentInfo)].map(s => {
     const line = activityLine(s, { needs: needs[s.key] });
+    const iconOnly = !s.isHelper && !s.agentInfo;
+    const hover = s.agentInfo ? undefined : <SeatHoverCard project={project} seat={s} card={cardOf(cards, s)} mayDo={mayDo} />;
+    if (iconOnly) {
+      return {
+        id: s.key, label: s.label, title: s.session, iconOnly, ariaLabel: `${s.label}, ${line}`,
+        leading: <SeatAstronaut vendor={s.brand} name={s.label} state={seatState(s)} size={24} variant="compact" surface={s.key === selectedKey ? "var(--v2-bg)" : "var(--v2-chrome)"} />,
+        hoverCard: hover,
+      };
+    }
     return {
       id: s.key,
       label: shortLabel(s),
@@ -64,7 +75,7 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
       leading: s.agentInfo ? <AgentDot running={s.agentInfo.state === "running"} /> : <SeatMark seat={s} ring="var(--v2-chrome)" />,
       line2: <span style={{ color: s.presence === "needs-you" ? "var(--v2-warn)" : undefined }}>{line}</span>,
       sub: s.isHelper || s.agentInfo ? <span className="rounded-sm bg-[var(--v2-sunken)] px-1 text-v2-micro text-[var(--v2-muted)]">{s.agentInfo ? "agent" : "helper"}</span> : undefined,
-      hoverCard: s.agentInfo ? undefined : <SeatHoverCard project={project} seat={s} card={cardOf(cards, s)} mayDo={mayDo} />,
+      hoverCard: hover,
     };
   });
   return (

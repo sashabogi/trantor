@@ -104,7 +104,9 @@ const typeInto = (el: HTMLInputElement | HTMLTextAreaElement | null, text: strin
   el.dispatchEvent(new Event("input", { bubbles: true }));
 });
 // #14241: seats render as role=tab joined to the pane below, so the strip's queries find tabs.
-const chipFor = (name: string) => [...host.querySelectorAll('[role="tab"]')].find(b => b.textContent?.includes(name)) ?? null;
+// #14365: crew tabs are icon-only, named by aria-label; helper tabs still carry their text.
+const tabText = (b: Element | null | undefined) => `${b?.getAttribute("aria-label") ?? ""}${b?.textContent ?? ""}`;
+const chipFor = (name: string) => [...host.querySelectorAll('[role="tab"]')].find(b => tabText(b).includes(name)) ?? null;
 const terminalAgents = () => [...host.querySelectorAll("[data-testid=terminal]")].map(t => t.getAttribute("data-agent"));
 
 describe("seat strip", () => {
@@ -136,8 +138,8 @@ describe("seat strip", () => {
   it("shows a tab per live seat of this project, the offline count and the add button (#14241)", async () => {
     await mountScreen(fakeClient([]));
     expect(host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')).toHaveLength(2);
-    expect(chipFor("codex-8")?.textContent).toContain("working on card 13970");
-    expect(chipFor("glm-5")?.textContent).toContain("ready");
+    expect(tabText(chipFor("codex-8"))).toContain("working on card 13970");
+    expect(tabText(chipFor("glm-5"))).toContain("ready");
     // #14351: the "N seats live" counter is gone; the tabs already show it.
     expect(host.textContent).not.toContain("seats live");
     expect(chipFor("kimi-9")).toBeNull();
@@ -158,7 +160,7 @@ describe("helper panes", () => {
     ];
     await mountScreen(fakeClient([]));
     const tabs = [...host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')];
-    expect(tabs.map(t => t.textContent)).toEqual([expect.stringContaining("codex-8working on card 13970"), expect.stringContaining("glm-5ready"), expect.stringContaining("reviewrunninghelper"), expect.stringContaining("reviewfinishedhelper")]);
+    expect(tabs.map(tabText)).toEqual([expect.stringContaining("codex-8, working on card 13970"), expect.stringContaining("glm-5, ready"), expect.stringContaining("reviewrunninghelper"), expect.stringContaining("reviewfinishedhelper")]);
     await click(tabs[2]);
     expect(terminalAgents()).toEqual(["helper:w1:p2"]);
     expect(host.querySelector('input[placeholder*="Message"]')).toBeNull();
@@ -208,6 +210,18 @@ describe("selection and inspector", () => {
     expect(terminalAgents()).toEqual(["glm-5"]);
   });
 
+  it("Grid tile headers wear the compact astronaut at 24px beside the name and activity (#14365)", async () => {
+    await mountScreen(fakeClient([]));
+    await click(host.querySelector('[role="group"][aria-label="Layout"] button[title="Grid: every seat"]'));
+    const head = host.querySelector('button[title="Open codex-8 full size"]');
+    const astro = head?.querySelector<HTMLElement>('[data-variant="compact"]');
+    expect(astro?.getAttribute("aria-label")).toBe("codex-8, working");
+    expect(astro?.style.getPropertyValue("--s")).toBe("24px");
+    expect(head?.textContent).toContain("codex-8");
+    expect(head?.textContent).toContain("working on card 13970");
+    expect(head?.querySelectorAll('[role="img"]')).toHaveLength(1);
+  });
+
   it("opens the worktree in Code through onNavigate", async () => {
     const go = vi.fn();
     await mountScreen(fakeClient([]), go);
@@ -238,18 +252,24 @@ describe("middle column (#14351)", () => {
   const stopped = () => ipc.some(c => c.command === "workspace_cli" && (c.args as { args: string[] }).args[0] === "down");
   const wait = (ms: number) => act(async () => { await new Promise(r => setTimeout(r, ms)); });
 
-  it("draws two-line tabs and merges the active one into the pane", async () => {
+  it("draws icon-only crew tabs and merges the active one into the pane (#14365)", async () => {
     await mountScreen(fakeClient([]));
     const codex = chipFor("codex-8");
-    expect(codex?.querySelectorAll("span.truncate")).toHaveLength(2);
+    // Just the astronaut: no name or activity text, no separate state dot, the name rides on the aria-label.
+    expect(codex?.textContent).toBe("");
+    expect(codex?.querySelectorAll("span.truncate")).toHaveLength(0);
+    expect(codex?.getAttribute("aria-label")).toBe("codex-8, working on card 13970");
+    expect(codex?.querySelector('[data-variant="compact"]')?.getAttribute("aria-label")).toBe("codex-8, working");
+    expect(codex?.querySelectorAll('[role="img"]')).toHaveLength(1);
     expect(codex?.parentElement?.getAttribute("data-active")).toBe("true");
     expect(codex?.parentElement?.className).toContain("border-t-[var(--v2-accent)]");
+    expect(codex?.parentElement?.style.width).toBe("40px");
     expect(chipFor("glm-5")?.parentElement?.getAttribute("data-active")).toBeNull();
   });
 
   it("puts the hold on the tab: needs you overrides and says what", async () => {
     await mountScreen(fakeClient([], [HOLD]));
-    expect(chipFor("codex-8")?.textContent).toContain("needs you: approve edit a.ts");
+    expect(tabText(chipFor("codex-8"))).toContain("needs you: approve edit a.ts");
     expect(chipFor("codex-8")?.querySelector('[data-state="needs"]')).not.toBeNull();
   });
 
@@ -266,6 +286,11 @@ describe("middle column (#14351)", () => {
     expect(card?.textContent).toContain("+3");
     expect(card?.textContent).toContain("asks first");
     expect(card?.className).toContain("pointer-events-none");
+    // #14365: the card head is the full astronaut scene at 48px beside the seat's name and state.
+    const scene = card?.querySelector<HTMLElement>('[data-variant="full"]');
+    expect(scene?.getAttribute("aria-label")).toBe("codex-8, working");
+    expect(scene?.style.getPropertyValue("--s")).toBe("48px");
+    expect(card?.textContent).toContain("codex-8");
     await act(async () => { tab?.dispatchEvent(new MouseEvent("pointerout", { bubbles: true })); });
     expect(host.querySelector('[role="tooltip"]')).toBeNull();
     // glm-5 has no card and no worktree facts in this fixture beyond the branch: no Doing row.
@@ -337,7 +362,7 @@ describe("sending", () => {
     const calls: Calls = [];
     await mountScreen(fakeClient(calls, [HOLD]));
     expect(host.textContent).toContain("Allow codex-8 to edit");
-    expect(chipFor("codex-8")?.textContent).toContain("needs you");
+    expect(tabText(chipFor("codex-8"))).toContain("needs you");
     await click([...host.querySelectorAll("button")].find(b => b.textContent === "Go") ?? null);
     const decided = calls.find(c => c.path === "/hold/decide");
     expect(JSON.parse(decided?.body ?? "{}")).toEqual({ id: 7, project: "trantor", status: "go" });
