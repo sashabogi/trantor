@@ -6,7 +6,7 @@ import { Columns2, Ellipsis, Grid2x2, ListChecks, Plus, Square } from "lucide-re
 import type { Card } from "../../../shared/api/client";
 import { ago } from "../../../shared/time";
 import { activityLine, seatState } from "../../ui/identity";
-import { SeatAstronaut } from "../../ui/SeatAstronaut";
+import { SeatAstronaut, seatBrandColor } from "../../ui/SeatAstronaut";
 import { Tabs, type TabSpec } from "../../ui/Tabs";
 import { ActionMenu } from "./ActionMenu";
 import { AgentDot } from "./AgentDot";
@@ -62,6 +62,7 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
     if (iconOnly) {
       return {
         id: s.key, label: s.label, title: s.session, iconOnly, ariaLabel: `${s.label}, ${line}`,
+        topColor: seatBrandColor(s.brand) ?? undefined,
         leading: <SeatAstronaut vendor={s.brand} name={s.label} state={seatState(s)} size={64} variant="full" surface={s.key === selectedKey ? "var(--v2-bg)" : "var(--v2-chrome)"} />,
         hoverCard: hover,
       };

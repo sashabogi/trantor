@@ -269,6 +269,17 @@ describe("middle column (#14351)", () => {
     expect(chipFor("glm-5")?.parentElement?.getAttribute("data-active")).toBeNull();
   });
 
+  // Operator: "the top of the tab that's colored actually matches their branding color ... so they can be
+  // easily distinguishable." Full brand colour on the active tab, the same colour softened on the rest.
+  it("gives every crew tab a top edge in its own brand colour (#14365)", async () => {
+    await mountScreen(fakeClient([]));
+    const top = (name: string) => chipFor(name)?.parentElement?.style.borderTopColor ?? "";
+    expect(top("codex-8").toLowerCase()).toMatch(/^(#7a9dff|rgb\(122, 157, 255\))$/);
+    // inactive: the same brand colour at ~70% (#5ea0f5 + alpha 0xb3)
+    expect(top("glm-5").toLowerCase()).toMatch(/^(#5ea0f5b3|rgba\(94, 160, 245, 0\.70?\d*\))$/);
+    expect(top("glm-5")).not.toBe(top("codex-8"));
+  });
+
   it("puts the hold on the tab: needs you overrides and says what", async () => {
     await mountScreen(fakeClient([], [HOLD]));
     expect(tabText(chipFor("codex-8"))).toContain("needs you: approve edit a.ts");

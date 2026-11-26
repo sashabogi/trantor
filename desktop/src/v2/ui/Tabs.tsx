@@ -28,6 +28,8 @@ export type TabSpec<T extends string = string> = {
   hoverCard?: ReactNode;
   /** #14365: stacked variant only: the tab is just its leading mark (about 40px wide), named for assistive tech by ariaLabel. */
   iconOnly?: boolean;
+  /** The tab's top edge colour (a seat's brand colour): full on the active tab, at ~70% on the rest. */
+  topColor?: string;
   ariaLabel?: string;
 };
 
@@ -82,6 +84,8 @@ function StackedTab<T extends string>({ t, on, i, tabbable, p, buttons, onKeyNav
     ? { transitionDuration: "var(--v2-dur-1)", width: 76 }
     : { transitionDuration: "var(--v2-dur-1)", minWidth: small ? 96 : 120, maxWidth: small ? 120 : 220 };
   if (on) Object.assign(style, { background: p.pane, borderBottom: `1px solid ${p.pane}`, marginBottom: "-1px" });
+  // A plain #rrggbb softens to ~70% with an alpha byte; anything else is used as given.
+  if (t.topColor) style.borderTopColor = on || !/^#[0-9a-f]{6}$/i.test(t.topColor) ? t.topColor : `${t.topColor}b3`;
   return (
     <div ref={box} {...rest.props} data-active={on || undefined}
       className={`relative flex shrink-0 items-center rounded-t-md border-x border-t-2 transition-colors ${on ? "border-x-[var(--v2-edge)] border-t-[var(--v2-accent)]" : "border-x-transparent border-t-transparent hover:bg-[var(--v2-row-hover)]"}`}

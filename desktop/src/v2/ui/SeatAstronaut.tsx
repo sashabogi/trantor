@@ -55,6 +55,15 @@ function markOf(svg: string): MarkPaths {
   return made;
 }
 
+/** The one solid colour a seat is known by (its visor tint; Codex's gradient falls back to its brand
+ *  hex): the seat tab's top edge wears it so vendors tell apart at a glance. Null for an unknown harness. */
+export function seatBrandColor(vendor: string, machineId?: string): string | null {
+  const brand = brandFor(vendor, undefined, machineId);
+  if (!brand) return null;
+  const tint = dictGet(VISOR, brand.label);
+  return !tint || tint === "gradient" ? brand.hex : tint;
+}
+
 type Vendor = { visor: string; gradient: boolean; mark: MarkPaths | null; mono: string };
 function vendorOf(vendor: string, machineId: string | undefined): Vendor {
   const brand = brandFor(vendor, undefined, machineId);
