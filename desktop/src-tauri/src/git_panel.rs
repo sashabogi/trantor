@@ -92,15 +92,8 @@ pub(crate) fn run_git_text(dir: &Path, args: &[&str]) -> Result<String, String> 
 }
 
 pub(crate) fn merge_base(dir: &Path) -> Result<String, String> {
-    for branch in ["main", "master", "origin/main", "origin/master"] {
-        if let Ok(base) = run_git_text(dir, &["merge-base", "HEAD", branch]) {
-            let base = base.trim().to_string();
-            if !base.is_empty() {
-                return Ok(base);
-            }
-        }
-    }
-    Err("could not find a merge base with main or master".into())
+    let branch = default_branch_at(dir)?.ok_or("could not find the repository's default branch")?;
+    run_git_text(dir, &["merge-base", "HEAD", &branch.reference]).map(|base| base.trim().to_string())
 }
 
 pub(crate) fn cap_patch(bytes: &[u8]) -> (String, bool) {
@@ -206,9 +199,9 @@ pub(crate) struct GitPanel {
     pub(crate) branch: String,
     pub(crate) upstream: Option<String>,
     pub(crate) remote: Option<String>,
-    /// commits ahead of the upstream — or, with no upstream, ahead of the merge base with main
+    /// commits ahead of the upstream — or, with no upstream, ahead of the merge base with the default branch
     /// (the seat's unlanded work). behind only exists against an upstream; without one the seat
-    /// branched from main and "behind" is a claim we have not measured.
+    /// branched from the default branch and "behind" is a claim we have not measured.
     pub(crate) ahead: Option<u64>,
     pub(crate) behind: Option<u64>,
     /// raw `git status --porcelain=v1` rows; the frontend owns bucketing into
@@ -303,18 +296,10 @@ pub(crate) async fn run_git_text_io(dir: &Path, args: &[&str]) -> Result<String,
 
 pub(crate) const MERGE_BASE_BRANCHES: [&str; 4] = ["main", "master", "origin/main", "origin/master"];
 
-/// merge_base's async twin for the git panel — same branch ladder, same "main or master first"
-/// answer, without editing the sync one the frozen seat_diff path depends on.
+/// The async comparison uses the same default branch as seat_diff and the branch picker.
 pub(crate) async fn merge_base_async(dir: &Path) -> Result<String, String> {
-    for branch in MERGE_BASE_BRANCHES {
-        if let Ok(base) = run_git_text_io(dir, &["merge-base", "HEAD", branch]).await {
-            let base = base.trim().to_string();
-            if !base.is_empty() {
-                return Ok(base);
-            }
-        }
-    }
-    Err("could not find a merge base with main or master".into())
+    let branch = default_branch_async(dir).await?.ok_or("could not find the repository's default branch")?;
+    run_git_text_io(dir, &["merge-base", "HEAD", &branch.reference]).await.map(|base| base.trim().to_string())
 }
 
 /// Mutating the git state of a worktree an agent is actively working in loses one of the two
@@ -390,7 +375,7 @@ pub(crate) fn parse_left_right(raw: &str) -> (Option<u64>, Option<u64>) {
 }
 
 /// Where a branch stands relative to its upstream, with no-upstream as an explicit STATE:
-/// `has_upstream` selects what `ahead` describes (the remote, else the merge base with main).
+/// `has_upstream` selects what `ahead` describes (the remote, else the merge base with the default branch).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct UpstreamStatus {
     pub(crate) has_upstream: bool,
@@ -408,7 +393,7 @@ pub(crate) fn is_no_upstream_error(err: &str) -> bool {
 }
 
 /// The upstream answer in one place, normalized to a state object. No upstream → `has_upstream:
-/// false` with ahead measured against the merge base with main; any other git failure surfaces.
+/// false` with ahead measured against the merge base with the default branch; any other git failure surfaces.
 pub(crate) async fn upstream_state(worktree: &Path) -> Result<(Option<String>, UpstreamStatus), String> {
     let out = tokio::process::Command::new("git")
         .arg("-C")
@@ -444,7 +429,7 @@ pub(crate) async fn upstream_state(worktree: &Path) -> Result<(Option<String>, U
             .trim()
             .parse()
             .ok(),
-        // No upstream AND no main to measure against: say nothing rather than guess.
+        // No upstream AND no default branch to measure against: say nothing rather than guess.
         Err(_) => None,
     };
     Ok((None, UpstreamStatus { has_upstream: false, ahead, behind: None }))

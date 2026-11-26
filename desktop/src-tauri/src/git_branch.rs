@@ -15,6 +15,7 @@ pub(crate) struct GitBranch {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct GitBranchList {
+    pub(crate) default_branch: Option<String>,
     pub(crate) current: Option<String>,
     pub(crate) branches: Vec<GitBranch>,
 }
@@ -57,7 +58,8 @@ pub(crate) async fn git_branch_list_at(dir: &Path) -> Result<GitBranchList, Stri
     let mut branches = read_branches(dir, false, &current).await?;
     branches.extend(read_branches(dir, true, &current).await?);
     branches.sort_by(|a, b| b.committed_at.cmp(&a.committed_at).then_with(|| a.name.cmp(&b.name)));
-    Ok(GitBranchList { current: (!current.is_empty()).then_some(current), branches })
+    let default_branch = default_branch_async(dir).await?.map(|branch| branch.name);
+    Ok(GitBranchList { default_branch, current: (!current.is_empty()).then_some(current), branches })
 }
 
 async fn validate_branch(dir: &Path, name: &str) -> Result<(), String> {
@@ -193,8 +195,8 @@ pub(crate) async fn git_branch_delete_at(dir: &Path, name: &str, force: bool) ->
     if !local_branch_exists(dir, name).await {
         return Err("remote branches cannot be deleted here".into());
     }
-    if name == "main" {
-        return Err("main is protected and cannot be deleted".into());
+    if default_branch_async(dir).await?.is_some_and(|branch| branch.name == name) {
+        return Err(format!("{name} is protected and cannot be deleted"));
     }
     if run_git_text_io(dir, &["branch", "--show-current"]).await?.trim() == name {
         return Err(format!("{name} is checked out; switch to another branch first"));

@@ -12,6 +12,8 @@ export type ErrorHandler = (message: string) => void;
 export const errorMessage = (error: Error | string) => error instanceof Error ? error.message : String(error);
 
 export type BranchOps = {
+  defaultBranch: string | null;
+  defaultTarget: GitBranch | undefined;
   branch: (name: string) => GitBranch | undefined;
   switchTo: (branch: GitBranch) => void;
   rename: (branch: GitBranch) => void;
@@ -43,6 +45,7 @@ type BranchOpsArgs = {
 
 export function useBranchOps({ project, seats, snap, scope, onClose, onMutated, onError, onOpenConflict }: BranchOpsArgs) {
   const mode = useShellMode();
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
   const [branches, setBranches] = useState<GitBranch[]>([]);
   const [readError, setReadError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
@@ -50,7 +53,9 @@ export function useBranchOps({ project, seats, snap, scope, onClose, onMutated, 
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true;
-    void scopeBranches(project, scope).then(result => { if (alive) { setBranches(result.branches); setReadError(null); } })
+    setBranches([]);
+    setDefaultBranch(null);
+    void scopeBranches(project, scope).then(result => { if (alive) { setBranches(result.branches); setDefaultBranch(result.default_branch ?? null); setReadError(null); } })
       .catch(error => { if (alive) setReadError(errorMessage(error)); });
     return () => { alive = false; };
   }, [project, scope, revision]);
@@ -67,7 +72,7 @@ export function useBranchOps({ project, seats, snap, scope, onClose, onMutated, 
     const owner = seat(item.name);
     return owner && owner.seat !== scope ? `Open ${seatLabel(owner.seat)}'s worktree to rename its branch` : mutationReason();
   };
-  const deleteReason = (item: GitBranch) => item.name === "main" ? "main is protected and cannot be deleted"
+  const deleteReason = (item: GitBranch) => item.name === defaultBranch ? `${defaultBranch} is protected and cannot be deleted`
     : item.current ? "The checked-out branch cannot be deleted; switch first"
       : item.worktree ? `Checked out in ${seat(item.name)?.seat ?? "another worktree"}` : mutationReason();
   const finish = () => { setRevision(value => value + 1); onMutated(); onClose(); };
@@ -101,7 +106,8 @@ export function useBranchOps({ project, seats, snap, scope, onClose, onMutated, 
     void scopeBranchRename(project, scope, old, next).then(() => { setDialog(null); finish(); })
       .catch(error => onError(errorMessage(error))).finally(() => setBusy(false));
   };
-  const ops: BranchOps = { branch, switchTo, rename: item => setDialog({ kind: "rename", branch: item }), remove, integrate, mutationReason, switchReason, renameReason, deleteReason };
+  const defaultTarget = defaultBranch ? branch(defaultBranch) ?? branches.find(item => item.remote && item.name === `origin/${defaultBranch}`) : undefined;
+  const ops: BranchOps = { defaultBranch, defaultTarget, branch, switchTo, rename: item => setDialog({ kind: "rename", branch: item }), remove, integrate, mutationReason, switchReason, renameReason, deleteReason };
   return { branches, readError, dialog, setDialog, busy, ops, switchTo, remove, rename, finish };
 }
 

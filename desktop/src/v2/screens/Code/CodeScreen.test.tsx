@@ -159,7 +159,11 @@ describe("CodeScreen", () => {
     expect(commit?.textContent).toContain("Restore opted-in projects");
     expect(commit?.textContent).toContain("#13970");
     expect(commit?.textContent).toContain("codex-8");
-    expect(host.querySelector('[data-sha="unlanded"]')?.textContent).toContain("3 commits not on main yet");
+    expect(host.querySelector('[data-sha="unlanded"]')?.textContent).toContain("3 commits not on the default branch yet");
+    await click('[data-sha="unlanded"]');
+    expect(host.textContent).toContain("3 commits on seat/codex-8 not on the default branch");
+    expect(host.querySelector('[title="Merge base with the default branch"]')).not.toBeNull();
+    expect(host.textContent).toContain("No file changes against the default branch.");
     await click('[data-sha="abc1234"]');
     expect(calls.find(c => c.command === "git_show")?.args).toMatchObject({ project: "trantor", agent: "codex-8", sha: "abc1234" });
     expect(host.querySelector("[data-diff-scroll]")?.textContent).toContain("after landing");

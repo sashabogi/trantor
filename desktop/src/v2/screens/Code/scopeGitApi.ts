@@ -117,7 +117,7 @@ export type GitBranch = {
   name: string; sha: string; committed_at: number; ahead: number | null; behind: number | null;
   current: boolean; remote: boolean; worktree: string | null;
 };
-export type GitBranchList = { current: string | null; branches: GitBranch[] };
+export type GitBranchList = { default_branch: string | null; current: string | null; branches: GitBranch[] };
 export type GitBranchResult = { status: "done" | "conflict" | "dirty"; reason: string; conflicts: string[] };
 export type GitBranchDeleteResult = { status: "deleted" | "confirm"; unique: number };
 export type GitDirtySwitch = "ask" | "bring" | "stash";

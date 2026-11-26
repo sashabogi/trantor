@@ -166,3 +166,62 @@ fn show_files_join_name_status_with_counts_and_keep_binary_null() {
     assert_eq!((files[0].plus, files[0].minus), (Some(3), Some(1)));
     assert_eq!((files[1].status.as_str(), files[1].plus), ("A", None));
 }
+
+#[tokio::test]
+async fn default_branch_falls_back_to_main_then_master_without_guessing() {
+    let (tmp, repo) = fixture("default-fallback");
+    git(&repo, &["branch", "master"]);
+    assert_eq!(default_branch_at(&repo).unwrap().unwrap().name, "main");
+    git(&repo, &["branch", "-m", "main", "topic"]);
+    let default = default_branch_async(&repo).await.unwrap().unwrap();
+    assert_eq!(default.name, "master");
+    assert_eq!(git_branch_list_at(&repo).await.unwrap().default_branch.as_deref(), Some("master"));
+    for force in [false, true] {
+        assert_eq!(git_branch_delete_at(&repo, "master", force).await.unwrap_err(), "master is protected and cannot be deleted");
+    }
+    git(&repo, &["branch", "-m", "master", "trunk"]);
+    assert_eq!(default_branch_at(&repo).unwrap(), None);
+    assert!(merge_base(&repo).is_err());
+    assert!(merge_base_async(&repo).await.is_err());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[tokio::test]
+async fn origin_head_controls_compare_rebase_and_delete_even_with_main_present() {
+    let (tmp, repo) = fixture("default-origin");
+    let first = git(&repo, &["rev-parse", "HEAD~1"]).trim().to_string();
+    git(&repo, &["branch", "release/stable", &first]);
+    git(&repo, &["update-ref", "refs/remotes/origin/release/stable", &first]);
+    git(&repo, &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/release/stable"]);
+    let default = default_branch_async(&repo).await.unwrap().unwrap();
+    assert_eq!(default.name, "release/stable");
+    assert_eq!(default.reference, "refs/heads/release/stable");
+    let list = git_branch_list_at(&repo).await.unwrap();
+    assert_eq!(serde_json::to_value(list).unwrap()["default_branch"], "release/stable");
+    assert_eq!(merge_base(&repo).unwrap(), first);
+    assert_eq!(merge_base_async(&repo).await.unwrap(), first);
+    for force in [false, true] {
+        assert_eq!(git_branch_delete_at(&repo, "release/stable", force).await.unwrap_err(), "release/stable is protected and cannot be deleted");
+    }
+    // A clone can have only the remote tracking ref for the default branch.
+    git(&repo, &["branch", "-D", "release/stable"]);
+    assert_eq!(default_branch_at(&repo).unwrap().unwrap().reference, "refs/remotes/origin/release/stable");
+    assert_eq!(merge_base_async(&repo).await.unwrap(), first);
+    git(&repo, &["reset", "--hard", "HEAD"]);
+    git_branch_integrate_at(&repo, "origin/release/stable", "rebase").await.unwrap();
+    // A stale origin/HEAD must not prevent the normal fallback.
+    git(&repo, &["update-ref", "-d", "refs/remotes/origin/release/stable"]);
+    assert_eq!(default_branch_at(&repo).unwrap().unwrap().name, "main");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[tokio::test]
+async fn default_branch_accepts_remote_only_main_and_master() {
+    let (tmp, repo) = fixture("default-remote-fallback");
+    git(&repo, &["branch", "-m", "main", "topic"]);
+    git(&repo, &["update-ref", "refs/remotes/origin/master", "HEAD"]);
+    assert_eq!(default_branch_async(&repo).await.unwrap().unwrap().name, "master");
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    assert_eq!(default_branch_async(&repo).await.unwrap().unwrap().name, "main");
+    let _ = std::fs::remove_dir_all(&tmp);
+}

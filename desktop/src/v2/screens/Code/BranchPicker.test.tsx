@@ -22,6 +22,8 @@ let mutated: ReturnType<typeof vi.fn>;
 let conflict: ReturnType<typeof vi.fn>;
 let errors: ReturnType<typeof vi.fn>;
 let worktreeRows: unknown[] = [];
+let defaultBranch: string | null = "main";
+let branchRows: typeof branches = [];
 
 const branches = [
   { name: "main", sha: "a".repeat(40), committed_at: 100, ahead: 0, behind: 0, current: true, remote: false, worktree: null },
@@ -35,6 +37,9 @@ const snapshot: ScopeSnapshot = { scope: null, branch: "main", upstream: "origin
 
 beforeEach(() => {
   calls = [];
+  defaultBranch = "main";
+  branchRows = branches;
+  vi.clearAllMocks();
   worktreeRows = [];
   close = vi.fn(); mutated = vi.fn(); conflict = vi.fn(); errors = vi.fn();
   const mem = new Map<string, string>();
@@ -49,7 +54,7 @@ beforeEach(() => {
     calls.push({ command, args });
     if (command === "git_branch_list") {
       const current = args.scope === "project" ? "main" : "seat/dev";
-      return JSON.stringify({ current, branches: branches.map(branch => ({ ...branch, current: !branch.remote && branch.name === current })) });
+      return JSON.stringify({ current, default_branch: defaultBranch, branches: branchRows.map(branch => ({ ...branch, current: !branch.remote && branch.name === current })) });
     }
     if (command === "git_worktrees") return JSON.stringify(worktreeRows);
     if (command === "git_branch_switch" || command === "git_branch_merge" || command === "git_branch_rebase") return JSON.stringify({ status: "done", reason: "ok", conflicts: [] });
@@ -145,7 +150,7 @@ describe("BranchPicker", () => {
       calls.push({ command, args });
       if (command === "git_branch_list") {
         const current = args.scope === "project" ? "main" : "seat/dev";
-        return JSON.stringify({ current, branches: branches.map(branch => ({ ...branch, current: !branch.remote && branch.name === current })) });
+        return JSON.stringify({ current, default_branch: defaultBranch, branches: branchRows.map(branch => ({ ...branch, current: !branch.remote && branch.name === current })) });
       }
       if (command === "git_branch_merge") return JSON.stringify({ status: "conflict", reason: "paused", conflicts: ["a.ts"] });
       return null;
@@ -172,6 +177,53 @@ describe("BranchPicker", () => {
     expect(rebase?.disabled).toBe(true);
     expect(rebase?.title).toContain("dev is working");
     expect(calls.some(call => call.command === "git_branch_rebase")).toBe(false);
+  });
+
+  it.each(["master", "release/stable"])("uses %s for seat labels, compare and rebase", async name => {
+    defaultBranch = name;
+    branchRows = [...branches, { ...branches[0], name, current: false }];
+    await mount({ ...snapshot, scope: "dev", branch: "seat/dev", seatBacked: true }, seats, "dev");
+    expect(host.querySelector(`[title="1 commits ahead of ${name}"]`)).not.toBeNull();
+    await click(host.querySelector<HTMLButtonElement>('button[aria-label="More actions for seat/dev"]') ?? undefined);
+    expect(host.textContent).toContain(`1 ahead of ${name}`);
+    await click(button(`Compare with ${name}`));
+    expect(acts.onCompare).toHaveBeenCalledWith("dev");
+    await click(host.querySelector<HTMLButtonElement>('button[aria-label="More actions for seat/dev"]') ?? undefined);
+    await click(button(`Rebase this seat branch onto ${name}`));
+    expect(calls.find(call => call.command === "git_branch_rebase")?.args).toEqual({ project: "trantor", agent: "dev", name });
+  });
+
+  it.each(["master", "release/stable"])("protects %s and allows deleting a non-default main", async name => {
+    defaultBranch = name;
+    branchRows = [...branches, { ...branches[0], name, current: false }];
+    await mount({ ...snapshot, scope: "dev", branch: "seat/dev", seatBacked: true }, seats, "dev");
+    await click(host.querySelector<HTMLButtonElement>(`button[aria-label="More actions for ${name}"]`) ?? undefined);
+    const remove = button("Delete branch…");
+    expect(remove?.disabled).toBe(true);
+    expect(remove?.title).toBe(`${name} is protected and cannot be deleted`);
+    await click(remove);
+    expect(calls.some(call => call.command === "git_branch_delete")).toBe(false);
+    await click(host.querySelector<HTMLButtonElement>(`button[aria-label="More actions for ${name}"]`) ?? undefined);
+    await click(host.querySelector<HTMLButtonElement>('button[aria-label="More actions for main"]') ?? undefined);
+    expect(button("Delete branch…")?.disabled).toBe(false);
+  });
+
+  it("rebases onto the remote default when no local copy exists", async () => {
+    defaultBranch = "release/stable";
+    branchRows = [...branches, { ...branches[3], name: "origin/release/stable" }];
+    await mount({ ...snapshot, scope: "dev", branch: "seat/dev", seatBacked: true }, seats, "dev");
+    await click(host.querySelector<HTMLButtonElement>('button[aria-label="More actions for seat/dev"]') ?? undefined);
+    await click(button("Rebase this seat branch onto release/stable"));
+    expect(calls.find(call => call.command === "git_branch_rebase")?.args.name).toBe("origin/release/stable");
+  });
+
+  it("disables default-branch actions when no default is available", async () => {
+    defaultBranch = null;
+    await mount({ ...snapshot, scope: "dev", branch: "seat/dev", seatBacked: true }, seats, "dev");
+    await click(host.querySelector<HTMLButtonElement>('button[aria-label="More actions for seat/dev"]') ?? undefined);
+    expect(button("Compare with default branch")?.disabled).toBe(true);
+    expect(button("Rebase this seat branch onto default branch")?.disabled).toBe(true);
+    expect(host.textContent).not.toContain("ahead of main");
   });
 
   // #14300: active agent worktrees are scopes too, listed under their own heading and hidden when there are none.

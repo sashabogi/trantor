@@ -111,10 +111,10 @@ export function UnlandedDetail({ branch, count, diff, acts, project, scope, onOp
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-2.5 border-b border-[var(--v2-edge)] px-4 py-3">
-        <h2 className="m-0 min-w-0 flex-[1_1_300px] text-v2-title font-[650]">{count} {count === 1 ? "commit" : "commits"} on {branch ?? "this branch"} not on main</h2>
-        <Chip mono title="Merge base with main">{diff.base ? diff.base.slice(0, 7) : "base unknown"}</Chip>
+        <h2 className="m-0 min-w-0 flex-[1_1_300px] text-v2-title font-[650]">{count} {count === 1 ? "commit" : "commits"} on {branch ?? "this branch"} not on the default branch</h2>
+        <Chip mono title="Merge base with the default branch">{diff.base ? diff.base.slice(0, 7) : "base unknown"}</Chip>
       </div>
-      <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={diff.state} onAddToChat={acts.addToChat} onOpenFile={onOpenFile} empty="No file changes against main." project={project} scope={scope} />
+      <DiffPane chips={chips} selected={current} onSelect={setSelected} patch={diff.state} onAddToChat={acts.addToChat} onOpenFile={onOpenFile} empty="No file changes against the default branch." project={project} scope={scope} />
     </div>
   );
 }

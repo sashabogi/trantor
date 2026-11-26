@@ -131,7 +131,7 @@ export function HistoryView({ rows, branch, unlanded, selected, onSelect, seatBa
         {!native && seatBacked && unlanded ? (
           <button type="button" onClick={() => onSelect(UNLANDED_KEY)} aria-pressed={selected === UNLANDED_KEY} data-sha={UNLANDED_KEY}
             className={`border-0 border-b border-[var(--v2-edge)] px-3 py-2 text-left text-v2-body ${selected === UNLANDED_KEY ? "bg-[var(--v2-accent-soft)]" : "bg-transparent hover:bg-[var(--v2-raised)]"}`}>
-            <span className="font-medium text-[var(--v2-text)]">{unlanded} {unlanded === 1 ? "commit" : "commits"} not on main yet</span>
+            <span className="font-medium text-[var(--v2-text)]">{unlanded} {unlanded === 1 ? "commit" : "commits"} not on the default branch yet</span>
             <span className="block text-v2-small text-[var(--v2-muted)]">The whole branch against its merge base</span>
           </button>
         ) : null}

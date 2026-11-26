@@ -44,11 +44,12 @@ function MenuRow({ label, hint, onClick, disabled }: { label: string; hint?: str
 
 function SeatMenu({ s, acts, ops, onClose }: { s: SeatInfo & { branchLabel: string }; acts: PickerActions; ops: BranchOps; onClose: () => void }) {
   const run = (f: () => void) => () => { f(); onClose(); };
-  const ahead = s.ahead ? `${s.ahead} ahead of main` : "nothing ahead of main";
+  const baseLabel = ops.defaultBranch ?? "default branch";
+  const ahead = s.ahead ? `${s.ahead} ahead of ${baseLabel}` : `nothing ahead of ${baseLabel}`;
   const branch = ops.branch(s.branchLabel);
-  const main = ops.branch("main");
+  const target = ops.defaultTarget;
   const rebaseReason = s.presence === "working" ? `${seatLabel(s.seat)} is working; rebase after the turn ends`
-    : !branch?.current ? "Open this seat's worktree; rebase acts on its current branch" : !main ? "main is not present in this checkout" : null;
+    : !branch?.current ? "Open this seat's worktree; rebase acts on its current branch" : !target ? "No default branch is available in this checkout" : ops.mutationReason();
   return (
     <div role="menu" ref={showWhole} aria-label={`${s.branchLabel} actions`} className="absolute right-2 top-full z-10 w-[280px] rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1 shadow-[var(--v2-shadow-menu)]">
       <div className="flex items-center gap-1.5 px-2 py-1 text-v2-body text-[var(--v2-muted)]"><Avatar name={s.seat} size={16} /><span className="v2-mono text-[var(--v2-text)]">{s.branchLabel}</span> · {ahead}</div>
@@ -56,9 +57,9 @@ function SeatMenu({ s, acts, ops, onClose }: { s: SeatInfo & { branchLabel: stri
       <MenuRow label="Open its worktree in a tab" onClick={run(() => acts.onSeat(s.seat))} />
       <MenuRow label={`Message ${seatLabel(s.seat)}`} onClick={run(() => acts.onMessage(s.seat))} />
       <SectionLabel>With current branch</SectionLabel>
-      <MenuRow label="Compare with main" onClick={run(() => acts.onCompare(s.seat))} />
+      <MenuRow label={`Compare with ${baseLabel}`} disabled={!target ? "No default branch is available in this checkout" : null} onClick={run(() => acts.onCompare(s.seat))} />
       <MenuRow label={`Merge ${s.branchLabel} into current`} disabled={!branch ? "Reading branches" : ops.mutationReason()} onClick={branch ? run(() => ops.integrate("merge", branch)) : undefined} />
-      <MenuRow label="Rebase this seat branch onto main" disabled={!branch ? "Reading branches" : rebaseReason} onClick={branch && main ? run(() => ops.integrate("rebase", main)) : undefined} />
+      <MenuRow label={`Rebase this seat branch onto ${baseLabel}`} disabled={!branch ? "Reading branches" : rebaseReason} onClick={branch && target ? run(() => ops.integrate("rebase", target)) : undefined} />
       <SectionLabel>Branch</SectionLabel>
       <MenuRow label="Copy name" onClick={run(() => acts.onCopy(s.branchLabel))} />
       <MenuRow label="Rename branch…" disabled={!branch ? "Reading branches" : ops.renameReason(branch)} onClick={branch ? run(() => ops.rename(branch)) : undefined} />
@@ -78,7 +79,7 @@ function SeatRow({ s, current, acts, ops, onClose }: { s: SeatInfo & { branchLab
           <Dot presence={s.presence} />
           <span className="flex min-w-0 items-center gap-1.5 truncate text-v2-body text-[var(--v2-muted)]"><Avatar name={s.seat} size={16} />{seatLabel(s.seat)} · {PRESENCE_LABEL[s.presence]}{s.machine ? ` · ${s.machine}` : ""}</span>
         </button>
-        {s.ahead ? <span className="v2-mono shrink-0 text-v2-small text-[var(--v2-muted)]" title={`${s.ahead} commits ahead of main`}>↑{s.ahead}</span> : null}
+        {s.ahead ? <span className="v2-mono shrink-0 text-v2-small text-[var(--v2-muted)]" title={`${s.ahead} commits ahead of ${ops.defaultBranch ?? "default branch"}`}>↑{s.ahead}</span> : null}
         <IconButton label={`More actions for ${s.branchLabel}`} title="More actions" size={22} onClick={() => setMenu(m => !m)}><MoreHorizontal size={13} aria-hidden /></IconButton>
       </div>
       {menu && <SeatMenu s={s} acts={acts} ops={ops} onClose={() => { setMenu(false); onClose(); }} />}

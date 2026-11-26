@@ -75,6 +75,41 @@ pub(crate) fn scope_dir(project: &str, scope: &GitScope) -> Result<std::path::Pa
     scope_dir_in(&identity::dev_root(), &desktop_bus_dir(), project, scope)
 }
 
+/// Resolve origin/HEAD first, then main, then master. Keep the branch name separate from
+/// its usable ref: a clone need not have a local copy of its default branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GitDefaultBranch {
+    pub(crate) name: String,
+    pub(crate) reference: String,
+}
+
+const DEFAULT_BRANCH_REFS: &[&str] = &[
+    "for-each-ref", "--format=%(refname)%09%(symref)", "refs/heads", "refs/remotes/origin",
+];
+
+fn default_branch_from_refs(text: &str) -> Option<GitDefaultBranch> {
+    let refs: Vec<(&str, &str)> = text.lines().filter_map(|line| line.split_once('\t')).collect();
+    let exists = |name: &str| refs.iter().any(|(reference, _)| *reference == name);
+    let origin_head = refs.iter().find(|(name, _)| *name == "refs/remotes/origin/HEAD")
+        .and_then(|(_, target)| target.strip_prefix("refs/remotes/origin/"));
+    for name in origin_head.into_iter().chain(["main", "master"]) {
+        for reference in [format!("refs/heads/{name}"), format!("refs/remotes/origin/{name}")] {
+            if exists(&reference) {
+                return Some(GitDefaultBranch { name: name.to_string(), reference });
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn default_branch_at(dir: &Path) -> Result<Option<GitDefaultBranch>, String> {
+    Ok(default_branch_from_refs(&run_git_text(dir, DEFAULT_BRANCH_REFS)?))
+}
+
+pub(crate) async fn default_branch_async(dir: &Path) -> Result<Option<GitDefaultBranch>, String> {
+    Ok(default_branch_from_refs(&run_git_text_io(dir, DEFAULT_BRANCH_REFS).await?))
+}
+
 pub(crate) const LOG_LIMIT_DEFAULT: u32 = 15;
 const LOG_LIMIT_MAX: u32 = 200;
 
