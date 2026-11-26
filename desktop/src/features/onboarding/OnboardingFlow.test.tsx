@@ -4,13 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingFlow, type OnboardingFlowDeps } from "./OnboardingFlow";
 
-// The Autonomy body reads its dials through Tauri directly; answer autonomy_get with the defaults.
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(async (cmd: string) => cmd === "autonomy_get"
-    ? JSON.stringify({ project: null, resolved: { harness: "prompt", commit: false, push: false, deploy: false, respawn: false, retry: false },
-        defaults: {}, overridden: [], path: "/home/u/.agent-bus/autonomy.json" })
-    : null),
-}));
 import { AUTONOMY_DEFAULTS, type AutonomyResolved } from "./onboardingState";
 import type { OnboardingApi } from "./onboardingApi";
 import type { SetupApi, SetupReport } from "../../shared/api/client";
@@ -72,6 +65,11 @@ function depsFor({ setup = OK_SETUP, providers = [], hasHubPin = false, autonomy
     autonomyResolved: vi.fn(async () => autonomy),
     devRoot: vi.fn(async () => "/Users/test/development"),
     setupApi,
+    autonomyDialApi: {
+      get: vi.fn(async (project: string | null) => JSON.stringify({ project, resolved: { harness: "prompt", commit: false, push: false, deploy: false, swapDeadSeat: false, retryFailedTurn: false },
+        defaults: {}, overridden: [], path: "/home/u/.agent-bus/autonomy.json" })),
+      set: vi.fn(async () => "{}"),
+    },
   };
   return { deps, api, providerApi, setupApi };
 }

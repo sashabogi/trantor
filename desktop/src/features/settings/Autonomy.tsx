@@ -15,6 +15,17 @@ export type Resolved = {
 };
 type State = { project: string | null; resolved: Resolved; defaults: Resolved; overridden: string[]; path: string };
 
+/** The dial reads and writes, injectable so a caller (or a test) can supply its own. Both answer the
+ *  CLI's JSON state string. */
+export type AutonomyDialApi = {
+  get: (project: string | null) => Promise<string>;
+  set: (project: string | null, dial: string, value: string) => Promise<string>;
+};
+export const realAutonomyDialApi: AutonomyDialApi = {
+  get: project => invoke<string>("autonomy_get", { project }),
+  set: (project, dial, value) => invoke<string>("autonomy_set", { project, dial, value }),
+};
+
 const ACTS: Array<{ key: keyof Resolved; label: string; why: string }> = [
   { key: "commit", label: "Commit landed work", why: "each seat's finished work is committed as that seat" },
   { key: "push", label: "Push after verifying", why: "integrated work goes to the remote once tests pass — needs commit" },
@@ -41,21 +52,21 @@ function Toggle({ on, onClick, disabled }: { on: boolean; onClick: () => void; d
   );
 }
 
-export function Autonomy({ projects }: { projects: string[] }) {
+export function Autonomy({ projects, api = realAutonomyDialApi }: { projects: string[]; api?: AutonomyDialApi }) {
   const [scope, setScope] = useState<string | null>(null);
   const [state, setState] = useState<State | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    invoke<string>("autonomy_get", { project: scope })
+    api.get(scope)
       .then(s => { setState(JSON.parse(s)); setError(null); })
       .catch(e => setError(String(e)));
-  }, [scope]);
+  }, [scope, api]);
 
   useEffect(() => { load(); }, [load]);
 
   const set = (dial: string, value: string) => {
-    invoke<string>("autonomy_set", { project: scope, dial, value })
+    api.set(scope, dial, value)
       .then(s => { setState(JSON.parse(s)); setError(null); })
       .catch(e => setError(String(e)));
   };

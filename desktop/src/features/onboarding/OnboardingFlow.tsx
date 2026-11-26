@@ -19,7 +19,7 @@ import {
 } from "./onboardingState";
 import { AccountsPane } from "../settings/providers/AccountsPane";
 import { providerAccountsApi, type ProviderAccountsApi, type ProviderStatus } from "../settings/providers/providerStatus";
-import { Autonomy } from "../settings/Autonomy";
+import { Autonomy, realAutonomyDialApi, type AutonomyDialApi } from "../settings/Autonomy";
 import { GenesisSheet } from "../genesis/GenesisSheet";
 import { WizardFrame } from "./WizardFrame";
 import { SetupStep } from "./SetupStep";
@@ -32,6 +32,7 @@ export type OnboardingFlowDeps = {
   autonomyResolved: (project: string | null) => Promise<AutonomyResolved>;
   devRoot: () => Promise<string>;
   setupApi: SetupApi;
+  autonomyDialApi: AutonomyDialApi;
 };
 
 export const DEFAULT_ONBOARDING_DEPS: OnboardingFlowDeps = {
@@ -45,6 +46,7 @@ export const DEFAULT_ONBOARDING_DEPS: OnboardingFlowDeps = {
   },
   devRoot: () => invoke<string>("project_dev_root"),
   setupApi: realSetupApi,
+  autonomyDialApi: realAutonomyDialApi,
 };
 
 function DoneBanner({ children }: { children: string }) {
@@ -74,7 +76,7 @@ export function OnboardingFlow({ me, project, onClose, forced = false, onCliInst
   onCliInstalled?: () => void;
   deps?: OnboardingFlowDeps;
 }) {
-  const { api, providerApi, knownProjects, autonomyResolved, devRoot, setupApi } = deps;
+  const { api, providerApi, knownProjects, autonomyResolved, devRoot, setupApi, autonomyDialApi } = deps;
   const [visible, setVisible] = useState<OnboardingStep[] | null>(null);
   const [satisfiedAtMount, setSatisfiedAtMount] = useState<Record<OnboardingStep, boolean> | null>(null);
   const [index, setIndex] = useState(0);
@@ -202,7 +204,7 @@ export function OnboardingFlow({ me, project, onClose, forced = false, onCliInst
             <>
               {/* Machine-wide only: per-project rules live in Settings, and a row of every
                   checkout on this Mac overflowed the wizard card (2.1.1, operator GIF). */}
-              <Autonomy projects={[]} />
+              <Autonomy projects={[]} api={autonomyDialApi} />
               {satisfiedAtMount?.autonomy && <DoneBanner>Already chosen — nothing needed here.</DoneBanner>}
             </>
           )}
