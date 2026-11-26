@@ -17,6 +17,49 @@ export const PRESENCE_LABEL = {
   offline: "offline",
 } as const satisfies Record<Presence, string>;
 
+/** #14351: one state language for tabs, tiles, rows and the hover card. Needs-you overrides every other state. */
+export type SeatState = "working" | "needs" | "ready" | "waiting" | "idle" | "offline";
+
+export type SeatStateInput = { presence: Presence; words: string; isOrchestrator?: boolean; target?: { status?: string } };
+
+export function seatState(seat: Pick<SeatStateInput, "presence" | "words">): SeatState {
+  if (seat.presence === "needs-you") return "needs";
+  if (seat.presence === "offline") return "offline";
+  if (seat.presence === "working") return "working";
+  const w = seat.words.toLowerCase();
+  if (w.startsWith("waiting")) return "waiting";
+  if (w === "idle" || w === "finished") return "idle";
+  return "ready";
+}
+
+export const STATE_WORD = {
+  working: "working", needs: "needs you", ready: "ready", waiting: "waiting", idle: "idle", offline: "offline",
+} as const satisfies Record<SeatState, string>;
+
+const STATE_COLOR = {
+  working: "var(--v2-accent)", needs: "var(--v2-warn)", ready: "var(--v2-ok)", waiting: "var(--v2-proposal)",
+} as const;
+
+/** Props for the 8px dot: solid for working, needs, ready and waiting (working pulses), a hollow 1px faint ring for idle and offline. */
+export function stateDot(state: SeatState) {
+  if (state === "idle" || state === "offline") return { className: "", style: { background: "transparent", boxShadow: "inset 0 0 0 1px var(--v2-faint)" } };
+  return { className: state === "working" ? "v2-pulse" : "", style: { background: STATE_COLOR[state] } };
+}
+
+/** A short human line for what the seat is doing: "running tests", "needs you: approve push", "ready", "waiting on glm-5", "idle". */
+export function activityLine(seat: SeatStateInput, opts: { needs?: string; waitingOn?: string } = {}): string {
+  const state = seatState(seat);
+  if (state === "needs") return opts.needs ? `needs you: ${opts.needs}` : "needs you";
+  if (state === "waiting") return opts.waitingOn ? `waiting on ${opts.waitingOn}` : seat.words;
+  if (state === "working") {
+    const doing = (seat.target?.status ?? "").replace(/^working\s*·?\s*/i, "").trim();
+    if (/^card\s+\d+/i.test(doing)) return `working on ${doing}`;
+    return doing || (seat.words === "working" ? "working" : seat.words);
+  }
+  if (seat.isOrchestrator && (state === "ready" || state === "idle")) return "you";
+  return state === "offline" ? "offline" : seat.words;
+}
+
 export type SeatPalette = { bg: string; fg: string };
 
 const SEAT_PALETTES: [RegExp, SeatPalette][] = [

@@ -12,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Peer } from "../../shared/api/client";
 import { describeHit, dropPointToCss } from "../../shared/dropPoint";
 import { quotePaths } from "./quotePaths";
+import { SLOW_ECHO_MS, TERMINAL_FONT, TERMINAL_THEME } from "./terminalTheme";
 import {
   orchestratorOpen,
   surfaceFor,
@@ -39,15 +40,6 @@ export type PaneDragDropEvent =
   | { type: "over"; position?: { x: number; y: number } }
   | { type: "drop"; paths: string[]; position?: { x: number; y: number } }
   | { type: "leave" };
-
-// The design tokens the card names (#5367): the pane container's #101013, the app's text
-// #ececf0, SF Mono at 12px — matching the record rail's mono rows, not a terminal-product look.
-const THEME = {
-  background: "#101013",
-  foreground: "#ececf0",
-  cursor: "#ececf0",
-  selectionBackground: "rgba(20, 184, 166, 0.25)",
-};
 
 // Everything this pane reaches outside itself, behind one narrow surface, so a test can supply a
 // faithful stand-in instead of module-mocking (anti-slop: no-module-mocking).
@@ -81,9 +73,8 @@ export type TerminalDeps = {
 function createXtermSession(host: HTMLElement): PaneSession {
   const term = new Terminal({
     convertEol: true,
-    fontSize: 12,
-    fontFamily: '"SF Mono", ui-monospace, "Menlo", monospace',
-    theme: THEME,
+    ...TERMINAL_FONT,
+    theme: { ...TERMINAL_THEME },
     scrollback: 5000,
   });
   const fit = new FitAddon();
@@ -375,9 +366,9 @@ export function TerminalPane({
   if (attachError === "notAnAgent") {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
           <div>This pane exists, but herdr is not tracking anything running in it, so there is no terminal to show.</div>
-          <div className="mt-2 text-tr-muted">
+          <div className="mt-2 text-[var(--v2-muted)]">
             That usually means the seat&rsquo;s process exited. It comes back on the seat&rsquo;s next turn.
           </div>
         </div>
@@ -387,9 +378,9 @@ export function TerminalPane({
   if (remoteError) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
           <div>SSH to {peer?.machine || "the remote machine"} is unavailable.</div>
-          <div className="mt-2 break-words text-tr-muted">{remoteError}</div>
+          <div className="mt-2 break-words text-[var(--v2-muted)]">{remoteError}</div>
         </div>
       </div>
     );
@@ -397,9 +388,9 @@ export function TerminalPane({
   if (remoteMissing) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
           <div>No herdr pane for {agent} was found on {peer?.machine}.</div>
-          <div className="mt-2 text-tr-muted">The seat may have stopped or its pane record may be stale.</div>
+          <div className="mt-2 text-[var(--v2-muted)]">The seat may have stopped or its pane record may be stale.</div>
         </div>
       </div>
     );
@@ -408,9 +399,9 @@ export function TerminalPane({
     const machine = peer.machine?.trim();
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
           <div>{agent} is running on {machine || "another machine"}.</div>
-          <div className="mt-2 text-tr-muted">Live state: {peer.status || "online"}.</div>
+          <div className="mt-2 text-[var(--v2-muted)]">Live state: {peer.status || "online"}.</div>
         </div>
       </div>
     );
@@ -418,7 +409,7 @@ export function TerminalPane({
   if (!surface) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+        <div className="max-w-[460px] rounded-lg border border-dashed border-[var(--v2-edge-2)] px-6 py-5 text-center text-v2-body leading-relaxed text-[var(--v2-text-2)]">
           {/* "Wake" starts the ORCHESTRATOR, which is only the right verb on the orchestrator's
               own pane — the same verb the sidebar's hover button carries, so the two doors into
               one action can never read as two actions. Offering it on a seat meant clicking it
@@ -432,17 +423,17 @@ export function TerminalPane({
                 type="button"
                 onClick={attachOpenSession}
                 disabled={opening}
-                className="mt-3 rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-60"
+                className="mt-3 rounded-md border-0 bg-[var(--v2-ok)] px-3 py-1.5 text-v2-body font-semibold text-[var(--v2-ink)] disabled:opacity-60"
               >
                 {opening ? "Waking…" : "Wake session"}
               </button>
-              {openError && <div className="mt-2 text-[11.5px] text-tr-danger">{openError}</div>}
+              {openError && <div className="mt-2 text-v2-small text-[var(--v2-bad)]">{openError}</div>}
             </>
           ) : (
             <>
               <div>{agent} has no terminal pane — it is not running under this crew.</div>
-              <div className="mt-2 text-tr-muted">
-                Start it with <span className="tr-mono">trantor up {agent}</span>. Its past work is
+              <div className="mt-2 text-[var(--v2-muted)]">
+                Start it with <span className="v2-mono">trantor up {agent}</span>. Its past work is
                 still in the record rail either way.
               </div>
             </>
@@ -453,14 +444,15 @@ export function TerminalPane({
   }
   return (
     <div
-      className={`relative min-h-0 flex-1 rounded-lg transition-shadow ${dragOver ? "ring-1 ring-tr-doing/50" : ""}`}
+      className={`relative min-h-0 flex-1 bg-[var(--v2-terminal)] transition-shadow ${dragOver ? "ring-1 ring-inset ring-[var(--v2-accent)]" : ""}`}
       data-pane={surface}
       data-drag-over={dragOver}
       data-interactive={interactive}
+      data-echo-ms={latencyMs ?? undefined}
     >
-      <div ref={hostRef} className="h-full min-h-0" />
-      {latencyMs !== null && (
-        <div className="tr-mono absolute right-2 top-2 rounded-[7px] bg-black/50 px-2 py-1 text-[11px] text-tr-muted">
+      <div ref={hostRef} className="h-full min-h-0 px-2 pt-1" />
+      {latencyMs !== null && latencyMs >= SLOW_ECHO_MS && (
+        <div className="v2-mono absolute right-2 top-1 text-v2-micro text-[var(--v2-faint)]">
           echo {latencyMs}ms
         </div>
       )}

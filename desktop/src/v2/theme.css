@@ -33,6 +33,7 @@
   --v2-card-selected: #1B1E26;
   --v2-side: #0F1013;
   --v2-sunken: #111316;
+  --v2-terminal: #111316;
   --v2-edge-soft: #1D2025;
   --v2-warn-panel: #18160E;
   --v2-medium: #E2B86B;
@@ -222,6 +223,9 @@
 .v2-pulse { animation: v2-pulse 1.2s var(--v2-ease) infinite; }
 .v2-breathe { animation: v2-breathe 2.4s var(--v2-ease) infinite; }
 .v2-pop { animation: v2-pop var(--v2-dur-1) var(--v2-ease); }
+/* #14351: the seat hover card fades in and rises 2px. */
+.v2-hovercard { animation: v2-hovercard var(--v2-dur-1) var(--v2-ease); }
+@keyframes v2-hovercard { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes v2-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes v2-breathe { 0%, 100% { border-color: var(--v2-pane-edge, var(--v2-edge)); } 50% { border-color: var(--v2-accent-edge); } }
 @keyframes v2-sweep { 0% { left: -30%; opacity: 0; } 15%, 85% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
@@ -230,6 +234,7 @@
   :root { --v2-dur-1: 0ms; --v2-dur-2: 0ms; --v2-dur-3: 0ms; }
   .v2-root *, .v2-root *::before, .v2-root *::after,
   [data-v2-pane], .v2-pulse, .v2-breathe, .v2-sweep, .v2-pop,
+  .v2-hovercard,
   .v2-composer, .v2-composer::before, .v2-composer::after { animation: none !important; transition: none !important; }
   [data-v2-pane][data-working]:not([data-active]), .v2-breathe { border-color: var(--v2-accent-edge); }
 }

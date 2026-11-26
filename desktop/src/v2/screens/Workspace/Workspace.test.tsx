@@ -9,6 +9,8 @@ import { HubClient, type FileHold, type Peer } from "../../../shared/api/client"
 import type { Composer } from "../../../features/chat/Composer";
 import { surfaceFor, type HerdrSeat } from "../../../features/workspace/herdr";
 import type { PaneTarget } from "../../../features/workspace/paneTargets";
+import { closeCardSheet, currentCardSheet } from "../../shell/cardIntent";
+import { takeOpenIntent } from "../../shell/openIntent";
 import { WorkspaceScreen } from "./index";
 import { ComposerAdapter, judge } from "./ComposerAdapter";
 import { DEFAULT_PANES, WorkspacePanesContext, type WorkspacePanes } from "./panes";
@@ -134,8 +136,10 @@ describe("seat strip", () => {
   it("shows a tab per live seat of this project, the offline count and the add button (#14241)", async () => {
     await mountScreen(fakeClient([]));
     expect(host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')).toHaveLength(2);
-    expect(chipFor("codex-8")?.textContent).toContain("working");
+    expect(chipFor("codex-8")?.textContent).toContain("working on card 13970");
     expect(chipFor("glm-5")?.textContent).toContain("ready");
+    // #14351: the "N seats live" counter is gone; the tabs already show it.
+    expect(host.textContent).not.toContain("seats live");
     expect(chipFor("kimi-9")).toBeNull();
     expect(chipFor("MacBook")).toBeNull();
     expect(host.textContent).toContain("+1 offline");
@@ -154,8 +158,7 @@ describe("helper panes", () => {
     ];
     await mountScreen(fakeClient([]));
     const tabs = [...host.querySelectorAll('[role="tablist"][aria-label="Seats"] [role="tab"]')];
-    expect(tabs.map(t => t.textContent)).toEqual([expect.stringContaining("codex-8working"), expect.stringContaining("glm-5ready"), expect.stringContaining("reviewhelperrunning"), expect.stringContaining("reviewhelperfinished")]);
-    expect(host.textContent).toContain("2 seats live");
+    expect(tabs.map(t => t.textContent)).toEqual([expect.stringContaining("codex-8working on card 13970"), expect.stringContaining("glm-5ready"), expect.stringContaining("reviewrunninghelper"), expect.stringContaining("reviewfinishedhelper")]);
     await click(tabs[2]);
     expect(terminalAgents()).toEqual(["helper:w1:p2"]);
     expect(host.querySelector('input[placeholder*="Message"]')).toBeNull();
@@ -166,16 +169,16 @@ describe("helper panes", () => {
     await click(host.querySelector('button[aria-label="Stop review"]'));
     expect(ipc).toContainEqual({ command: "workspace_cli", args: { project: "trantor", args: ["helper", "stop", "w1:p2", "--json"] } });
     expect(host.querySelectorAll('button[aria-label="Stop review"]')).toHaveLength(1);
-    expect(host.textContent).not.toContain("reviewhelperrunning");
+    expect(host.textContent).not.toContain("reviewrunninghelper");
   });
 
   it("includes helper terminals in Split and Grid", async () => {
     localPanes = [{ project: "trantor", kind: "helper", agent: "check", surface: "w1:p4", status: "working" }];
     await mountScreen(fakeClient([]));
     await click(chipFor("check"));
-    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Split") ?? null);
+    await click(host.querySelector('[role="group"][aria-label="Layout"] button[aria-label="Split"]'));
     expect(terminalAgents()).toEqual(["helper:w1:p4", "codex-8"]);
-    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Grid") ?? null);
+    await click(host.querySelector('[role="group"][aria-label="Layout"] button[aria-label="Grid"]'));
     expect(terminalAgents()).toEqual(["codex-8", "glm-5", "helper:w1:p4"]);
     expect(takesSeatMessage({ isOrchestrator: false, isHelper: true })).toBe(false);
   });
@@ -188,8 +191,9 @@ describe("selection and inspector", () => {
     expect(host.querySelector('button[aria-label="Message codex-8"]')).not.toBeNull();
     expect(host.textContent).toContain("#13970");
     expect(host.textContent).toContain("seat/codex-8 ↑1");
-    expect(host.textContent).toContain("New sessions: asks first");
-    expect(host.querySelector('[title*="applies to new sessions and handoffs"]')).not.toBeNull();
+    // #14351: the project-wide autonomy chip, hub status and "context not reported" left the seat bar for the hover card.
+    expect(host.textContent).not.toContain("New sessions: asks first");
+    expect(host.textContent).not.toContain("context not reported");
     await click(chipFor("glm-5"));
     expect(terminalAgents()).toEqual(["glm-5"]);
     expect(host.querySelector('button[aria-label="Message glm-5"]')).not.toBeNull();
@@ -209,12 +213,15 @@ describe("selection and inspector", () => {
     await mountScreen(fakeClient([]), go);
     await click(host.querySelector('button[aria-label="Open codex-8\'s worktree in Code"]'));
     expect(go).toHaveBeenCalledWith("code");
+    // #14351: the button carries a scope intent for THIS seat's worktree.
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "source-control", seat: "codex-8" });
   });
 
   it("Swap on a seat offers every agent but its own: no GLM row on glm-5, and the CLI swaps the seat (#14062)", async () => {
     await mountScreen(fakeClient([]));
     await click(chipFor("glm-5"));
-    await click(host.querySelector('button[aria-label="Swap glm-5"]'));
+    await click(host.querySelector('button[aria-label="More actions for glm-5"]'));
+    await click([...host.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(e => e.textContent === "Swap agent") ?? null);
     const items = [...host.querySelectorAll<HTMLElement>('[role="menu"][aria-label="Swap glm-5 to"] [role="menuitem"]')];
     expect(items.some(e => e.textContent?.startsWith("GLM"))).toBe(false);
     expect(items.some(e => e.textContent?.startsWith("Kimi"))).toBe(true);
@@ -223,6 +230,96 @@ describe("selection and inspector", () => {
     // SAFETY: ipc records every Tauri call as { command, args }; the crew bridge sends { project, args }.
     const swap = ipc.filter(c => c.command === "workspace_cli").map(c => (c.args as { project: string; args: string[] }).args).find(a => a[0] === "swap");
     expect(swap).toEqual(["swap", "glm-5", "kimi", "--json"]);
+  });
+});
+
+describe("middle column (#14351)", () => {
+  // SAFETY: ipc records every Tauri call as { command, args }; the crew bridge sends { project, args }.
+  const stopped = () => ipc.some(c => c.command === "workspace_cli" && (c.args as { args: string[] }).args[0] === "down");
+  const wait = (ms: number) => act(async () => { await new Promise(r => setTimeout(r, ms)); });
+
+  it("draws two-line tabs and merges the active one into the pane", async () => {
+    await mountScreen(fakeClient([]));
+    const codex = chipFor("codex-8");
+    expect(codex?.querySelectorAll("span.truncate")).toHaveLength(2);
+    expect(codex?.parentElement?.getAttribute("data-active")).toBe("true");
+    expect(codex?.parentElement?.className).toContain("border-t-[var(--v2-accent)]");
+    expect(chipFor("glm-5")?.parentElement?.getAttribute("data-active")).toBeNull();
+  });
+
+  it("puts the hold on the tab: needs you overrides and says what", async () => {
+    await mountScreen(fakeClient([], [HOLD]));
+    expect(chipFor("codex-8")?.textContent).toContain("needs you: approve edit a.ts");
+    expect(chipFor("codex-8")?.querySelector('[data-state="needs"]')).not.toBeNull();
+  });
+
+  it("shows the hover card after a rest, with a row only where the seat has something to say", async () => {
+    await mountScreen(fakeClient([]));
+    const tab = chipFor("codex-8")?.parentElement;
+    await act(async () => { tab?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })); });
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    await wait(450);
+    const card = host.querySelector('[role="tooltip"]');
+    expect(card).not.toBeNull();
+    const rows = [...(card?.querySelectorAll("[data-row]") ?? [])].map(r => r.getAttribute("data-row"));
+    expect(rows).toEqual(["Doing", "Branch", "Changes", "May do"]);
+    expect(card?.textContent).toContain("+3");
+    expect(card?.textContent).toContain("asks first");
+    expect(card?.className).toContain("pointer-events-none");
+    await act(async () => { tab?.dispatchEvent(new MouseEvent("pointerout", { bubbles: true })); });
+    expect(host.querySelector('[role="tooltip"]')).toBeNull();
+    // glm-5 has no card and no worktree facts in this fixture beyond the branch: no Doing row.
+    const glm = chipFor("glm-5")?.parentElement;
+    await act(async () => { glm?.dispatchEvent(new MouseEvent("pointerover", { bubbles: true })); });
+    await wait(450);
+    expect([...host.querySelectorAll('[role="tooltip"] [data-row]')].map(r => r.getAttribute("data-row"))).not.toContain("Doing");
+  });
+
+  it("keeps Drill mode in the strip's ... menu and no Record button", async () => {
+    await mountScreen(fakeClient([]));
+    expect([...host.querySelectorAll("button")].some(b => b.textContent === "Record")).toBe(false);
+    await click(host.querySelector('button[aria-label="More strip actions"]'));
+    const items = [...host.querySelectorAll<HTMLElement>('[role="menu"][aria-label="Strip actions"] [role="menuitem"]')];
+    expect(items.map(i => i.textContent)).toEqual(["Drill mode", "All seats"]);
+    await act(async () => { items[0].click(); });
+    await wait(10);
+    expect(host.textContent).toContain("Drill Mode");
+  });
+
+  it("the seat bar replaces the inspector: view tabs, card link, Message focuses the input, no disabled hand off", async () => {
+    await mountScreen(fakeClient([]));
+    const views = [...host.querySelectorAll('[role="tablist"][aria-label="Seat views"] [role="tab"]')];
+    expect(views.map(v => v.textContent)).toEqual(["Terminal", "Changes1"]);
+    expect(host.querySelector('button[aria-label="Hand off codex-8\'s session"]')).toBeNull();
+    expect(host.textContent).not.toContain("Hand off");
+    await click(host.querySelector('button[title="Open the card"]'));
+    expect(currentCardSheet()).toEqual({ project: "trantor", id: 13970 });
+    closeCardSheet();
+    await click(host.querySelector('button[aria-label="Message codex-8"]'));
+    await act(async () => { await new Promise(r => requestAnimationFrame(() => r(null))); });
+    expect(document.activeElement?.id).toBe("v2-seatmsg");
+    expect(host.querySelector<HTMLInputElement>("input#v2-seatmsg")?.placeholder).toBe("Message codex-8 at its next turn");
+  });
+
+  it("Stop seat asks for confirmation before the crew stops it", async () => {
+    await mountScreen(fakeClient([]));
+    await click(host.querySelector('button[aria-label="More actions for codex-8"]'));
+    await click([...host.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(e => e.textContent === "Stop seat") ?? null);
+    expect(stopped()).toBe(false);
+    await click([...host.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(e => e.textContent === "Stop codex-8") ?? null);
+    await wait(20);
+    expect(stopped()).toBe(true);
+  });
+
+  it("tiles carry the terminal ground, the needs-you edge and a header that names the activity", async () => {
+    await mountScreen(fakeClient([], [HOLD]));
+    await click(host.querySelector('[role="group"][aria-label="Layout"] button[aria-label="Grid"]'));
+    const tiles = [...host.querySelectorAll<HTMLElement>("[data-v2-pane]")].filter(t => t.className.includes("group/tile"));
+    expect(tiles.length).toBe(2);
+    expect(tiles.every(t => t.className.includes("bg-[var(--v2-terminal)]") && t.className.includes("rounded-lg"))).toBe(true);
+    const needing = tiles.find(t => t.hasAttribute("data-needs"));
+    expect(needing?.className).toContain("!border-[var(--v2-warn)]");
+    expect(needing?.textContent).toContain("needs you: approve edit a.ts");
   });
 });
 

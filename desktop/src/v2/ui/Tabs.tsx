@@ -1,6 +1,6 @@
 // One tab bar joined to its pane: the active tab wears the pane's background, an accent line
 // on top and no bottom border, so it reads as part of the pane below (#14241).
-import { useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MutableRefObject, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { IconButton } from "./IconButton";
 
@@ -22,6 +22,10 @@ export type TabSpec<T extends string = string> = {
   closeLabel?: string;
   /** The dirty dot, titled "Unsaved changes". */
   dirty?: boolean;
+  /** Stacked variant only: the second line, under the label. */
+  line2?: ReactNode;
+  /** Stacked variant only: shown in a fixed card above the tab after it has been hovered for a short rest. */
+  hoverCard?: ReactNode;
 };
 
 export type TabsProps<T extends string> = {
@@ -42,7 +46,62 @@ export type TabsProps<T extends string> = {
   end?: ReactNode;
   /** Extra classes for the strip: its height, padding or background. */
   barClassName?: string;
+  /** #14351: two-line tabs (label over line2), 120 to 220px wide, hover wash, optional hover card. */
+  stacked?: boolean;
+  /** Stacked and crowded: inactive tabs shrink to a shared narrow width and hide line 2. */
+  crowded?: boolean;
 };
+
+const REST_MS = 400;
+
+/** Calls show after the pointer has rested on the element for REST_MS; hide on leave. */
+function useRest() {
+  const [shown, setShown] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clear = () => { if (timer.current !== null) { clearTimeout(timer.current); timer.current = null; } };
+  useEffect(() => clear, []);
+  return { shown, props: {
+    onPointerEnter: () => { clear(); timer.current = setTimeout(() => setShown(true), REST_MS); },
+    onPointerLeave: () => { clear(); setShown(false); },
+  } };
+}
+
+function StackedTab<T extends string>({ t, on, i, tabbable, p, buttons, onKeyNav }: {
+  t: TabSpec<T>; on: boolean; i: number; tabbable: number; p: TabsProps<T>;
+  buttons: MutableRefObject<Array<HTMLButtonElement | null>>; onKeyNav: (e: KeyboardEvent<HTMLButtonElement>, i: number) => void;
+}) {
+  const rest = useRest();
+  const box = useRef<HTMLDivElement | null>(null);
+  const small = p.crowded && !on;
+  const rect = rest.shown && t.hoverCard ? box.current?.getBoundingClientRect() : undefined;
+  const style: CSSProperties = { transitionDuration: "var(--v2-dur-1)", minWidth: small ? 96 : 120, maxWidth: small ? 120 : 220 };
+  if (on) Object.assign(style, { background: p.pane, borderBottom: `1px solid ${p.pane}`, marginBottom: "-1px" });
+  return (
+    <div ref={box} {...rest.props} data-active={on || undefined}
+      className={`relative flex shrink-0 items-center rounded-t-md border-x border-t-2 transition-colors ${on ? "border-x-[var(--v2-edge)] border-t-[var(--v2-accent)]" : "border-x-transparent border-t-transparent hover:bg-[var(--v2-row-hover)]"}`}
+      style={style}>
+      <button type="button" role="tab" id={t.buttonId} aria-selected={on} aria-controls={t.controls} title={t.title}
+        tabIndex={i === tabbable ? 0 : -1} ref={el => { buttons.current[i] = el; }}
+        onClick={() => p.onSelect(t.id)} onKeyDown={e => onKeyNav(e, i)}
+        className="flex h-full min-w-0 flex-1 items-center gap-2 border-0 bg-transparent px-2.5 py-1 text-left">
+        {t.leading}
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className={`truncate text-v2-body font-semibold ${on ? "text-[var(--v2-text)]" : "text-[var(--v2-text-2)]"}`}>{t.label}</span>
+          {!small && t.line2 && <span className="truncate text-v2-small text-[var(--v2-muted)]">{t.line2}</span>}
+        </span>
+        {t.sub}
+      </button>
+      {t.close && p.onClose && (
+        <IconButton label={t.closeLabel ?? `Close ${t.label}`} title={t.closeLabel ?? "Close tab"} size={18} onClick={() => p.onClose?.(t.id)}>
+          <X size={11} aria-hidden />
+        </IconButton>
+      )}
+      {rect && (
+        <div role="tooltip" className="v2-hovercard pointer-events-none fixed z-40" style={{ left: rect.left, top: rect.bottom + 4 }}>{t.hoverCard}</div>
+      )}
+    </div>
+  );
+}
 
 export function Tabs<T extends string>(p: TabsProps<T>) {
   const buttons = useRef<Array<HTMLButtonElement | null>>([]);
@@ -62,6 +121,7 @@ export function Tabs<T extends string>(p: TabsProps<T>) {
       <div role="tablist" aria-label={p.label} className="flex min-w-0 items-stretch gap-0.5 overflow-x-auto overflow-y-hidden pt-1">
         {p.tabs.map((t, i) => {
           const on = t.id === p.activeId;
+          if (p.stacked) return <StackedTab key={t.id} t={t} on={on} i={i} tabbable={tabbable} p={p} buttons={buttons} onKeyNav={key} />;
           return (
             <div key={t.id} className={`flex shrink-0 items-center rounded-t-md border-x border-t-2 ${on ? "border-x-[var(--v2-edge)] border-t-[var(--v2-accent)]" : "border-x-transparent border-t-transparent hover:bg-[var(--v2-raised)]"}`}
               style={on ? { background: p.pane, borderBottom: `1px solid ${p.pane}`, marginBottom: "-1px" } : undefined}>

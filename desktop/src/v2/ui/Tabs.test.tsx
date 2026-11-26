@@ -97,4 +97,19 @@ describe("Tabs", () => {
     });
     expect(kinds).toEqual(["lead", "tablist", "actions", "spacer", "end"]);
   });
+
+  // #14351: the stacked variant used by the seat strip.
+  it("stacked tabs show a second line and shrink inactive ones only when crowded", async () => {
+    const specs: TabSpec[] = [{ id: "a", label: "Alpha", line2: "running tests" }, { id: "b", label: "Beta", line2: "idle" }];
+    await act(async () => { root.render(<Tabs label="Stack" pane="var(--v2-bg)" tabs={specs} activeId="a" onSelect={() => {}} stacked />); });
+    const wide = tabs();
+    expect(wide[0].textContent).toBe("Alpharunning tests");
+    expect(wide[1].textContent).toBe("Betaidle");
+    expect(wide[0].parentElement?.style.minWidth).toBe("120px");
+    await act(async () => { root.render(<Tabs label="Stack" pane="var(--v2-bg)" tabs={specs} activeId="a" onSelect={() => {}} stacked crowded />); });
+    const crowded = tabs();
+    expect(crowded[0].textContent).toBe("Alpharunning tests");
+    expect(crowded[1].textContent).toBe("Beta");
+    expect(crowded[1].parentElement?.style.minWidth).toBe("96px");
+  });
 });

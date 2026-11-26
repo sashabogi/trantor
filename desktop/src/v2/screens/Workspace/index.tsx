@@ -10,7 +10,6 @@ import { ChatColumn } from "./ChatColumn";
 import { useChatColumn, useFilesColumn } from "./chatColumnState";
 import { FilesColumn } from "./FilesColumn";
 import { setOpenIntent } from "../../shell/openIntent";
-import { Inspector } from "./Inspector";
 import { usePanes } from "./panes";
 import { useSeats } from "../Code/useSeats";
 import { SeatGrid } from "./SeatGrid";
@@ -115,16 +114,26 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   const openConflict = (path: string) => { setOpenedPath(path); setOpenIntent(project, { kind: "conflict", path, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
   const openCommit = (sha: string) => { setOpenIntent(project, { kind: "commit", sha, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
 
+  // #14351: what each seat needs from you, for the "needs you: approve edit a.ts" line on its tab and tile.
+  const needs = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const s of seats) {
+      const hold = data.holds.find(h => h.session === s.session);
+      if (hold) out[s.key] = `approve edit ${hold.file.split("/").pop()}`;
+    }
+    return out;
+  }, [seats, data.holds]);
+
   let body;
   if (data.error && data.seats === null) body = <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>;
   else if (data.seats === null) body = <div className="m-5 text-v2-base text-[var(--v2-muted)]">Reading seats</div>;
   else if (!selected) body = <EmptyCrew />;
   else if (layout === "focus") {
-    body = <WorkArea client={client} project={project} seat={selected} holds={data.holds.filter(h => h.session === selected.session)}
-      diff={diff} tab={tab} onTab={setTab} messageRef={messageRef} onDecided={data.refresh} />;
+    body = <WorkArea client={client} project={project} seat={selected} card={cardOf(data.cards, selected)} crew={crew} holds={data.holds.filter(h => h.session === selected.session)}
+      diff={diff} tab={tab} onTab={setTab} messageRef={messageRef} onDecided={data.refresh} onNavigate={onNavigate} onMessage={message} />;
   } else {
     body = <SeatGrid project={project} seats={visibleSeats(layout, tileSeats(seats), selected)} layout={layout}
-      selectedKey={selected.key} onFocus={focusSeat} />;
+      selectedKey={selected.key} onFocus={focusSeat} needs={needs} />;
   }
 
   return (
@@ -137,11 +146,8 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
         selectedPath={openedPath} onOpenConflict={openConflict} />
       <div {...pane} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
         {data.error && data.seats !== null && <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>}
-        <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
-          crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />
-        {selected && !selected.isHelper && !selected.agentInfo && <Inspector key={selected.key} project={project} seat={selected} card={cardOf(data.cards, selected)}
-          mayDo={mayDo} crew={crew} onNavigate={onNavigate} onMessage={message} />}
-        {selected?.isHelper && crew.notice && <div role="status" className="px-5 py-2 text-v2-body text-[var(--v2-muted)]">{crew.notice.text}</div>}
+        <SeatStrip project={project} seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
+          crew={crew} onDrill={() => setRecording(r => !r)} cards={data.cards} mayDo={mayDo} needs={needs} />
         {body}
       </div>
       <ChatColumn col={chatCol} workspace={workspaceRef}>

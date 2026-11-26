@@ -1,27 +1,22 @@
-// The work area for one seat: Terminal and Changes, the approval, the message line (#13987, #14053).
-// #14241: the work tabs ride the shared Tabs bar, joined to the pane below them.
-import { lazy, Suspense, type ReactNode, type RefObject } from "react";
-import { FileDiff, SquareTerminal } from "lucide-react";
-import type { FileHold, HubClient } from "../../../shared/api/client";
+// The work area for one seat: the seat bar, Terminal or Changes full bleed, the approval, the message bar (#13987, #14053, #14351).
+import { lazy, Suspense, type RefObject } from "react";
+import type { Card, FileHold, HubClient } from "../../../shared/api/client";
 import { PaneBoundary } from "../../../features/workspace/PaneBoundary";
 import { NotWired } from "../../shell/ClassicLenses";
-import { Tabs } from "../../ui/Tabs";
+import type { Navigate } from "../../routes";
 import { Approval } from "./Approval";
+import { SeatBar, type WorkTab } from "./SeatBar";
 import { usePanes } from "./panes";
 import { takesSeatMessage } from "./seatModel";
 import { SeatMessage } from "./SeatMessage";
+import type { Crew } from "./useCrew";
 import { SubagentPane } from "./SubagentPane";
 import type { SeatView } from "./seatModel";
 import type { DiffState } from "./useSeatDiff";
 
 const ChangesTab = lazy(() => import("./ChangesTab"));
 
-export type WorkTab = "terminal" | "changes";
-
-const TABS: { id: WorkTab; label: string; icon: ReactNode }[] = [
-  { id: "terminal", label: "Terminal", icon: <SquareTerminal size={12} aria-hidden /> },
-  { id: "changes", label: "Changes", icon: <FileDiff size={12} aria-hidden /> },
-];
+export type { WorkTab };
 
 /** The live terminal for one seat; shared by Focus, Split and Grid so they never drift (#13987). */
 export function SeatTerminal({ project, seat, interactive }: { project: string; seat: SeatView; interactive: boolean }) {
@@ -40,7 +35,7 @@ export function SeatPane({ project, seat, interactive }: { project: string; seat
 
 function TabBody({ tab, project, seat, diff }: { tab: WorkTab; project: string; seat: SeatView; diff: DiffState }) {
   if (tab === "terminal") {
-    return <div className="flex min-h-[360px] min-w-0 flex-1 flex-col p-2"><SeatTerminal project={project} seat={seat} interactive /></div>;
+    return <div className="flex min-h-[360px] min-w-0 flex-1 flex-col bg-[var(--v2-terminal)]"><SeatTerminal project={project} seat={seat} interactive /></div>;
   }
   if (seat.isHelper) return <NotWired title="Changes" line="Helpers keep their output in the terminal." />;
   if (seat.isOrchestrator) return <NotWired title="Changes" line="The orchestrator works in the project checkout; open Code to review it." />;
@@ -48,9 +43,10 @@ function TabBody({ tab, project, seat, diff }: { tab: WorkTab; project: string; 
   return <Suspense fallback={<div className="p-4 text-v2-base text-[var(--v2-muted)]">Loading the diff view</div>}><ChangesTab state={diff} seatName={seat.label} /></Suspense>;
 }
 
-export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messageRef, onDecided }: {
-  client: HubClient; project: string; seat: SeatView; holds: FileHold[]; diff: DiffState;
+export function WorkArea({ client, project, seat, card, crew, holds, diff, tab, onTab, messageRef, onDecided, onNavigate, onMessage }: {
+  client: HubClient; project: string; seat: SeatView; card: Card | undefined; crew: Crew; holds: FileHold[]; diff: DiffState;
   tab: WorkTab; onTab: (t: WorkTab) => void; messageRef: RefObject<HTMLInputElement | null>; onDecided: () => void;
+  onNavigate: Navigate; onMessage: () => void;
 }) {
   const changed = diff.diff?.files.length ?? 0;
   // #14265: a sub-agent is read-only, so its pane has no Terminal and Changes tabs, no approval and no message box.
@@ -58,18 +54,7 @@ export function WorkArea({ client, project, seat, holds, diff, tab, onTab, messa
   return (
     // #14250: the centre column is the panel, so the work area carries no frame of its own.
     <div className="flex min-h-0 flex-1 flex-col">
-      <Tabs label="Seat views" pane="var(--v2-bg)" barClassName="h-9 bg-[var(--v2-sunken)] px-2"
-        tabs={TABS.map(t => ({
-          id: t.id,
-          label: t.label,
-          leading: t.icon,
-          sub: t.id === "changes" && changed > 0 ? <span className="rounded-lg bg-[var(--v2-edge)] px-[5px] text-v2-micro">{changed}</span> : undefined,
-        }))}
-        activeId={tab} onSelect={onTab}
-        end={<span className="inline-flex items-center gap-[5px] text-v2-small text-[var(--v2-muted)]">
-          <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: seat.presence === "offline" ? "var(--v2-track)" : "var(--v2-ok)" }} />
-          {seat.isHelper ? seat.words : seat.presence === "offline" ? "offline" : "live"}{seat.machine ? ` · ${seat.machine}` : ""}
-        </span>} />
+      <SeatBar project={project} seat={seat} card={card} crew={crew} tab={tab} onTab={onTab} changed={changed} onNavigate={onNavigate} onMessage={onMessage} />
       <TabBody tab={tab} project={project} seat={seat} diff={diff} />
       <Approval client={client} holds={holds} seatName={seat.label} onDecided={onDecided} />
       {/* #14254: the orchestrator is spoken to in the chat panel, so its pane carries no message box. */}

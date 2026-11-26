@@ -134,7 +134,9 @@ describe("TerminalPane", () => {
       await Promise.resolve();
     });
 
-    const measured = Number((host.textContent ?? "").match(/echo (\d+)ms/)?.[1]);
+    // #14351: the badge shows only when the echo is slow, so a fast echo is read off the pane's data attribute.
+    const measured = Number(host.querySelector("[data-echo-ms]")?.getAttribute("data-echo-ms"));
+    expect(host.textContent ?? "").not.toContain("echo ");
     console.log(`terminal_echo_latency_ms=${measured}`);
     expect(measured).toBeGreaterThanOrEqual(0);
     expect(measured).toBeLessThan(100);

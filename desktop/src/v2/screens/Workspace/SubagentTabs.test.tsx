@@ -82,7 +82,7 @@ describe("sub-agent tabs", () => {
   it("gives each running sub-agent a read-only tab after the crew seats, with an agent badge and a pulsing dot", async () => {
     agents = [agent("a1", "Review the diff", "running"), agent("a2", "Write the tests", "running")];
     await mount();
-    expect(tabs().map(t => t.textContent)).toEqual([expect.stringContaining("codex-8"), expect.stringContaining("Review the diffagentrunning"), expect.stringContaining("Write the testsagentrunning")]);
+    expect(tabs().map(t => t.textContent)).toEqual([expect.stringContaining("codex-8"), expect.stringContaining("Review the diffrunningagent"), expect.stringContaining("Write the testsrunningagent")]);
     expect(tabFor("Review the diff")?.querySelector('[role="img"][aria-label="Running"].v2-agent-pulse')).not.toBeNull();
     await click(tabFor("Review the diff"));
     expect(host.querySelector('[data-testid="subagent-pane"]')?.getAttribute("data-agent-id")).toBe("a1");
