@@ -60,7 +60,26 @@ fn project_scope_resolves_the_checkout_and_rejects_traversal() {
     assert!(project_checkout_in(&dev, "../acme").is_err());
     assert!(project_checkout_in(&dev, "a/b").is_err());
     assert!(project_checkout_in(&dev, " ").is_err());
-    assert!(project_checkout_in(&dev, "missing").is_err());
+    assert!(project_checkout_with(&dev, "missing", |_| None).is_err());
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn a_checkout_chosen_outside_the_root_reaches_the_git_screens() {
+    // #14306: "Choose the folder for <project>" saved a folder the Explorer and chat found, while
+    // every git screen still said "no local checkout" because it only searched the root.
+    let (tmp, repo) = fixture("outside");
+    let empty_root = tmp.join("empty-root");
+    std::fs::create_dir_all(&empty_root).unwrap();
+    let found = project_checkout_with(&empty_root, "acme", |id| (id == "acme").then(|| repo.clone())).unwrap();
+    assert_eq!(found, repo);
+    // the root still wins when the project lives there, and the fallback is not consulted
+    let dev = tmp.join("dev");
+    let mut asked = false;
+    assert_eq!(project_checkout_with(&dev, "acme", |_| { asked = true; None }).unwrap(), repo);
+    assert!(!asked, "a project under the root never consults the fallback");
+    // a bad id never reaches the fallback
+    assert!(project_checkout_with(&empty_root, "../acme", |_| Some(repo.clone())).is_err());
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

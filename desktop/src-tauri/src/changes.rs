@@ -56,7 +56,7 @@ pub(crate) fn project_changes_sync(project: &str) -> Result<Vec<ChangeRow>, Stri
         return Err("project is invalid".into());
     }
     let dev_root = identity::dev_root();
-    let checkout = identity::checkout_for(&dev_root, project).unwrap_or_else(|| dev_root.join(project));
+    let checkout = crate::git_scope::project_checkout_in(&dev_root, project).unwrap_or_else(|_| dev_root.join(project));
     let seats_root = desktop_bus_dir().join("worktrees").join(project);
 
     let mut rows = collect_changes_for_root(&checkout, None);

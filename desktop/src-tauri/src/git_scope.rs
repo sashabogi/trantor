@@ -39,10 +39,23 @@ pub(crate) fn parse_scope(agent: Option<&str>, scope: Option<&str>) -> Result<Gi
 /// The project's main checkout under `dev_root`, by the same lookup the file commands use
 /// (checkout_for: the id a renamed checkout records wins over the directory name).
 pub(crate) fn project_checkout_in(dev_root: &Path, project: &str) -> Result<std::path::PathBuf, String> {
+    project_checkout_with(dev_root, project, crate::projects_folder::project_dir)
+}
+
+/// The root first, as always; on a miss, the same resolver the rest of the app uses (#14306: a
+/// folder chosen by hand for one project, then Claude Code's records). Without the fallback the
+/// Explorer and chat found such a project while every git screen said "no local checkout".
+pub(crate) fn project_checkout_with(
+    dev_root: &Path,
+    project: &str,
+    fallback: impl FnOnce(&str) -> Option<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, String> {
     if project.trim().is_empty() || project.contains("..") || project.contains('/') {
         return Err("project is invalid".into());
     }
-    identity::checkout_for(dev_root, project).ok_or_else(|| format!("no local checkout for {project}"))
+    identity::checkout_for(dev_root, project)
+        .or_else(|| fallback(project))
+        .ok_or_else(|| format!("no local checkout for {project}"))
 }
 
 pub(crate) fn scope_dir_in(
