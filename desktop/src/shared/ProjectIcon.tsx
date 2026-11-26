@@ -35,6 +35,22 @@ export function monogramFor(project: string): string {
   return (words[0][0]! + words[1][0]!).toUpperCase();
 }
 
+/** The project's own art as a data URI, or null (no art, still loading, or it failed to decode).
+ *  Shared by the classic ProjectIcon and the 2.0 ProjectTile, so both read one cache. `broken`
+ *  is for an <img> onError: it records "no art" so the monogram takes over everywhere. */
+export type ProjectArt = { src: string | null; broken: () => void };
+export function useProjectIcon(project: string): ProjectArt {
+  const [src, setSrc] = useState<string | null>(() => CACHE.get(project) ?? null);
+  useEffect(() => {
+    let alive = true;
+    if (CACHE.has(project)) { setSrc(CACHE.get(project)!); return; }
+    setSrc(null);
+    void load(project).then(v => { if (alive) setSrc(v); });
+    return () => { alive = false; };
+  }, [project]);
+  return { src, broken: () => { CACHE.set(project, null); setSrc(null); } };
+}
+
 export function ProjectIcon({ project, size = 20 }: { project: string; size?: number }) {
   const [src, setSrc] = useState<string | null>(() => CACHE.get(project) ?? null);
 
