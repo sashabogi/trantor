@@ -1,7 +1,4 @@
-// A thin column of ticks on the chat's left edge: one per message the operator sent, read from the chat's DOM (#14075).
-// #14327: 8x2px ticks on a 6px pitch, muted at half strength, the ones on screen at 90%, the active one
-// wider and taller in the text colour. It overlays the transcript's gutter from the top, so it takes no width.
-// #14250: ticks widen around the pointer and the card explains: place, reply's first line, worked time.
+// Prompt ticks follow the transcript centre on the right edge; cards open toward the chat.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ago } from "../../../shared/time";
 import { activeIndex, readPrompts, samePrompts, showsTimeline, tickLabel, tickWidth, workedText, type PromptItem } from "./promptTicks";
@@ -21,6 +18,8 @@ function useTimeline(root: RefObject<HTMLElement | null>) {
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [active, setActive] = useState(0);
   const [onScreen, setOnScreen] = useState<boolean[]>([]);
+  const [bounds, setBounds] = useState<{ top: number; height: number } | null>(null);
+  const resize = useRef<ResizeObserver | null>(null);
   const scroller = useRef<HTMLElement | null>(null);
   const sync = useCallback(() => {
     const host = root.current;
@@ -30,12 +29,18 @@ function useTimeline(root: RefObject<HTMLElement | null>) {
     setPrompts(prev => (samePrompts(prev, next) ? prev : next));
     const sc = els[0] ? scrollerOf(els[0], host) : null;
     if (sc !== scroller.current) {
+      if (scroller.current) resize.current?.unobserve(scroller.current);
+      if (sc) resize.current?.observe(sc);
       scroller.current?.removeEventListener("scroll", sync);
       sc?.addEventListener("scroll", sync, { passive: true });
       scroller.current = sc;
     }
     if (!sc) return;
     const base = sc.getBoundingClientRect();
+    if (base.height > 0) {
+      const top = base.top - host.getBoundingClientRect().top;
+      setBounds(prev => prev?.top === top && prev.height === base.height ? prev : { top, height: base.height });
+    }
     const rects = els.map(e => e.getBoundingClientRect());
     setActive(activeIndex(rects.map(r => r.top - base.top)));
     const seen = rects.map(r => r.bottom > base.top && r.top < base.bottom);
@@ -51,27 +56,30 @@ function useTimeline(root: RefObject<HTMLElement | null>) {
     const mo = new MutationObserver(soon);
     mo.observe(host, { childList: true, subtree: true, characterData: true });
     const ro = "ResizeObserver" in globalThis ? new ResizeObserver(soon) : null;
+    resize.current = ro;
     ro?.observe(host);
+    // Composer growth and header status can resize the transcript without resizing the host.
+    if (scroller.current) ro?.observe(scroller.current);
     return () => {
-      mo.disconnect(); ro?.disconnect(); cancelAnimationFrame(frameId);
+      mo.disconnect(); ro?.disconnect(); resize.current = null; cancelAnimationFrame(frameId);
       scroller.current?.removeEventListener("scroll", sync); scroller.current = null;
     };
   }, [root, sync]);
   const jump = useCallback((id: string) => {
     const els = Array.from(root.current?.querySelectorAll<HTMLElement>(SELECTOR) ?? []);
-    els.find(e => e.getAttribute("data-prompt-id") === id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    els.find(e => e.getAttribute("data-prompt-id") === id)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
   }, [root]);
-  return { prompts, active, onScreen, jump };
+  return { prompts, active, onScreen, jump, bounds };
 }
 
 const baseName = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 
-/** Where the card hangs: the tick row's vertical middle and the window x of the row's right edge. */
-type Anchor = { y: number; left: number };
+/** Where the card hangs: the tick row's vertical middle and the window x of the row's left edge. */
+type Anchor = { y: number; right: number };
 
 const anchorOf = (row: HTMLElement): Anchor => {
   const r = row.getBoundingClientRect();
-  return { y: r.top + r.height / 2, left: r.right };
+  return { y: r.top + r.height / 2, right: window.innerWidth - r.left };
 };
 
 function Card({ prompt, index, total, at, onOpenChange }: { prompt: PromptItem; index: number; total: number; at: Anchor; onOpenChange: (path: string) => void }) {
@@ -85,7 +93,7 @@ function Card({ prompt, index, total, at, onOpenChange }: { prompt: PromptItem; 
     // No gap and real pointer events (#14084): the card must be reachable from its tick so a
     // file name can be clicked, and hover crossing from tick to card must not close it.
     // #14254: fixed to the window, because the tick column scrolls and would clip a card positioned inside it.
-    <div role="tooltip" style={{ top: at.y, left: at.left }} className="v2-fade-in fixed z-30 w-60 -translate-y-1/2 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-left shadow-lg">
+    <div role="tooltip" style={{ top: at.y, right: at.right }} className="v2-fade-in fixed z-30 w-60 -translate-y-1/2 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-2.5 py-2 text-left shadow-lg">
       <div className="v2-mono text-v2-small text-[var(--v2-muted)]">{index + 1} / {total}</div>
       <div className="mt-0.5 text-v2-body font-medium leading-snug text-[var(--v2-text)]" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{prompt.text}</div>
       {prompt.reply !== undefined && <div className="mt-0.5 truncate text-v2-body text-[var(--v2-text-2)]">{prompt.reply}</div>}
@@ -109,9 +117,9 @@ function Card({ prompt, index, total, at, onOpenChange }: { prompt: PromptItem; 
 }
 
 export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLElement | null>; onOpenChange: (path: string) => void }) {
-  const { prompts, active, onScreen, jump } = useTimeline(root);
+  const { prompts, active, onScreen, jump, bounds } = useTimeline(root);
   const [shown, setShown] = useState<number | null>(null);
-  const [at, setAt] = useState<Anchor>({ y: 0, left: 0 });
+  const [at, setAt] = useState<Anchor>({ y: 0, right: 0 });
   const [rove, setRove] = useState<number | null>(null);
   const ticks = useRef<Array<HTMLButtonElement | null>>([]);
   const onKey = (e: KeyboardEvent, i: number) => {
@@ -123,10 +131,14 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
   };
   if (!showsTimeline(prompts.length)) return null;
   const tabbable = Math.min(rove ?? active, prompts.length - 1);
+  const maxHeight = bounds ? Math.max(0, bounds.height - 36) : undefined;
+  // A transform here would make the fixed hover cards relative to the nav, not the viewport.
+  const placement = { top: bounds ? bounds.top + bounds.height / 2 : undefined, maxHeight,
+    marginTop: -Math.min(prompts.length * 8, maxHeight ?? Infinity) / 2 };
   return (
-    <nav aria-label="Prompt timeline" className="pointer-events-none absolute left-[3px] top-[18px] z-10 flex max-h-[calc(100%-36px)] w-7 flex-col items-start overflow-y-auto">
+    <nav aria-label="Prompt timeline" style={placement} className="pointer-events-none absolute right-[3px] top-1/2 z-10 flex max-h-[calc(100%-36px)] w-7 flex-col items-end overflow-y-auto">
       {prompts.map((p, i) => (
-        <div key={p.id} className="pointer-events-auto relative flex h-1.5 w-full shrink-0 items-center justify-start"
+        <div key={p.id} className="pointer-events-auto relative flex h-2 w-full shrink-0 items-center justify-end"
           onMouseEnter={e => { setAt(anchorOf(e.currentTarget)); setShown(i); }} onMouseLeave={() => setShown(null)}
           onFocus={e => { setAt(anchorOf(e.currentTarget)); setShown(i); setRove(i); }}
           onBlur={e => {
@@ -136,9 +148,9 @@ export function PromptTimeline({ root, onOpenChange }: { root: RefObject<HTMLEle
           <button type="button" ref={el => { ticks.current[i] = el; }} aria-label={tickLabel(i, prompts.length, p.text)}
             aria-current={i === active ? "true" : undefined} tabIndex={i === tabbable ? 0 : -1}
             onClick={() => jump(p.id)} onKeyDown={e => onKey(e, i)}
-            className="flex h-full w-full items-center justify-start">
-            {/* #14250: width follows the pointer (or rests on 8px, the active one 14px), strength follows the state. */}
-            <span aria-hidden className={`v2-tick block rounded-full ${i === active ? "h-[2.5px] bg-[var(--v2-text)]" : `h-[2px] bg-[var(--v2-muted)] ${onScreen[i] ? "opacity-90" : "opacity-50"}`} ${shown === null ? (i === active ? "w-3.5" : "w-2") : ""}`}
+            className="flex h-full w-full items-center justify-end">
+            {/* #14250: width follows the pointer (or rests on 10px, the active one 16px), strength follows the state. */}
+            <span aria-hidden className={`v2-tick block h-[2px] origin-right rounded-full ${i === active ? "bg-[var(--v2-accent)]" : `bg-[var(--v2-text-2)] ${onScreen[i] ? "opacity-75" : "opacity-45"}`} ${shown === null ? (i === active ? "w-4" : "w-2.5") : ""}`}
               style={shown === null ? undefined : { width: `${tickWidth(i - shown)}px` }} />
           </button>
           {shown === i && <Card prompt={p} index={i} total={prompts.length} at={at} onOpenChange={onOpenChange} />}

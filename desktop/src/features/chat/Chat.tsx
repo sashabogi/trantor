@@ -19,7 +19,7 @@ import { askLeadIn, CC_LEAD_IN, declaredFromQuestion, selectChips, trimAsk, type
 import { SuggestionChips } from "./SuggestionChips";
 import { isPinned } from "./scrollPin";
 import { LatestPill } from "../../v2/chat/LatestPill";
-import { StatusLine } from "../../v2/chat/StatusLine";
+import { ChatHeader, type ChatHeaderState } from "../../v2/screens/Workspace/ChatHeader";
 import { Transcript } from "../../v2/chat/Transcript";
 import { batch, group } from "./groupTurns";
 import {
@@ -427,9 +427,11 @@ function decodeOrchStatus(payload: OrchStatusRaw): OrchStatusDecoded {
   };
 }
 
-export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS, emptyAction, variant = "classic" }: {
+export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS, emptyAction, variant = "classic", renderHeader }: {
   project: string; sessionId?: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
-  /** #14327: "v2" draws the 2.0 transcript and status line, and leaves the header to the 2.0 shell. */
+  /** The shell adds workspace actions to the session header through this render seam. */
+  renderHeader?: (state: ChatHeaderState) => ReactNode;
+  /** #14327: "v2" draws the 2.0 transcript and a single session header. */
   variant?: "classic" | "v2";
   /** #14271: the 2.0 panel's replacement for the "no session hosted" sentence (it carries Start orchestrator). */
   emptyAction?: ReactNode;
@@ -1165,6 +1167,23 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // #14250: each prompt's reply line and worked time, on the same grouped list.
   const facts = promptFacts(grouped);
 
+  const firstPrompt = chat.turns.find(t => t.role === "user" && !isDividerTurn(t));
+  const headerState: ChatHeaderState = {
+    title: firstPrompt?.blocks.filter(b => b.kind === "text").map(b => b.text).join(" ").replace(/\s+/g, " ").trim() || "New chat",
+    branch: chat.meta.branch,
+    tone: wakeNote ? (wakeNote.kind === "outcome" ? "ok" : "doing") : status === "blocked" ? "warn" : "doing",
+    text: history ? null : wakeNote?.text ?? ticker,
+    model: chat.meta.model,
+    handoff: target && !history ? {
+      confirming: handoffConfirm,
+      disabledReason: handoffBusy ? "A handoff is already running" : liveness.live ? null : liveness.why,
+      onAsk: () => setHandoffConfirm(true),
+      onConfirm: () => { setHandoffConfirm(false); startHandoff("clicked"); },
+      onCancel: () => setHandoffConfirm(false),
+    } : null,
+    onBack: hosted && history ? onClose : null,
+  };
+
   return (
     <div
       ref={root}
@@ -1184,21 +1203,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           ? "absolute inset-y-0 left-0 z-10 w-[5px] cursor-col-resize hover:bg-white/[0.06]"
           : "absolute inset-x-0 top-0 z-10 h-[5px] cursor-row-resize hover:bg-white/[0.06]"}
       />}
-      {v2 && (
-        <StatusLine
-          tone={wakeNote ? (wakeNote.kind === "outcome" ? "ok" : "doing") : status === "blocked" ? "warn" : "doing"}
-          text={wakeNote?.text ?? ticker ?? (history ? `Claude session ${sessionId}` : null)}
-          model={chat.meta.model}
-          handoff={target && !history ? {
-            confirming: handoffConfirm,
-            disabledReason: handoffBusy ? "A handoff is already running" : liveness.live ? null : liveness.why,
-            onAsk: () => setHandoffConfirm(true),
-            onConfirm: () => { setHandoffConfirm(false); startHandoff("clicked"); },
-            onCancel: () => setHandoffConfirm(false),
-          } : null}
-          onBack={hosted && history ? onClose : null}
-        />
-      )}
+      {v2 && (renderHeader ? renderHeader(headerState) : <ChatHeader state={headerState} />)}
       {!v2 && (<>
       {/* One row that cannot wrap. Every part is shrink-0 except the project name, which truncates,
           because a header that reflows into three lines is what "mangled" looked like. */}

@@ -198,7 +198,7 @@ export function Composer2(p: Composer2Props) {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
   };
   return (
-    <div ref={att?.rootRef} data-v2-composer className="v2-composer flex min-w-0 flex-col gap-1.5 rounded-xl px-2.5 pt-2.5 pb-2">
+    <div ref={att?.rootRef} data-v2-composer className="v2-composer isolate flex min-w-0 flex-col gap-1.5 rounded-xl px-2.5 pt-2.5 pb-2">
       {p.busy && <span className="v2-composer-sweep" aria-hidden="true"><span className="v2-sweep" /></span>}
       <label htmlFor={id} className="sr-only">{p.label}</label>
       <textarea id={id} ref={box} rows={2} value={p.value} placeholder={p.placeholder}

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // #14075: one tick per operator message, hover card, jump, active tick, arrow keys, hidden under two prompts.
 // #14084: the card also shows the send time and the files the prompt changed, clickable into Code.
-// #14327: the column sits on the chat's left edge as an overlay with 8px ticks. #14250: the card reads "N / total", the reply's first line and "Worked 4m · 2h ago"; ticks widen with the pointer.
+// #14327: the column sits on the chat's right edge with 10px ticks. #14250: the card reads "N / total", the reply's first line and "Worked 4m · 2h ago"; ticks widen with the pointer.
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -222,24 +222,48 @@ describe("PromptTimeline", () => {
     expect(buttons().map(b => b.getAttribute("aria-current"))).toEqual([null, null, "true"]);
   });
 
-  it("#14327: sits on the left edge as an overlay, 8x2 ticks muted, the active one 14 wide and 2.5 tall in the text colour", async () => {
+  it("#14327: sits on the right edge, centred, with 10x2 ticks and a 16x2 accent active tick", async () => {
     await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }]);
     const nav = host.querySelector('nav[aria-label="Prompt timeline"]');
     expect(nav?.className).toContain("absolute");
-    expect(nav?.className).toContain("left-[3px]");
-    expect(nav?.className).toContain("top-[18px]");
+    expect(nav?.className).toContain("right-[3px]");
+    expect(nav?.className).toContain("top-1/2");
     const spans = buttons().map(b => b.querySelector("span"));
-    expect(spans[0]?.className).toContain("w-2");
+    expect(spans[0]?.className).toContain("w-2.5");
     expect(spans[0]?.className).toContain("h-[2px]");
-    expect(spans[0]?.className).toContain("bg-[var(--v2-muted)]");
-    expect(spans[0]?.className).toContain("opacity-50");
-    expect(spans[2]?.className).toContain("w-3.5");
-    expect(spans[2]?.className).toContain("h-[2.5px]");
-    expect(spans[2]?.className).toContain("bg-[var(--v2-text)]");
-    expect(buttons()[0]?.parentElement?.className).toContain("h-1.5");
+    expect(spans[0]?.className).toContain("bg-[var(--v2-text-2)]");
+    expect(spans[0]?.className).toContain("opacity-45");
+    expect(spans[2]?.className).toContain("w-4");
+    expect(spans[2]?.className).toContain("h-[2px]");
+    expect(spans[2]?.className).toContain("bg-[var(--v2-accent)]");
+    expect(buttons()[0]?.parentElement?.className).toContain("h-2");
   });
 
-  it("#14327: the prompts on screen read at 90%, the rest at 50%", async () => {
+  it("centres within the transcript viewport, excluding the header and composer", async () => {
+    await mount([{ id: "0", text: "a" }, { id: "1", text: "b" }]);
+    scroller.getBoundingClientRect = () => new DOMRect(0, 60, 400, 300);
+    await act(async () => { scroller.dispatchEvent(new Event("scroll")); });
+    const nav = host.querySelector<HTMLElement>("nav");
+    expect(nav?.style.top).toBe("210px");
+    expect(nav?.style.maxHeight).toBe("264px");
+    expect(nav?.style.marginTop).toBe("-8px");
+    expect(nav?.className).not.toContain("translate");
+  });
+
+  it("jumps without animation when reduced motion is requested", async () => {
+    // SAFETY: jump reads only matches from the media query result.
+    const media = vi.spyOn(window, "matchMedia").mockReturnValue({ matches: true } as MediaQueryList);
+    try {
+      await mount([{ id: "0", text: "a" }, { id: "1", text: "b" }]);
+      // SAFETY: mount creates divs.
+      const target = scroller.children[1] as HTMLElement;
+      target.scrollIntoView = vi.fn();
+      await act(async () => { buttons()[1].click(); });
+      expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "start" });
+    } finally { media.mockRestore(); }
+  });
+
+  it("#14327: the prompts on screen read at 75%, the rest at 45%", async () => {
     await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }]);
     // SAFETY: the timeline reads only top and bottom from a rect.
     const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
@@ -248,18 +272,18 @@ describe("PromptTimeline", () => {
     Array.from(scroller.children).forEach((c, i) => { c.getBoundingClientRect = () => spots[i]; });
     await act(async () => { scroller.dispatchEvent(new Event("scroll")); });
     const spans = buttons().map(b => b.querySelector("span"));
-    // The first prompt is the active one (its top is above the viewport), so it takes the text colour instead.
-    expect(spans[0]?.className).toContain("bg-[var(--v2-text)]");
-    expect(spans[1]?.className).toContain("opacity-90");
-    expect(spans[2]?.className).toContain("opacity-50");
+    // The first prompt is the active one (its top is above the viewport), so it takes the accent colour instead.
+    expect(spans[0]?.className).toContain("bg-[var(--v2-accent)]");
+    expect(spans[1]?.className).toContain("opacity-75");
+    expect(spans[2]?.className).toContain("opacity-45");
   });
 
-  it("#14327: the hover card opens to the right of its tick", async () => {
+  it("#14327: the hover card opens to the left of its tick", async () => {
     await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }]);
     await act(async () => { buttons()[0].focus(); });
     const card = host.querySelector<HTMLElement>('[role="tooltip"]');
-    expect(card?.style.left).toBe("0px");
-    expect(card?.style.right).toBe("");
+    expect(card?.style.right).toBe(`${window.innerWidth}px`);
+    expect(card?.style.left).toBe("");
   });
 
   it("#14250: ticks widen around the pointer (24, 20, 17, 14) and rest when it leaves", async () => {
@@ -268,8 +292,10 @@ describe("PromptTimeline", () => {
     await act(async () => { buttons()[1].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })); });
     expect(spans().map(s => s?.style.width)).toEqual(["20px", "24px", "20px", "17px", "14px"]);
     expect(spans()[1]?.className).toContain("v2-tick");
+    expect(spans()[1]?.className).toContain("origin-right");
+    expect(buttons()[1].className).toContain("justify-end");
     await act(async () => { buttons()[1].dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: null })); });
     expect(spans().map(s => s?.style.width)).toEqual(["", "", "", "", ""]);
-    expect(spans()[0]?.className).toContain("w-2");
+    expect(spans()[0]?.className).toContain("w-2.5");
   });
 });

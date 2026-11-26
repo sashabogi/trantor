@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// #14327: Chat hosted by the 2.0 shell draws the 2.0 transcript and one slim status line instead of the
+// #14327: Chat hosted by the 2.0 shell draws the 2.0 transcript and one session header instead of the
 // classic header, and nothing the classic header did is lost: the model, the status line, Hand off and its confirm.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -13,20 +13,20 @@ import type { Block, ToolResult, Turn } from "../../features/chat/streaming";
 
 type Call = { cmd: string; args?: InvokeArgs };
 
-const meta = (model: string) => ({ model, version: "", branch: "", context: { tokens: null, window: 0, frac: null } });
+const meta = (model: string, branch = "") => ({ model, version: "", branch, context: { tokens: null, window: 0, frac: null } });
 
 type Answered = string | string[] | null | { current: number; generation: number };
 // SAFETY: Chat types each invoke by the command it sends and the fake answers that command's own shape.
 const answer = <T,>(value: Answered): T => value as T;
 
 /** An in-memory ChatDeps over a fixed transcript; the heavy children render nothing. */
-function makeDeps(turns: Turn[], results: ToolResult[], opts: { model?: string; status?: string; pane?: boolean } = {}) {
+function makeDeps(turns: Turn[], results: ToolResult[], opts: { model?: string; status?: string; pane?: boolean; branch?: string } = {}) {
   const calls: Call[] = [];
   const handlers = new Map<string, Array<(ev: { payload: unknown }) => void>>();
   const deps: ChatDeps = {
     invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
       calls.push({ cmd, args });
-      if (cmd === "orchestrator_chat") return Promise.resolve(answer<T>(JSON.stringify([turns, results, turns.length, meta(opts.model ?? ""), []])));
+      if (cmd === "orchestrator_chat") return Promise.resolve(answer<T>(JSON.stringify([turns, results, turns.length, meta(opts.model ?? "", opts.branch), []])));
       if (cmd === "chat_watch") return Promise.resolve(answer<T>({ current: turns.length, generation: 1 }));
       if (cmd === "orchestrator_status") return Promise.resolve(answer<T>(opts.status ?? "idle"));
       if (cmd === "wake_in_progress") return Promise.resolve(answer<T>([]));
@@ -65,7 +65,7 @@ const talk: Turn[] = [
 ];
 
 describe("Chat in the 2.0 shell", () => {
-  it("renders the 2.0 transcript, not the classic bubbles, and no classic header or speaker labels", async () => {
+  it("renders the 2.0 transcript, not the classic bubbles, and one header and no classic speaker labels", async () => {
     const { deps } = makeDeps(talk, [{ tool_id: "t1", ok: true, preview: "x" }], { model: "fable" });
     await mount(deps);
     expect(host.querySelector('[data-testid="transcript"]')).not.toBeNull();
@@ -73,7 +73,7 @@ describe("Chat in the 2.0 shell", () => {
     expect(host.textContent).toContain("It builds.");
     expect(host.textContent).not.toContain("Orchestrator");
     expect(host.textContent?.toLowerCase()).not.toMatch(/\byou\b/);
-    expect(host.querySelectorAll("header, [role=banner]")).toHaveLength(0);
+    expect(host.querySelectorAll("header, [role=banner]")).toHaveLength(1);
   });
 
   it("keeps the classic rendering for the classic variant", async () => {
@@ -84,14 +84,24 @@ describe("Chat in the 2.0 shell", () => {
     expect(host.textContent).toContain("Orchestrator");
   });
 
-  it("carries the model the session reported on the status line", async () => {
+  it("carries the model the session reported in the header", async () => {
     const { deps } = makeDeps(talk, [], { model: "fable" });
     await mount(deps);
-    const status = host.querySelector('[data-testid="chat-status"]');
+    const status = host.querySelector("header");
     expect(status?.textContent).toContain("fable");
   });
 
-  it("shows what the session is doing on the status line", async () => {
+  it("wires the first prompt and session branch into the single header", async () => {
+    const { deps } = makeDeps([{ role: "user", blocks: [say("  Fix   the login\nform  ")] }], [], { model: "claude-opus-5-5", branch: "chat-checkout" });
+    await mount(deps);
+    const header = host.querySelector("header");
+    expect(header?.querySelector('[title="Fix the login form"]')).not.toBeNull();
+    expect(header?.querySelector('[title="chat-checkout"]')).not.toBeNull();
+    expect(header?.textContent).toContain("Opus 5.5");
+    expect(host.querySelector('[data-testid="chat-status"]')).toBeNull();
+  });
+
+  it("shows what the session is doing in the header", async () => {
     const { deps } = makeDeps(talk, [], { status: "working" });
     await mount(deps);
     expect(host.querySelector('[data-testid="chat-status"]')?.textContent).toMatch(/working/i);
@@ -136,7 +146,8 @@ describe("Chat in the 2.0 shell", () => {
     const past = makeDeps(talk, []);
     await mount(past.deps, { sessionId: "sess-1", onClose: () => { closed++; } });
     expect(button("Hand off")).toBeNull();
-    expect(host.querySelector('[data-testid="chat-status"]')?.textContent).toContain("Claude session sess-1");
+    expect(host.querySelector("header")?.textContent).toContain("check the build");
+    expect(host.querySelector('[data-testid="chat-status"]')).toBeNull();
     await click(button("Back"));
     expect(closed).toBe(1);
   });

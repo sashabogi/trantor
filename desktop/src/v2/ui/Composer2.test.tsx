@@ -49,10 +49,12 @@ function type(text: string) {
 }
 
 describe("Composer2", () => {
-  it("puts focus on the rounded container and leaves the text field without an outline class", () => {
+  it("isolates the soft glow behind the rounded container and leaves the field without a ring", () => {
     act(() => root.render(<Harness onSend={() => {}} />));
     const composer = q("[data-v2-composer]");
     expect(composer?.classList.contains("v2-composer")).toBe(true);
+    expect(composer?.classList.contains("isolate")).toBe(true);
+    expect(composer?.className).not.toMatch(/ring|overflow-hidden/);
     expect(composer?.classList.contains("rounded-xl")).toBe(true);
     expect(composer?.contains(host.querySelector("textarea"))).toBe(true);
     expect(host.querySelector("textarea")?.className).not.toMatch(/outline|ring/);

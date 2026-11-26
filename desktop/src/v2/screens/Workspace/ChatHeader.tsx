@@ -1,8 +1,12 @@
-// The chat column's icon row: New chat menu, Sessions sheet, Git (opens Code), the menu and close (#13987 drill).
-// Classic Chat keeps its own title, model and Hand off row underneath, so this row carries no second title.
+// One header for the session identity, live controls and workspace actions.
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Clock, GitBranch, MoreHorizontal, Plus, X } from "lucide-react";
+import { brandFor } from "../../../shared/Avatar";
+import { StatusLine, type StatusLineProps } from "../../chat/StatusLine";
+import { brandOfModel } from "../../ui/identity";
+import { useOwnMachineId } from "../../ui/useMachineId";
+import { Chip } from "../../ui/Chip";
 import { Avatar } from "../../ui/Avatar";
 import { IconButton } from "../../ui/IconButton";
 import { MenuItem, Popover } from "../../shell/Popover";
@@ -44,16 +48,49 @@ function NewChatMenu({ project }: { project: string }) {
   );
 }
 
-export function ChatHeader({ brand, sheet, onSheet, changed, sessionId, project, onGit, onClose }: {
-  brand: string | undefined; sheet: SheetKind | null; onSheet: (s: SheetKind | null) => void;
+export type ChatHeaderState = StatusLineProps & {
+  title: string;
+  branch: string;
+  text: string | null;
+  tone: "doing" | "warn" | "ok";
+};
+
+type HeaderActions = {
+  sheet: SheetKind | null; onSheet: (s: SheetKind | null) => void;
   changed: number; sessionId: string | null; project: string; onGit: () => void; onClose: () => void;
+};
+
+export function ChatHeader({ state, brand, actions }: {
+  state: ChatHeaderState; brand?: string; actions?: HeaderActions;
 }) {
+  const machineId = useOwnMachineId();
+  const identity = !brand || brand === "orchestrator" ? brandOfModel(state.model) : brand;
+  const provider = brandFor(identity ?? "orchestrator", undefined, machineId);
+  const avatarTitle = provider ? `Orchestrator · ${provider.label === "Claude" ? "Claude Code" : provider.label}` : "Orchestrator";
+  const title = state.title.trim() || "New chat";
+  return (
+    <header aria-label="Chat" className="flex min-w-0 shrink-0 items-center gap-1 border-b border-[var(--v2-edge)] px-2.5 py-1.5">
+      {provider ? (
+        <span role="img" aria-label={avatarTitle} title={avatarTitle} className="inline-flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--v2-raised)] text-[var(--v2-text-2)]">
+          <span aria-hidden data-brand={provider.label} className="inline-flex size-4" dangerouslySetInnerHTML={{ __html: provider.svg }} />
+        </span>
+      ) : <Avatar name="orchestrator" size={22} />}
+      <div className="min-w-0 flex-1 basis-24 px-1">
+        <div title={title} className="truncate text-v2-base font-medium text-[var(--v2-text)]">{title}</div>
+        {state.text && <div data-testid="chat-status" data-tone={state.tone} title={state.text} className="truncate text-v2-small text-[var(--v2-muted)]">{state.text}</div>}
+      </div>
+      {state.branch && <span className="flex min-w-0 max-w-24 [&>span]:min-w-0 [&>span]:max-w-full"><Chip mono title={state.branch} icon={<GitBranch size={12} className="shrink-0" aria-hidden />}><span className="truncate">{state.branch}</span></Chip></span>}
+      <StatusLine model={state.model} handoff={state.handoff} onBack={state.onBack} />
+      {actions && <HeaderButtons {...actions} />}
+    </header>
+  );
+}
+
+function HeaderButtons({ sheet, onSheet, changed, sessionId, project, onGit, onClose }: HeaderActions) {
   const [menu, setMenu] = useState(false);
   const copy = () => { setMenu(false); if (sessionId) void navigator.clipboard?.writeText(sessionId).catch(() => {}); };
   return (
-    <div className="flex shrink-0 items-center gap-1 border-b border-[var(--v2-edge)] px-2.5 py-1.5">
-      <Avatar name="orchestrator" llm={brand} size={22} />
-      <span className="flex-1" />
+    <div className="flex shrink-0 items-center">
       <NewChatMenu project={project} />
       <IconButton label="Sessions" title="Past Claude sessions" size={26} aria-pressed={sheet === "sessions"} onClick={() => onSheet(sheet === "sessions" ? null : "sessions")}>
         <Clock size={14} aria-hidden />

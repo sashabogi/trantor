@@ -51,10 +51,14 @@
   --v2-shadow-menu-up: 0 -12px 32px rgba(0, 0, 0, 0.5);
   --v2-shadow-dialog: 0 16px 40px rgba(0, 0, 0, 0.5);
   --v2-shadow-sheet: 0 20px 60px rgba(0, 0, 0, 0.55);
-  --v2-focus-ring: 0 0 0 4px rgba(138,168,255,.20), 0 0 22px 2px rgba(138,168,255,.18), 0 12px 32px -16px rgba(0,0,0,.6);
-  --v2-focus-ring-sm: 0 0 0 3px rgba(138,168,255,.18), 0 0 14px rgba(138,168,255,.14);
-  --v2-focus-edge-top: rgba(138,168,255,.80);
-  --v2-focus-edge-bottom: rgba(138,168,255,.35);
+  /* Soft ambient light; the composer pools its edge light at each side's centre. */
+  --v2-focus-ring: 0 0 24px rgba(138,168,255,.08);
+  --v2-focus-ring-sm: 0 0 10px rgba(138,168,255,.14);
+  --v2-focus-edge-sm: rgba(138,168,255,.60);
+  --v2-focus-edge-horizontal: linear-gradient(90deg, transparent 8%, rgba(138,168,255,.75) 50%, transparent 92%);
+  --v2-focus-edge-vertical: linear-gradient(180deg, transparent 12%, rgba(138,168,255,.55) 50%, transparent 88%);
+  --v2-focus-glow-horizontal: linear-gradient(90deg, transparent 8%, rgba(138,168,255,.35) 50%, transparent 92%);
+  --v2-focus-glow-vertical: linear-gradient(180deg, transparent 12%, rgba(138,168,255,.25) 50%, transparent 88%);
   --v2-active-edge: rgba(138,168,255,.35);
   --v2-hairline-fade: linear-gradient(90deg, var(--v2-edge-2), transparent);
   --v2-link: var(--v2-accent);
@@ -93,7 +97,7 @@
 [data-v2-chat] div:has(> button[title^="The orchestrator's live terminal"]) { display: none; }
 
 /* #14250: the timeline's ticks widen with the pointer and its hover card fades in; both stop under reduced motion. */
-.v2-tick { transition: width var(--v2-dur-1) var(--v2-ease); }
+.v2-tick { transition: width 200ms var(--v2-ease), opacity 200ms var(--v2-ease), background-color 200ms var(--v2-ease); }
 .v2-fade-in { animation: v2-fade-in 120ms ease; }
 @keyframes v2-fade-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .v2-tick, .v2-fade-in { transition: none; animation: none; } }
@@ -149,7 +153,7 @@
 }
 .v2-root :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select, textarea):not(.v2-composer-field):not(.xterm-helper-textarea):not(.inputarea):focus {
   outline: none;
-  border-color: var(--v2-accent);
+  border: 1px solid var(--v2-focus-edge-sm);
   box-shadow: var(--v2-focus-ring-sm);
 }
 .v2-composer {
@@ -166,15 +170,34 @@
   inset: -1px;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(180deg, var(--v2-focus-edge-top), var(--v2-focus-edge-bottom));
+  background-color: var(--v2-edge-2);
+  background-image: var(--v2-focus-edge-horizontal), var(--v2-focus-edge-horizontal), var(--v2-focus-edge-vertical), var(--v2-focus-edge-vertical);
+  background-position: top, bottom, left, right;
+  background-size: 100% 1px, 100% 1px, 1px 100%, 1px 100%;
+  background-repeat: no-repeat;
   mask: linear-gradient(var(--v2-knob) 0 0) content-box, linear-gradient(var(--v2-knob) 0 0);
   mask-composite: exclude;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--v2-dur-2) var(--v2-ease);
 }
+.v2-composer::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -2px;
+  border-radius: inherit;
+  background-image: var(--v2-focus-glow-horizontal), var(--v2-focus-glow-horizontal), var(--v2-focus-glow-vertical), var(--v2-focus-glow-vertical);
+  background-position: top, bottom, left, right;
+  background-size: 100% 1px, 100% 1px, 1px 100%, 1px 100%;
+  background-repeat: no-repeat;
+  filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--v2-dur-2) var(--v2-ease);
+}
 .v2-composer:focus-within { box-shadow: var(--v2-focus-ring); }
-.v2-composer:focus-within::before { opacity: 1; }
+.v2-composer:focus-within::before, .v2-composer:focus-within::after { opacity: 1; }
 .v2-composer .v2-composer-field {
   border: 0;
   outline: none;
@@ -204,6 +227,6 @@
   :root { --v2-dur-1: 0ms; --v2-dur-2: 0ms; --v2-dur-3: 0ms; }
   .v2-root *, .v2-root *::before, .v2-root *::after,
   [data-v2-pane], .v2-pulse, .v2-breathe, .v2-sweep, .v2-pop,
-  .v2-composer, .v2-composer::before { animation: none !important; transition: none !important; }
+  .v2-composer, .v2-composer::before, .v2-composer::after { animation: none !important; transition: none !important; }
   [data-v2-pane][data-working]:not([data-active]), .v2-breathe { border-color: var(--v2-accent-edge); }
 }
