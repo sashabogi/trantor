@@ -23,7 +23,7 @@ function rule(selector: string) {
 describe("focus and motion styles", () => {
   it("uses a soft ambient glow and thin edge gradients that brighten at the centre of each side", () => {
     const tokens = rule(":root");
-    expect(tokens.getPropertyValue("--v2-focus-ring")).toBe("0 0 24px rgba(138,168,255,.08)");
+    expect(tokens.getPropertyValue("--v2-focus-ring")).toBe("0 0 28px rgba(138,168,255,.12)");
     expect(tokens.getPropertyValue("--v2-focus-edge-horizontal")).toBe("linear-gradient(90deg, transparent 8%, rgba(138,168,255,.75) 50%, transparent 92%)");
     expect(tokens.getPropertyValue("--v2-focus-edge-vertical")).toBe("linear-gradient(180deg, transparent 12%, rgba(138,168,255,.55) 50%, transparent 88%)");
     expect(tokens.getPropertyValue("--v2-focus-glow-horizontal")).toContain("rgba(138,168,255,.35) 50%");
@@ -35,8 +35,10 @@ describe("focus and motion styles", () => {
     expect(edge.backgroundRepeat).toBe("no-repeat");
     expect(edge.backgroundColor).toBe("var(--v2-edge-2)");
     const glow = rule(".v2-composer::after");
-    expect(glow.filter).toBe("blur(10px)");
-    expect(glow.getPropertyValue("inset")).toBe("-2px");
+    expect(glow.filter).toBe("blur(12px)");
+    expect(glow.getPropertyValue("inset")).toBe("-3px");
+    // the glow blurs thick strips so light survives; the visible edge above stays 1px
+    expect(glow.backgroundSize).toBe("100% 6px, 100% 6px, 6px 100%, 6px 100%");
     expect(glow.zIndex).toBe("-1");
     expect(glow.opacity).toBe("0");
     expect(glow.transition).toContain("opacity var(--v2-dur-2)");

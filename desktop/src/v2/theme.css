@@ -52,7 +52,7 @@
   --v2-shadow-dialog: 0 16px 40px rgba(0, 0, 0, 0.5);
   --v2-shadow-sheet: 0 20px 60px rgba(0, 0, 0, 0.55);
   /* Soft ambient light; the composer pools its edge light at each side's centre. */
-  --v2-focus-ring: 0 0 24px rgba(138,168,255,.08);
+  --v2-focus-ring: 0 0 28px rgba(138,168,255,.12);
   --v2-focus-ring-sm: 0 0 10px rgba(138,168,255,.14);
   --v2-focus-edge-sm: rgba(138,168,255,.60);
   --v2-focus-edge-horizontal: linear-gradient(90deg, transparent 8%, rgba(138,168,255,.75) 50%, transparent 92%);
@@ -185,13 +185,15 @@
   content: "";
   position: absolute;
   z-index: -1;
-  inset: -2px;
+  inset: -3px;
   border-radius: inherit;
   background-image: var(--v2-focus-glow-horizontal), var(--v2-focus-glow-horizontal), var(--v2-focus-glow-vertical), var(--v2-focus-glow-vertical);
   background-position: top, bottom, left, right;
-  background-size: 100% 1px, 100% 1px, 1px 100%, 1px 100%;
+  /* 6px strips behind the 1px edge: thick enough that light survives the blur and pools at the
+     middle of each side; the visible border stays 1px. */
+  background-size: 100% 6px, 100% 6px, 6px 100%, 6px 100%;
   background-repeat: no-repeat;
-  filter: blur(10px);
+  filter: blur(12px);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--v2-dur-2) var(--v2-ease);
