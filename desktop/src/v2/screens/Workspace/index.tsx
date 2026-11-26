@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DrillMode } from "../../../features/drill/DrillMode";
 import type { ScreenProps } from "../../routes";
+import { ChatLinks } from "../../chat/LinkContext";
 import { ChatColumn } from "./ChatColumn";
 import { useChatColumn, useFilesColumn } from "./chatColumnState";
 import { FilesColumn } from "./FilesColumn";
@@ -125,6 +126,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
 
   return (
     // #14250: the area under the project header is a chrome ground; every pane is its own panel with a 6px gap.
+    <ChatLinks project={project} navigate={onNavigate}>
     <div ref={workspaceRef} className="flex min-h-0 flex-1 gap-[6px] bg-[var(--v2-chrome)] p-[6px]">
       <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
         scopeName={scope ?? "project checkout"} seats={seatInfos} onPickScope={pickScope}
@@ -146,5 +148,6 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
         ? <DrillMode me={me} onClose={() => setRecording(false)} />
         : <div role="alert" className="fixed bottom-14 right-4 z-40 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] px-3 py-2 text-v2-body text-[var(--v2-muted)]">Waiting for the signed identity before a drill can start.</div>)}
     </div>
+    </ChatLinks>
   );
 }

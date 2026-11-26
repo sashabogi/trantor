@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // #14075: one tick per operator message, hover card, jump, active tick, arrow keys, hidden under two prompts.
 // #14084: the card also shows the send time and the files the prompt changed, clickable into Code.
-// #14250: the card reads "N / total", the reply's first line and "Worked 4m · 2h ago"; ticks widen with the pointer.
+// #14327: the column sits on the chat's left edge as an overlay with 8px ticks. #14250: the card reads "N / total", the reply's first line and "Worked 4m · 2h ago"; ticks widen with the pointer.
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -222,16 +222,44 @@ describe("PromptTimeline", () => {
     expect(buttons().map(b => b.getAttribute("aria-current"))).toEqual([null, null, "true"]);
   });
 
-  it("sits centred mid-height with 14x2 ticks in muted, the active one wider in accent (#14241)", async () => {
+  it("#14327: sits on the left edge as an overlay, 8x2 ticks muted, the active one 14 wide and 2.5 tall in the text colour", async () => {
     await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }]);
     const nav = host.querySelector('nav[aria-label="Prompt timeline"]');
-    expect(nav?.className).toContain("justify-center");
+    expect(nav?.className).toContain("absolute");
+    expect(nav?.className).toContain("left-[3px]");
+    expect(nav?.className).toContain("top-[18px]");
     const spans = buttons().map(b => b.querySelector("span"));
-    expect(spans[0]?.className).toContain("w-3.5");
+    expect(spans[0]?.className).toContain("w-2");
+    expect(spans[0]?.className).toContain("h-[2px]");
     expect(spans[0]?.className).toContain("bg-[var(--v2-muted)]");
-    expect(spans[2]?.className).toContain("w-[18px]");
-    expect(spans[2]?.className).toContain("bg-[var(--v2-accent)]");
-    expect(buttons()[0]?.parentElement?.className).toContain("h-5");
+    expect(spans[0]?.className).toContain("opacity-50");
+    expect(spans[2]?.className).toContain("w-3.5");
+    expect(spans[2]?.className).toContain("h-[2.5px]");
+    expect(spans[2]?.className).toContain("bg-[var(--v2-text)]");
+    expect(buttons()[0]?.parentElement?.className).toContain("h-1.5");
+  });
+
+  it("#14327: the prompts on screen read at 90%, the rest at 50%", async () => {
+    await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }, { id: "4.0", text: "c" }]);
+    // SAFETY: the timeline reads only top and bottom from a rect.
+    const rect = (top: number, bottom: number) => ({ top, bottom }) as DOMRect;
+    const spots = [rect(-900, -800), rect(100, 140), rect(2000, 2040)];
+    scroller.getBoundingClientRect = () => rect(0, 600);
+    Array.from(scroller.children).forEach((c, i) => { c.getBoundingClientRect = () => spots[i]; });
+    await act(async () => { scroller.dispatchEvent(new Event("scroll")); });
+    const spans = buttons().map(b => b.querySelector("span"));
+    // The first prompt is the active one (its top is above the viewport), so it takes the text colour instead.
+    expect(spans[0]?.className).toContain("bg-[var(--v2-text)]");
+    expect(spans[1]?.className).toContain("opacity-90");
+    expect(spans[2]?.className).toContain("opacity-50");
+  });
+
+  it("#14327: the hover card opens to the right of its tick", async () => {
+    await mount([{ id: "0.0", text: "a" }, { id: "2.0", text: "b" }]);
+    await act(async () => { buttons()[0].focus(); });
+    const card = host.querySelector<HTMLElement>('[role="tooltip"]');
+    expect(card?.style.left).toBe("0px");
+    expect(card?.style.right).toBe("");
   });
 
   it("#14250: ticks widen around the pointer (24, 20, 17, 14) and rest when it leaves", async () => {
@@ -242,6 +270,6 @@ describe("PromptTimeline", () => {
     expect(spans()[1]?.className).toContain("v2-tick");
     await act(async () => { buttons()[1].dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: null })); });
     expect(spans().map(s => s?.style.width)).toEqual(["", "", "", "", ""]);
-    expect(spans()[0]?.className).toContain("w-3.5");
+    expect(spans()[0]?.className).toContain("w-2");
   });
 });

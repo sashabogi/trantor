@@ -1,10 +1,9 @@
-// A sub-agent's conversation, read-only and live: the chat's own turn pieces over its transcript tail (#14265).
+// A sub-agent's conversation, read-only and live: the chat's own 2.0 transcript over its transcript tail (#14265, #14327).
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { batch, group, Thinking, ToolRun } from "../../../features/chat/Chat";
-import { MarkdownText } from "../../../features/chat/MarkdownText";
 import { isPinned } from "../../../features/chat/scrollPin";
-import { applyBackfill, emptyChat, isDividerTurn, type Backfill, type ChatState, type Turn } from "../../../features/chat/streaming";
+import { applyBackfill, emptyChat, type Backfill, type ChatState, type Turn } from "../../../features/chat/streaming";
+import { Transcript } from "../../chat/Transcript";
 import type { SeatView } from "./seatModel";
 
 export const RUNNING_POLL_MS = 2_000;
@@ -66,25 +65,10 @@ export function SubagentPane({ project, seat }: { project: string; seat: SeatVie
           <span className="font-semibold text-[var(--v2-text)]">Finished</span>{summary ? `: ${summary}` : ""}
         </div>
       )}
-      <div ref={scroller} role="log" aria-label={`${seat.label} conversation`} className="min-h-0 flex-1 overflow-y-auto px-4 py-3"
+      <div ref={scroller} role="log" aria-label={`${seat.label} conversation`} className="min-h-0 flex-1 overflow-y-auto"
         onScroll={e => { pinned.current = isPinned(e.currentTarget); }}>
-        {!chat.turns.length && <div className="text-v2-base text-[var(--v2-muted)]">Reading the agent&apos;s conversation</div>}
-        {group(chat.turns).map((t, i) => isDividerTurn(t)
-          ? <div key={i} className="my-2 truncate text-center text-v2-small text-[var(--v2-muted)]">{t.blocks.map(b => b.text).join(" ")}</div>
-          : (
-            <div key={i} className="mb-3">
-              <div className="mb-1 text-v2-micro uppercase tracking-wider text-[var(--v2-muted)]">{t.role === "user" ? "prompt" : "agent"}</div>
-              {batch(t.blocks).map((b, j) => Array.isArray(b)
-                ? <ToolRun key={j} blocks={b} results={chat.results} />
-                : b.kind === "thinking" ? <Thinking key={j} text={b.text} />
-                : b.kind === "image" ? <div key={j} className="mt-1.5 text-v2-small text-[var(--v2-muted)]">[image]</div>
-                : (
-                  <div key={j} className={`break-words rounded-lg px-3 py-2 text-v2-base leading-relaxed ${t.role === "user" ? "whitespace-pre-wrap bg-[var(--v2-panel-2)]" : "bg-[var(--v2-sunken)]"}`}>
-                    {t.role === "user" ? b.text : <MarkdownText text={b.text} />}
-                  </div>
-                ))}
-            </div>
-          ))}
+        {!chat.turns.length && <div className="px-4 py-3 text-v2-base text-[var(--v2-muted)]">Reading the agent&apos;s conversation</div>}
+        <Transcript turns={chat.turns} results={chat.results} working={running} />
       </div>
     </div>
   );

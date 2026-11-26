@@ -93,7 +93,7 @@
 [data-v2-chat] div:has(> button[title^="The orchestrator's live terminal"]) { display: none; }
 
 /* #14250: the timeline's ticks widen with the pointer and its hover card fades in; both stop under reduced motion. */
-.v2-tick { transition: width 120ms ease; }
+.v2-tick { transition: width var(--v2-dur-1) var(--v2-ease); }
 .v2-fade-in { animation: v2-fade-in 120ms ease; }
 @keyframes v2-fade-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .v2-tick, .v2-fade-in { transition: none; animation: none; } }

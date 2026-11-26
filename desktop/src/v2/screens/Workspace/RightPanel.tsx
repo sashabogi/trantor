@@ -53,7 +53,7 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
       <ChatHeader brand={orchestrator?.brand} sheet={sheet} onSheet={setSheet} changed={changed} project={project}
         sessionId={session?.id ?? orchestrator?.session ?? null} onGit={openGit} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
-        <ChatNoTray onOpenChange={openChange}><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" onDock={() => {}} deps={CHAT_DEPS}
+        <ChatNoTray onOpenChange={openChange}><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" variant="v2" onDock={() => {}} deps={CHAT_DEPS}
           emptyAction={wake ? <StartOrchestrator project={project} wake={wake} onNavigate={onNavigate} /> : undefined} onClose={() => setSession(null)} /></ChatNoTray>
       </div>
       {sheet === "sessions" && (
@@ -69,11 +69,11 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
 export function ChatNoTray({ children, onOpenChange }: { children: ReactNode; onOpenChange: (path: string) => void }) {
   useState(() => { saveTrayOpen(false); return null; });
   const chat = useRef<HTMLDivElement | null>(null);
-  // #14254: the timeline rides the chat's right edge, in its own column beside the scrollbar.
+  // #14327: the timeline rides the chat's left edge, overlaying the transcript's gutter.
   return (
-    <div className="flex min-h-0 flex-1">
-      <div ref={chat} data-v2-chat className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+    <div className="relative flex min-h-0 flex-1">
       <PromptTimeline root={chat} onOpenChange={onOpenChange} />
+      <div ref={chat} data-v2-chat className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
     </div>
   );
 }

@@ -1,0 +1,44 @@
+// What a chat link needs from its host (#14327): which project it belongs to, how to confirm a path
+// or commit exists, and what a click does. The 2.0 workspace provides the real ones; anywhere else
+// the default confirms nothing and opens nothing, so a bare transcript renders plain text and URLs.
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+import type { Link, LinkResolver } from "../../shared/linkify";
+import { linkResolverFor } from "../../shared/linkify";
+import type { Navigate } from "../routes";
+import { openLink, openLinkDeps, type OpenLinkDeps } from "../shell/openLink";
+import { setOpenIntent } from "../shell/openIntent";
+
+export type LinkContextValue = {
+  /** Confirms pending paths and commits; null keeps them as plain text. */
+  resolver: LinkResolver | null;
+  open: (link: Link) => void;
+  /** "Open diff" on an edit card: the change view for one path. */
+  openDiff: (path: string) => void;
+};
+
+const NONE: LinkContextValue = { resolver: null, open: () => {}, openDiff: () => {} };
+
+const LinkContext = createContext<LinkContextValue>(NONE);
+
+export const useLinks = (): LinkContextValue => useContext(LinkContext);
+
+/** Provides an explicit context value: tests and previews inject fakes here. */
+export function LinkProvider({ value, children }: { value: LinkContextValue; children: ReactNode }) {
+  return <LinkContext.Provider value={value}>{children}</LinkContext.Provider>;
+}
+
+/** The workspace's links: the project's checkout confirms paths and commits, a click routes through
+ *  openLink. `seat` names the worktree the chat belongs to, so its files open in that copy. */
+export function ChatLinks({ project, navigate, seat, deps, children }: {
+  project: string; navigate: Navigate; seat?: string; deps?: OpenLinkDeps; children: ReactNode;
+}) {
+  const value = useMemo<LinkContextValue>(() => {
+    const wired = deps ?? openLinkDeps(navigate);
+    return {
+      resolver: linkResolverFor(project),
+      open: link => { void openLink(project, link, wired, seat).catch(() => {}); },
+      openDiff: path => { setOpenIntent(project, { kind: "change", path, seat }); navigate("code", project); },
+    };
+  }, [project, navigate, seat, deps]);
+  return <LinkProvider value={value}>{children}</LinkProvider>;
+}

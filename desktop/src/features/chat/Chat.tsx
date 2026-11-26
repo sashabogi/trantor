@@ -18,6 +18,10 @@ import { hasSeveralQuestions } from "./askPicks";
 import { askLeadIn, CC_LEAD_IN, declaredFromQuestion, selectChips, trimAsk, type DeclaredAsk } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import { isPinned } from "./scrollPin";
+import { LatestPill } from "../../v2/chat/LatestPill";
+import { StatusLine } from "../../v2/chat/StatusLine";
+import { Transcript } from "../../v2/chat/Transcript";
+import { batch, group } from "./groupTurns";
 import {
   clampPanel, fontScale, loadDismissedAt, loadFontStep, loadPanelSize, loadTrayOpen,
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
@@ -26,7 +30,7 @@ import {
   applyBackfill, applyRows, applySessionChanged, bannerVisible, changedFiles, emptyChat, isDividerTurn,
   lastToolLabel, promptFacts, sessionLiveness, tickerText,
   type AskQuestion, type Backfill, type Block, type ChatState, type OpenQuestion, type RowsPayload,
-  type SessionPayload, type ToolResult, type Turn,
+  type SessionPayload, type ToolResult,
 } from "./streaming";
 import {
   apply as applyStatus, initialArbiterState, needsReseed, RESEED_DELAYS_MS,
@@ -83,38 +87,7 @@ function transcriptAnswered(ask: OrchAsk, chat: ChatState): boolean {
   ));
 }
 
-/** Consecutive turns from the same speaker render as one group; the transcript splits them on
- *  every tool call. */
-/** Consecutive tool blocks batch into one array; an AskUserQuestion never joins a neighbour
- *  (#6094): kept singleton, so ToolRun's single-block path always routes it straight to AskCard. */
-export function batch(blocks: Block[]): Array<Block | Block[]> {
-  const out: Array<Block | Block[]> = [];
-  const isAsk = (b: Block) => b.kind === "tool" && b.tool === "AskUserQuestion";
-  for (const b of blocks) {
-    if (isAsk(b)) { out.push([b]); continue; }
-    const last = out[out.length - 1];
-    if (b.kind === "tool") {
-      if (Array.isArray(last) && !(last.length === 1 && isAsk(last[0]))) last.push(b);
-      else out.push([b]);
-    } else out.push(b);
-  }
-  return out;
-}
-
-export function group(turns: Turn[]): Turn[] {
-  const out: Turn[] = [];
-  for (const t of turns) {
-    const last = out[out.length - 1];
-    // A queued turn never merges into a seen one (or vice versa) — merging would erase the one
-    // flag that tells the operator "the session has not read this yet".
-    if (last && last.role === t.role && !!last.queued === !!t.queued) {
-      last.blocks = [...last.blocks, ...t.blocks];
-      // #14250: the folded rows' last timestamp survives, so worked time spans the whole reply.
-      if (t.ts !== undefined) last.endTs = t.ts;
-    } else out.push({ role: t.role, blocks: [...t.blocks], queued: t.queued, ts: t.ts, endTs: t.ts });
-  }
-  return out;
-}
+export { batch, group };
 
 /** A run of consecutive tool calls is ONE act to a reader — "checked nine things" — not nine
  *  stacked cards around a single sentence. Failures stay visible while collapsed, because a run
@@ -454,8 +427,10 @@ function decodeOrchStatus(payload: OrchStatusRaw): OrchStatusDecoded {
   };
 }
 
-export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS, emptyAction }: {
+export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS, emptyAction, variant = "classic" }: {
   project: string; sessionId?: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
+  /** #14327: "v2" draws the 2.0 transcript and status line, and leaves the header to the 2.0 shell. */
+  variant?: "classic" | "v2";
   /** #14271: the 2.0 panel's replacement for the "no session hosted" sentence (it carries Start orchestrator). */
   emptyAction?: ReactNode;
   /** Test seam — production callers omit it and get the real modules. */
@@ -463,6 +438,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
 }) {
   const { invoke: invokeFn, listen: listenFn, orchestratorOf: paneOf, Composer: ComposerView, TerminalPane: TermView } = deps;
   const history = Boolean(sessionId);
+  const v2 = variant === "v2";
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [liveAsks, setLiveAsks] = useState<Record<string, LiveAsk>>({});
   const [askReadyProject, setAskReadyProject] = useState<string | null>(() => history ? project : null);
@@ -535,7 +511,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const pinnedRef = useRef(true);
   const [pinned, setPinned] = useState(true);
   const [unseen, setUnseen] = useState(false);
-  const rePin = useCallback(() => { pinnedRef.current = true; setPinned(true); setUnseen(false); }, []);
+  // #14327: how many spoken turns landed while the reader was scrolled up, for the "N new" pill.
+  const [unseenCount, setUnseenCount] = useState(0);
+  const spokenSeen = useRef(0);
+  const rePin = useCallback(() => { pinnedRef.current = true; setPinned(true); setUnseen(false); setUnseenCount(0); }, []);
   const onTranscriptScroll = useCallback(() => {
     const el = transcript.current;
     if (!el) return;
@@ -881,8 +860,11 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // #6697 — new turns pull the view down ONLY while it already sits at the foot; scrolled up, the
   // operator keeps reading where they are and the jump button lights its "more below" dot.
   useEffect(() => {
+    const spoken = chat.turns.filter(t => t.blocks.some(b => b.kind === "text")).length;
+    const added = Math.max(0, spoken - spokenSeen.current);
+    spokenSeen.current = spoken;
     if (pinnedRef.current) foot.current?.scrollIntoView({ behavior: "smooth" });
-    else if (chat.turns.length) setUnseen(true);
+    else if (chat.turns.length) { setUnseen(true); if (added) setUnseenCount(n => n + added); }
   }, [chat.turns.length]);
   // A different session or project starts at its foot.
   useEffect(() => { rePin(); }, [project, history, rePin]);
@@ -1011,7 +993,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     invokeFn("app_log", { line: `${line} tally rendered=${tally.rendered} empty=${tally.empty}` }).catch(() => {});
   }, [history, chipsVisible, turnAsked, chipTarget, working, suggestions, declared, composerDraft, chipTail, project, invokeFn]);
   const chipSource = chosen.source;
-  const chipSet = chipsVisible ? `${chipSource}:${suggestions.map(s => s.text).join(" ")}` : "";
+  const chipSet = chipsVisible ? `${chipSource}:${suggestions.map(s => s.text).join("\u0000")}` : "";
   useEffect(() => {
     if (!chipSet || chipTraceRef.current === chipSet) return;
     chipTraceRef.current = chipSet;
@@ -1178,7 +1160,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
 
   // #14084: the prompt timeline reads the turns as rendered, so its per-prompt changed-files
   // answer is computed on the same grouped list the transcript below draws.
-  const grouped = group(chat.turns);
+  const grouped = v2 ? [] : group(chat.turns);
   const changed = changedFiles(grouped);
   // #14250: each prompt's reply line and worked time, on the same grouped list.
   const facts = promptFacts(grouped);
@@ -1187,7 +1169,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     <div
       ref={root}
       style={rootStyle}
-      className={`relative flex min-h-0 flex-col border-tr-edge bg-tr-bg ${hosted ? "flex-1" : side ? "h-full shrink-0 border-l" : "shrink-0 border-t"}`}
+      className={`relative flex min-h-0 flex-col ${v2 ? "" : "border-tr-edge bg-tr-bg"} ${hosted ? "flex-1" : side ? "h-full shrink-0 border-l" : "shrink-0 border-t"}`}
     >
       {/* The inner edge, as a grab strip (#5522): left when the panel is docked right, top when
           it is docked bottom. touch-none so a touch drag resizes instead of scrolling. */}
@@ -1202,6 +1184,22 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           ? "absolute inset-y-0 left-0 z-10 w-[5px] cursor-col-resize hover:bg-white/[0.06]"
           : "absolute inset-x-0 top-0 z-10 h-[5px] cursor-row-resize hover:bg-white/[0.06]"}
       />}
+      {v2 && (
+        <StatusLine
+          tone={wakeNote ? (wakeNote.kind === "outcome" ? "ok" : "doing") : status === "blocked" ? "warn" : "doing"}
+          text={wakeNote?.text ?? ticker ?? (history ? `Claude session ${sessionId}` : null)}
+          model={chat.meta.model}
+          handoff={target && !history ? {
+            confirming: handoffConfirm,
+            disabledReason: handoffBusy ? "A handoff is already running" : liveness.live ? null : liveness.why,
+            onAsk: () => setHandoffConfirm(true),
+            onConfirm: () => { setHandoffConfirm(false); startHandoff("clicked"); },
+            onCancel: () => setHandoffConfirm(false),
+          } : null}
+          onBack={hosted && history ? onClose : null}
+        />
+      )}
+      {!v2 && (<>
       {/* One row that cannot wrap. Every part is shrink-0 except the project name, which truncates,
           because a header that reflows into three lines is what "mangled" looked like. */}
       <div className="flex shrink-0 items-center gap-2 overflow-hidden px-3 py-2">
@@ -1271,28 +1269,30 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           <span className="tr-mono min-w-0 truncate text-[10.5px] text-tr-muted">{ticker}</span>
         </div>
       )}
+      </>)}
 
       {!history && <HandoffRecapStatus project={project} divider error={handoffError} busy={handoffBusy} />}
 
       <div className="relative min-h-0 flex-1">
-      <div ref={transcript} onScroll={onTranscriptScroll} className="h-full overflow-y-auto px-3 pb-2">
-        {!target && (emptyAction ?? (
+      <div ref={transcript} onScroll={onTranscriptScroll} className={`h-full overflow-y-auto ${v2 ? "" : "px-3 pb-2"}`}>
+        {!target && <div className={v2 ? "px-4 pt-3" : undefined}>{emptyAction ?? (
           <div className="tr-card-ghost px-4 py-3 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed">
             No orchestrator session is hosted for this project yet. Open one from the Workspace lens
             and this becomes the conversation with it.
           </div>
-        ))}
+        )}</div>}
         {/* The "session continued" divider is a TURN now (#5646): applySessionChanged keeps the
             predecessor thread and appends a divider item, so a second panel-level rule here would
             draw the same line twice. */}
         {target && !chat.turns.length && !liveAskList.length && !chat.continued && !error && (
-          <div className="px-1 py-2 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed text-tr-muted">
+          <div className={`px-1 py-2 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed text-tr-muted ${v2 ? "mx-4 mt-2" : ""}`}>
             {history
               ? "Nothing renderable was written to this session transcript."
               : "Nothing said yet. Type below and it reaches the session exactly as if you had typed it in the terminal."}
           </div>
         )}
-        {grouped.map((t, i) =>
+        {v2 && <Transcript turns={chat.turns} results={chat.results} working={working} scale={fontScale(fontStep)} />}
+        {!v2 && grouped.map((t, i) =>
           // Bookkeeping, not speech (#5502): a /compact record or a harness caveat renders as a
           // centered quiet mono line with no speaker label — never a bubble, never "you".
           isDividerTurn(t) ? (
@@ -1350,7 +1350,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           ),
         )}
         {liveAskList.map(ask => (
-          <div key={askKey(ask)} className="mb-3">
+          <div key={askKey(ask)} className={`mb-3 ${v2 ? "px-4" : ""}`}>
             <div className="mb-1 text-[length:calc(10.5px*var(--chat-scale,1))] uppercase tracking-wider text-tr-muted">
               session · {ask.session_id.slice(0, 8)}
             </div>
@@ -1359,7 +1359,12 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         ))}
         <div ref={foot} />
       </div>
-      {!pinned && (
+      {!pinned && v2 && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+          <span className="pointer-events-auto"><LatestPill unseen={unseenCount} onClick={jumpToLatest} /></span>
+        </div>
+      )}
+      {!pinned && !v2 && (
         <button
           type="button"
           onClick={jumpToLatest}
