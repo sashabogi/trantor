@@ -1,5 +1,6 @@
 // Graph, Feed, Bus and Messages reuse the classic components inside 2.0 chrome until they get
 // their own screens; they are imported, never forked (#v2-F).
+import { StartCard } from "../screens/Projects/StartCard";
 import { useState } from "react";
 import type { HubClient } from "../../shared/api/client";
 import type { Lens } from "../../features/project/ProjectHeader";
@@ -82,7 +83,7 @@ export function AllProjects({ projects, live, onNavigate, onStartProject, onWake
           </li>
         ))}
       </ul>
-      {!projects.length && <p className="text-v2-base text-[var(--v2-muted)]">No projects pinned. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
+      {!projects.length && <StartCard onStart={onStartProject} />}
     </div>
   );
 }

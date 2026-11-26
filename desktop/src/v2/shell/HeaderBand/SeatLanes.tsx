@@ -1,4 +1,5 @@
 // #14256: lanes share Workspace presence so the header agrees with the seat being opened.
+import { useOwnMachineId } from "../../ui/useMachineId";
 import type { Peer, TurnRow } from "../../../shared/api/client";
 import { paneTargets } from "../../../features/workspace/paneTargets";
 import { hostPeer, seatPeers, seatViews } from "../../screens/Workspace/seatModel";
@@ -19,10 +20,10 @@ export function turnColor(turn: TurnRow): string {
   return turn.outcome === "completed" && turn.effExit === 0 ? "var(--v2-ok-edge)" : "var(--v2-track)";
 }
 
-export function laneRows(peers: Peer[], turns: TurnRow[], project: string, now: number) {
-  const host = hostPeer(peers, project);
+export function laneRows(peers: Peer[], turns: TurnRow[], project: string, now: number, machineId?: string) {
+  const host = hostPeer(peers, project, machineId);
   // #14268: the host is the orchestrator even when it has never emitted turn telemetry.
-  const targets = paneTargets(seatPeers(peers, project), null, undefined, project);
+  const targets = paneTargets(seatPeers(peers, project, machineId), null, undefined, project);
   if (host) targets.push(...paneTargets([host], null, undefined, project).map(t => ({ ...t, label: "orchestrator", isOrchestrator: true })));
   const seats = seatViews(targets, []);
   const grouped = new Map<string, TurnRow[]>();
@@ -50,7 +51,8 @@ function turnTitle(turn: TurnRow) {
 export function SeatLanes({ project, peers, turns, now, workingSince, onOpen, compact = false }: {
   project: string; peers: Peer[]; turns: TurnRow[]; now: number; workingSince: Record<string, number>; onOpen: () => void; compact?: boolean;
 }) {
-  const lanes = laneRows(peers, turns, project, now);
+  const machineId = useOwnMachineId();
+  const lanes = laneRows(peers, turns, project, now, machineId);
   const active = lanes.some(lane => lane.rows.length || lane.status === "working");
   return (
     <div aria-label="Seat activity, last 60 minutes" className={`flex min-w-0 flex-1 justify-center ${compact ? "items-center gap-2" : "h-full min-h-12 flex-col rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-2"}`}>

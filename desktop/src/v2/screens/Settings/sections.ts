@@ -25,7 +25,7 @@ export const SECTIONS: readonly SectionDef[] = [
   { id: "autonomy", group: "Crew", label: "Autonomy and permissions", desc: "what runs without asking", rows: ["commit", "push", "deploy", "replace a dead seat", "retry a failed turn", "overseer", "your session", "always asks", "force-push", "scope"] },
   { id: "agreements", group: "Crew", label: "Working agreements", desc: "what every seat is held to", rows: ["one card one branch", "drill", "red blocks merge", "blast radius", "commit"] },
   { id: "extensions", group: "Code and git", label: "Extensions and tools", desc: "opens its own screen", rows: ["mcp", "open vsx"] },
-  { id: "hub", group: "System", label: "Hub and machines", desc: "netcup, tailnet, health", rows: ["hub", "pins", "reachable", "tailnet"] },
+  { id: "hub", group: "System", label: "Hub and machines", desc: "Connections, machines and health", rows: ["hub", "pins", "reachable", "tailnet"] },
   { id: "identity", group: "System", label: "Identity and keys", desc: "signed requests, keychain", rows: ["signed", "key", "identity"] },
   { id: "about", group: "System", label: "About", desc: "version, update, licenses", rows: ["version", "licenses", "update", "agent clis", "claude code"] },
 ];

@@ -8,7 +8,7 @@ export function StartCard({ onStart }: { onStart?: () => void }) {
         <FolderPlus size={26} aria-hidden className="mx-auto text-[var(--v2-accent)]" />
         <h1 className="m-0 mt-3 text-v2-heading font-[650] text-[var(--v2-text)]">Start a project</h1>
         <p className="m-0 mt-2 text-v2-base leading-relaxed text-[var(--v2-muted)]">
-          Start Blank to name an empty project and tell the orchestrator what to build, or start From a brief:
+          No projects yet. Start Blank to name an empty project and tell the orchestrator what to build, or start From a brief:
           paste or drop a PRD and the crew reviews it before anything is built.
         </p>
         {onStart && (

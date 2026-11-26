@@ -2,9 +2,11 @@
 // the back-and-forth on the right, live. Agent-to-agent DMs had no surface (Chat is per-project,
 // Inbox is human-only), so this view groups the one event log client-side into DM and
 // broadcast threads and lets the human watch or interject in either.
+import { isHostIdentity } from "../../v2/ui/identity";
+import { useOwnMachineId } from "../../v2/ui/useMachineId";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
-import { Avatar, BrandGlyph, displayName } from "../../shared/Avatar";
+import { Avatar, BrandGlyph, displayName as displayNameForMachine } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 import { clock, when } from "../../shared/time";
 import { useEscape } from "../../v2/ui/useEscape";
@@ -23,17 +25,17 @@ type Thread = {
 /** The name a human recognizes, per session KIND: an interactive window shows the machine as
  *  chrome, a crew seat shows the agent as the identity, and the duty seat shows its job name.
  *  Full session id stays available as a tooltip wherever this renders. */
-const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
+
 /** hub:* names are the hub's own synthetic senders (overseer announcements, escalation notices).
  * They WRITE and never read — a message sent to one sits undelivered forever. The UI must not
  * offer them as recipients. */
 const isSynthetic = (session: string) => session.startsWith("hub:");
-export function shortName(session: string): string {
+export function shortNameForMachine(session: string, machineId?: string): string {
   if (session === "claude:trantor-duty" || session === "claude:fleet") return "Trantor Duty Agent";   // claude:fleet = its pre-0.17.88 id
   const [head, ...rest] = session.split(":");
   const tail = rest.join(":");
   if (!tail) return head;
-  return HOSTISH.test(head) ? tail : session;
+  return isHostIdentity(session, machineId) ? tail : session;
 }
 
 function msgOf(ev: HubEvent): Msg | null {
@@ -109,6 +111,9 @@ function PairAvatars({ parties }: { parties: string[] }) {
 }
 
 export function Messages({ client, me, focus }: { client: HubClient; me: string; focus?: string | null }) {
+  const machineId = useOwnMachineId();
+  const shortName = (session: string) => shortNameForMachine(session, machineId);
+  const displayName = (session: string, llm?: string) => displayNameForMachine(session, llm, machineId);
   const [msgs, setMsgs] = useState<Msg[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
@@ -450,3 +455,5 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
     </div>
   );
 }
+
+export { shortNameForMachine as shortName };

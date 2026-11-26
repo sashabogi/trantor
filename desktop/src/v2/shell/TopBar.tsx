@@ -78,7 +78,7 @@ function ProjectSwitcher({ projects, project, onProject, onStartProject }: Pick<
             <ProjectTile name={p} size={20} />{p}
           </MenuItem>
         ))}
-        {!projects.length && <div className="px-2 py-1.5 text-v2-body text-[var(--v2-muted)]">No projects pinned. Run trantor hub set</div>}
+        {!projects.length && <div className="px-2 py-1.5 text-v2-body text-[var(--v2-muted)]">No projects yet.</div>}
         {!!projects.length && !shown.length && <div className="px-2 py-1.5 text-v2-body text-[var(--v2-muted)]">No project matches</div>}
       </Popover>
     </div>

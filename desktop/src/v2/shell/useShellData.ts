@@ -1,5 +1,6 @@
 // The shell's data, built exactly the way classic AppShell builds it: known projects, the active
 // project's hub, the signed identity, and the same peek-only inbox count (#v2-F).
+import { useOwnMachineId } from "../ui/useMachineId";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HubClient, hubForProject, knownProjects, localSessions, type LocalSession, type Peer } from "../../shared/api/client";
@@ -75,15 +76,16 @@ function useUnread(client: HubClient, me: string) {
 }
 
 /** #14271: a project has an orchestrator only for a herdr-confirmed local pane or its online host session; a crew seat or tool peer is not one. */
-export function liveOrchestratorProjects(open: LocalSession[], peers: Peer[]): string[] {
+export function liveOrchestratorProjects(open: LocalSession[], peers: Peer[], machineId?: string): string[] {
   const names = new Set<string>();
   for (const s of open) if (s.status) names.add(s.project);
-  for (const p of peers) if (p.online && p.project && isHostSession(p.session) && p.session.endsWith(`:${p.project}`)) names.add(p.project);
+  for (const p of peers) if (p.online && p.project && isHostSession(p.session, machineId) && p.session.endsWith(`:${p.project}`)) names.add(p.project);
   return [...names].sort();
 }
 
 /** Projects with a live orchestrator: the rail's "active now" tiles. */
 function useLiveProjects(client: HubClient) {
+  const machineId = useOwnMachineId();
   const [live, setLive] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
@@ -94,12 +96,12 @@ function useLiveProjects(client: HubClient) {
         ...urls.map(u => new HubClient(u).peers().catch((): Peer[] => [])),
       ]);
       if (!alive) return;
-      setLive(liveOrchestratorProjects(open, lists.flat()));
+      setLive(liveOrchestratorProjects(open, lists.flat(), machineId));
     };
     void pull();
     const t = setInterval(() => void pull(), 30_000);
     return () => { alive = false; clearInterval(t); };
-  }, [client]);
+  }, [client, machineId]);
   return live;
 }
 

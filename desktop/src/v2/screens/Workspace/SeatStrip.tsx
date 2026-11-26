@@ -74,7 +74,7 @@ export function SeatStrip({ seats, selectedKey, onSelect, layout, onLayout, crew
                 data-open={open || undefined}>+{offline.length} offline</button>
             )} />
         )}
-        <PopMenu heading="Add a seat" empty="No agent is installed, enabled and within quota"
+        <PopMenu heading="Add a seat" empty={crew.unavailableReason?.() ?? "Reading installed agents"}
           items={crew.available.map(a => ({ id: a.id, label: a.label, sub: `starts ${a.launch}`, disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.start(a.id) }))}
           trigger={p => (
             <button type="button" {...p} aria-label="Add a seat" title="Add a seat"

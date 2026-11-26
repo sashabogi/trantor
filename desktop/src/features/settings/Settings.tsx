@@ -2,6 +2,7 @@
 // design: hub pins and identity are written by `trantor hub set` and enrolment, and a second
 // writer for the same config would let the two paths disagree. Only app behavior (notifications)
 // is writable here, since that is the app's own preference. The Update button is a real updater.
+import { EmptyProjects } from "./EmptyProjects";
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { HubClient, knownProjects, hubForProject, editorPref, setEditorPref, isEditorPref, appUpdateCheck, appUpdateInstall } from "../../shared/api/client";
@@ -35,6 +36,7 @@ type SettingsProps = {
   me: string; update?: AppUpdate | null; projects?: string[]; project?: string; onReopenOnboarding?: () => void;
   /** #6800 — opens Drill Mode, the guided pass over the visual testing cards on a drill-* project. */
   onStartDrill?: () => void;
+  onStartProject?: () => void;
 };
 
 export function Settings(props: SettingsProps) {
@@ -45,7 +47,7 @@ export function Settings(props: SettingsProps) {
   );
 }
 
-function SettingsContent({ me, update: updateFromShell, projects = [], project = "", onReopenOnboarding, onStartDrill }: SettingsProps) {
+function SettingsContent({ me, update: updateFromShell, projects = [], project = "", onReopenOnboarding, onStartDrill, onStartProject }: SettingsProps) {
   const [reopening, setReopening] = useState(false);
   const reopenOnboarding = async () => {
     setReopening(true);
@@ -150,7 +152,7 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
 
         <section className="mb-8">
           <h2 className="tr-sec-title">Hubs</h2>
-          <p className="tr-sec-sub">A project lives on exactly one hub. Pins are written by <code>trantor hub set</code>.</p>
+          <p className="tr-sec-sub">If you have a remote hub, connect a project with <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>.</p>
           <div className="mt-3 flex flex-col gap-2.5">
             {hubs.map(h => (
               <div key={h.url} className="tr-card p-4">
@@ -169,9 +171,7 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
               </div>
             ))}
             {!hubs.length && (
-              <div className="tr-card-ghost flex items-center justify-center p-6 text-[13px]">
-                No pins yet — <code className="mx-1">trantor hub set &lt;project&gt; &lt;url&gt;</code>
-              </div>
+              <EmptyProjects onStart={onStartProject} />
             )}
           </div>
         </section>
@@ -246,7 +246,7 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
             <div className="min-w-0 flex-1">
               <div className="text-[13px] font-medium">Open code in</div>
               <div className="mt-0.5 text-[12px] text-[var(--color-tr-muted)]">
-                Repos are found at <code>~/development/&lt;project&gt;</code> (override with <code>TRANTOR_DEV_ROOT</code>).
+                Repos are found in the Projects folder configured in Settings &gt; General.
               </div>
             </div>
             <select value={editor} onChange={e => { const v = e.target.value; if (isEditorPref(v)) { setEditor(v); setEditorPref(v); } }}

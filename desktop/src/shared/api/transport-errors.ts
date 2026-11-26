@@ -1,3 +1,11 @@
+/** Loopback hubs need only the local service, regardless of port or IPv4 spelling. */
+export function isLoopbackHub(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "localhost" || host === "localhost." || host === "[::1]" || /^127\./.test(host);
+  } catch { return false; }
+}
+
 /** Transport failures, translated into something a person can act on.
  * Deliberately dependency-free: pure string mapping with nothing to mock, so it is unit-tested
  * directly under node.
@@ -16,7 +24,7 @@ export function describeTransportFailure(raw: string, baseUrl: string): string {
     return `The hub at ${baseUrl} did not answer in time.`;
   }
   if (r.includes("connection refused") || r.includes("tcp connect") || r.includes("error sending request")) {
-    return `Can't reach the hub at ${baseUrl}. Is it running, and are you on the tailnet?`;
+    return `Can't reach the hub at ${baseUrl}. ${isLoopbackHub(baseUrl) ? "Is it running?" : "Is it running, and are you on the tailnet?"}`;
   }
   if (r.includes("dns") || r.includes("resolve")) {
     return `Can't resolve the hub address ${baseUrl}.`;

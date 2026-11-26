@@ -2,6 +2,7 @@
 // (cross-project) on top, PROJECT (Board/Feed/Chat) changes per project, APP in the footer.
 // Fleet telemetry lives on Home as cards; the balance strip (#5555) is the one exception
 // in the header, since provider stall risk must stay always in view, not a page you visit.
+import { EmptyProjects } from "../features/settings/EmptyProjects";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, trantorCliCompatibility, type AppUpdate, type Peer, type TrantorCliCompatibility } from "../shared/api/client";
@@ -704,7 +705,7 @@ export function AppShell() {
         <div className="min-h-0 flex-1 overflow-hidden">
         {!client ? (
           <div className="p-10 text-sm text-[var(--color-tr-muted)]">
-            No projects pinned. Run <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>
+            <EmptyProjects onStart={() => { void invoke<string>("project_dev_root").then(setGenesisRoot); }} />
           </div>
         ) : pane.kind === "home" ? <Home client={client} me={ME} onOpenProject={openProject} />
           : pane.kind === "inbox" ? <Inbox client={client} me={ME} onOpenConversation={s => setPane({ kind: "messages", focus: s })} />
@@ -714,7 +715,7 @@ export function AppShell() {
           : pane.kind === "overseer" ? <Overseer client={client} />
           : pane.kind === "settings" ? <Settings me={ME} update={update} projects={[...activeProjects, ...restProjects]} project={active}
               onReopenOnboarding={() => onboardingApi.get().then(state => { setOnboarding(state); setForcedOnboarding(true); })}
-              onStartDrill={() => setDrill(true)} />
+              onStartDrill={() => setDrill(true)} onStartProject={() => { void invoke<string>("project_dev_root").then(setGenesisRoot); }} />
           : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={openLens} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={openLens} focusCard={focusCard} onFocusConsumed={() => setFocusCard(null)} />
           : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={openLens} />

@@ -10,6 +10,7 @@ export type Notice = { text: string; failed: boolean; quiet?: boolean } | null;
 export type Crew = {
   /** Agents that are installed, enabled and have quota: what Add seat and Swap can offer. */
   available: AgentStatus[];
+  unavailableReason?: (exclude?: string) => string;
   notice: Notice;
   busy: boolean;
   start: (seat: string) => Promise<void>;
@@ -19,7 +20,19 @@ export type Crew = {
   dismiss: () => void;
 };
 
+export function unavailableAgentReason(catalog: CrewCatalog | null, exclude?: string): string {
+  if (!catalog) return "Reading installed agents";
+  const agents = catalog.agents.filter(a => a.id !== exclude);
+  if (!agents.length) return exclude ? "No other agents are configured" : "No agents are configured";
+  const installed = agents.filter(a => a.installed);
+  if (!installed.length) return "No agent CLI is installed. Open Settings > Accounts to set one up.";
+  const enabled = installed.filter(a => a.enabled);
+  if (!enabled.length) return "Installed agents are disabled. Enable one in Settings > Agents.";
+  return "Enabled agents have no usable quota. Check their plans in Settings > Accounts.";
+}
+
 export function useCrew(project: string, onChanged: () => void, api: CrewApi = crewApi): Crew {
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<CrewCatalog | null>(null);
   // #13987 drill: the screen is not remounted on a project switch, so a notice is owned by the project that raised it.
   const [owned, setOwned] = useState<{ project: string; notice: Notice }>({ project, notice: null });
@@ -29,8 +42,9 @@ export function useCrew(project: string, onChanged: () => void, api: CrewApi = c
   useEffect(() => {
     let alive = true;
     setCatalog(null);
+    setCatalogError(null);
     api.catalog(project).then(c => { if (alive) setCatalog(c); })
-      .catch(e => { if (alive) setNotice({ text: `Seat catalog unavailable for ${project}: ${e instanceof Error ? e.message : String(e)}`, failed: false, quiet: true }); });
+      .catch(e => { if (alive) { const text = `Seat catalog unavailable for ${project}: ${e instanceof Error ? e.message : String(e)}`; setCatalogError(text); setNotice({ text, failed: false, quiet: true }); } });
     return () => { alive = false; };
   }, [api, project, setNotice]);
   useEffect(() => {
@@ -60,6 +74,7 @@ export function useCrew(project: string, onChanged: () => void, api: CrewApi = c
   const launchOf = (seat: string) => catalog?.agents.find(a => a.id === seat)?.launch ?? seat;
   return {
     available: catalog ? catalog.agents.filter(a => availableAgent(a, catalog.balances)) : [],
+    unavailableReason: exclude => catalogError ?? unavailableAgentReason(catalog, exclude),
     notice, busy,
     start: seat => run(seat, "starting", () => api.action(project, "up", launchOf(seat))),
     stop: seat => run(seat, "stopping", () => api.action(project, "down", seat)),

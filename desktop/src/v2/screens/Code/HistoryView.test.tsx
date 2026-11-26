@@ -50,7 +50,7 @@ async function mountHistory() {
 it("loads all branches with branch and tag pills, then returns to the current rows", async () => {
   const onRows = await mountHistory();
   await click(button("All"));
-  expect(calls[calls.length - 1]).toMatchObject({ command: "git_history", args: { project: "trantor", scope: "project", all: true, file: null, message: null } });
+  expect(calls.filter(call => call.command === "git_history").slice(-1)[0]).toMatchObject({ command: "git_history", args: { project: "trantor", scope: "project", all: true, file: null, message: null } });
   expect(host.querySelector('[data-sha="bbb2222"]')?.textContent).toContain("seat/kimi-9");
   expect(host.querySelector('[data-sha="bbb2222"]')?.textContent).toContain("tag: v1");
   expect(onRows.mock.calls[onRows.mock.calls.length - 1]?.[0][0].sha).toBe("bbb2222");
@@ -66,7 +66,7 @@ it("sends file: and message: to git instead of ignoring or subject-filtering the
     input?.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await flush();
-  expect(calls[calls.length - 1]).toMatchObject({ command: "git_history", args: { all: false, file: "src/a.ts", message: "body" } });
+  expect(calls.filter(call => call.command === "git_history").slice(-1)[0]).toMatchObject({ command: "git_history", args: { all: false, file: "src/a.ts", message: "body" } });
   expect(host.textContent).not.toContain("file: is ignored");
   expect(host.querySelector('[data-sha="bbb2222"]')?.textContent).toContain("branch work");
 });
@@ -74,7 +74,7 @@ it("sends file: and message: to git instead of ignoring or subject-filtering the
 it("lists a file's commits from the reusable header control", async () => {
   await act(async () => { root.render(<FileHistoryControl project="trantor" scope={null} path="src/a.ts" />); });
   await click(host.querySelector('[aria-label="File history for src/a.ts"]'));
-  expect(calls[calls.length - 1]).toMatchObject({ command: "git_history", args: { all: false, file: "src/a.ts" } });
+  expect(calls.filter(call => call.command === "git_history").slice(-1)[0]).toMatchObject({ command: "git_history", args: { all: false, file: "src/a.ts" } });
   expect(host.querySelector('[role="dialog"]')?.textContent).toContain("branch work");
   expect(host.querySelector('[role="dialog"]')?.textContent).toContain("bbb2222".slice(0, 8));
 });

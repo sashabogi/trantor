@@ -41,3 +41,10 @@ describe("describeTransportFailure", () => {
     expect(describeTransportFailure("Error Decoding Response Body", HUB)).toMatch(/lost contact/i);
   });
 });
+
+it.each(["http://localhost:4477", "http://127.0.0.1:4477", "http://127.2.3.4", "http://[::1]:4477"])("does not suggest a tailnet for loopback hub %s", url => {
+  expect(describeTransportFailure("connection refused", url)).toBe(`Can't reach the hub at ${url}. Is it running?`);
+});
+it("keeps the network hint for a remote hub", () => {
+  expect(describeTransportFailure("connection refused", HUB)).toContain("tailnet");
+});

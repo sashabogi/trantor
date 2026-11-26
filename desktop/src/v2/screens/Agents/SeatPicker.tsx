@@ -7,7 +7,7 @@ export type PickerTrigger = (props: { onClick: () => void; "aria-haspopup": "men
 
 export function SeatPicker({ crew, trigger }: { crew: Crew; trigger: PickerTrigger }) {
   return (
-    <PopMenu heading="Add a seat" empty="No agent is installed, enabled and within quota"
+    <PopMenu heading="Add a seat" empty={crew.unavailableReason?.() ?? "Reading installed agents"}
       items={crew.available.map(a => ({ id: a.id, label: a.label, sub: `starts ${a.launch}`, disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.start(a.id) }))}
       trigger={trigger} />
   );

@@ -29,16 +29,25 @@ const SEAT_PALETTES: [RegExp, SeatPalette][] = [
 ];
 const NEUTRAL: SeatPalette = { bg: "#2A2E36", fg: "#E7E9EC" };
 
-const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)/i;
+/** Match the session's machine component exactly once the local identity is available. */
+export function isHostSession(session: string, machineId?: string): boolean {
+  const head = session.split(":")[0];
+  return machineId ? head === machineId : head.toLowerCase().startsWith("macbook");
+}
+
+/** Legacy display names are recognized only until the machine identity arrives. */
+export function isHostIdentity(name: string, machineId?: string): boolean {
+  return machineId ? isHostSession(name, machineId) : /^(macbook|imac|mac[-.]|.*\.local$)|@/i.test(name.split(":")[0]);
+}
 
 /** The seat a person reads from a session id `<seat>:<project>`: "codex-8:trantor" → "codex-8",
  *  a host session → "orchestrator", the duty seat → its job name (#13984 drill: every avatar read TR). */
-export function seatLabel(name: string): string {
+export function seatLabel(name: string, machineId?: string): string {
   const i = name.indexOf(":");
   if (i < 0) return name;
   const head = name.slice(0, i), tail = name.slice(i + 1);
   if (/-duty$|^fleet$/.test(tail) && !/\d/.test(head)) return tail === "fleet" ? "trantor-duty" : tail;
-  if (HOSTISH.test(head)) return "orchestrator";
+  if (isHostIdentity(name, machineId)) return "orchestrator";
   if (!/\d/.test(head) && /^[a-z]+-\d+$/i.test(tail)) return tail;
   return head;
 }
@@ -50,8 +59,8 @@ export function seatAgent(session: string): string {
 }
 
 /** codex-8 → C8, orchestrator → OR, trantor-duty → TD. */
-export function monogram(name: string): string {
-  const label = seatLabel(name).trim();
+export function monogram(name: string, machineId?: string): string {
+  const label = seatLabel(name, machineId).trim();
   const seat = /^([a-z])[a-z]*-?(\d+)$/i.exec(label);
   if (seat) return `${seat[1]}${seat[2]}`.toUpperCase();
   const parts = label.split(/[-_\s.]+/).filter(Boolean);
@@ -59,8 +68,8 @@ export function monogram(name: string): string {
   return (label.slice(0, 2) || "?").toUpperCase();
 }
 
-export function seatPalette(name: string): SeatPalette {
-  const key = `${seatLabel(name)} ${name}`.toLowerCase();
+export function seatPalette(name: string, machineId?: string): SeatPalette {
+  const key = `${seatLabel(name, machineId)} ${name}`.toLowerCase();
   for (const [re, palette] of SEAT_PALETTES) if (re.test(key)) return palette;
   return NEUTRAL;
 }

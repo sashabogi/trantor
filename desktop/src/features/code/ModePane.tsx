@@ -206,13 +206,13 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
 
   // Changed-file count per seat, for the footer chips: the one-click answer to "which worktree
   // has edits". Absent = clean, never a zero.
-  const seats = useMemo(() => scopeSeats(peers, project), [peers, project]);
+  const ownMachine = useOwnMachineId();
+  const seats = useMemo(() => scopeSeats(peers, project, ownMachine), [peers, project, ownMachine]);
 
   // #13938 — seats whose /peers machine label differs from THIS machine's machine-id have no
   // local worktree: their answer comes over ssh (machines.<label>.ssh in config.json). Remote
   // seats without a target still list — saying where they live — but are never counted "clean"
   // on the strength of a missing local worktree.
-  const ownMachine = useOwnMachineId();
   const remoteMachines = useMemo(
     () => remoteSeatMachines(peers, project, ownMachine),
     [peers, project, ownMachine],

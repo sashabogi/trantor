@@ -17,11 +17,12 @@ export function useSettingsData(project: string): SettingsData {
   useEffect(() => {
     let alive = true;
     const target = project || projects[0] || "";
-    if (!target) return () => { alive = false; };
-    hubForProject(target).then(url => {
+    setHubBase("");
+    const hub = target ? hubForProject(target) : Promise.resolve("");
+    hub.catch(() => "").then(url => {
       if (!alive) return;
       setHubBase(url);
-      invoke<string>("identity_name", { base: url }).then(n => { if (alive) setMe(n); }).catch(() => {});
+      invoke<string>("identity_name", { base: url || undefined }).then(n => { if (alive) setMe(n); }).catch(e => { if (alive) setMe(`Could not read identity: ${String(e)}`); });
     }).catch(() => {});
     return () => { alive = false; };
   }, [project, projects]);

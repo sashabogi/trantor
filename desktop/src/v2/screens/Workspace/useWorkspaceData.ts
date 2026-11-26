@@ -1,4 +1,5 @@
 // The real data behind the 2.0 Workspace: peers, the hosted orchestrator pane, cards, holds, autonomy (#13987).
+import { useOwnMachineId } from "../../ui/useMachineId";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Card, FileHold, HubClient, Peer } from "../../../shared/api/client";
@@ -13,21 +14,28 @@ const POLL_MS = 12_000;
 export type WorkspaceData = {
   /** null until the first read, so "no seats" is never claimed before the hub answered. */
   seats: SeatView[] | null;
+  error: string | null;
   cards: Card[];
   holds: FileHold[];
   refresh: () => void;
 };
 
-function usePeerList(client: HubClient) {
+export function usePeerList(client: HubClient) {
   const [peers, setPeers] = useState<Peer[] | null>(null);
-  const refresh = useCallback(() => { client.peers().then(setPeers).catch(() => {}); }, [client]);
+  const [error, setError] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const refresh = useCallback(() => setRevision(v => v + 1), []);
+  useEffect(() => { setPeers(null); setError(null); }, [client]);
   useEffect(() => {
-    refresh();
-    const iv = setInterval(refresh, POLL_MS);
+    let alive = true;
+    const load = () => client.peers().then(rows => { if (alive) { setPeers(rows); setError(null); } })
+      .catch(reason => { if (alive) setError(reason instanceof Error ? reason.message : String(reason)); });
+    void load();
+    const iv = setInterval(load, POLL_MS);
     const off = client.streamEvents(ev => { if (ev.type?.startsWith("presence")) refresh(); });
-    return () => { clearInterval(iv); off?.(); };
-  }, [client, refresh]);
-  return { peers, refresh };
+    return () => { alive = false; clearInterval(iv); off?.(); };
+  }, [client, refresh, revision]);
+  return { peers, error, refresh };
 }
 
 function useLocalPanes(project: string) {
@@ -66,7 +74,8 @@ function useSubagents(project: string): SubagentInfo[] {
 }
 
 export function useWorkspaceData(client: HubClient, project: string): WorkspaceData {
-  const { peers, refresh: refreshPeers } = usePeerList(client);
+  const machineId = useOwnMachineId();
+  const { peers, error, refresh: refreshPeers } = usePeerList(client);
   const { rows, refresh: refreshPanes } = useLocalPanes(project);
   const subagents = useSubagents(project);
   const refresh = useCallback(() => { refreshPeers(); refreshPanes(); }, [refreshPeers, refreshPanes]);
@@ -76,10 +85,10 @@ export function useWorkspaceData(client: HubClient, project: string): WorkspaceD
   const seats = useMemo(() => {
     if (!peers && !rows.length) return null;
     const orch = rows.find(r => r.kind === "orch") ?? null;
-    const targets = paneTargets(seatPeers(peers ?? [], project), orch, hostPeer(peers ?? [], project), project);
+    const targets = paneTargets(seatPeers(peers ?? [], project, machineId), orch, hostPeer(peers ?? [], project, machineId), project);
     return seatViews(targets, holds, rows.filter(r => r.kind === "helper"), subagents);
-  }, [peers, rows, project, holds, subagents]);
-  return { seats, cards, holds, refresh };
+  }, [peers, rows, project, holds, subagents, machineId]);
+  return { seats, error, cards, holds, refresh };
 }
 
 export type MayDo = { label: string; title: string } | null;

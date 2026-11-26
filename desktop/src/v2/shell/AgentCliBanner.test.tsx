@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 // #14030: the banner updates on a click, stays quiet otherwise, and after a successful update
 // lists the sessions still on the old binary with ONE confirmed handoff each. IPC fakes only.
+import { takeSettingsSection } from "./settingsIntent";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,13 +78,17 @@ describe("AgentCliBanner", () => {
     expect(banner?.textContent).toContain("the Mode menu needs 2.1.326");
   });
 
-  it("stays quiet for ok, newer than verified and not installed", async () => {
+  it("stays quiet for compatible versions and offers setup for missing Claude Code", async () => {
     await mount([claude({ installed: "2.1.326", state: "ok", reason: null, features: [{ name: "Mode menu", verifiedFrom: "2.1.326", verifiedTo: "2.1.326", why: "", inRange: true }] })]);
     expect(host.querySelector("[data-agent-cli-banner]")).toBeNull();
     await mount([claude({ installed: "2.1.400", state: "newer_than_verified", reason: "newer than the newest release Trantor has verified (2.1.326)" })]);
     expect(host.querySelector("[data-agent-cli-banner]")).toBeNull();
     await mount([claude({ installed: null, state: "not_installed", reason: null })]);
-    expect(host.querySelector("[data-agent-cli-banner]")).toBeNull();
+    expect(host.textContent).toContain("Claude Code is not installed.");
+    const setup = [...host.querySelectorAll("button")].find(b => b.textContent === "Settings > Accounts");
+    act(() => setup!.click());
+    expect(takeSettingsSection()).toBe("accounts");
+    expect(invokes.some(i => i.cmd === "agent_cli_update")).toBe(false);
   });
 
   it("keeps a small copy command beside the Update button, and the click copies without running anything", async () => {

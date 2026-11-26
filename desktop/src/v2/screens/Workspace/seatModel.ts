@@ -4,7 +4,7 @@ import type { FileHold, Peer } from "../../../shared/api/client";
 import { hubActivity } from "../../../features/workspace/seatActivity";
 import { isAgentPeer, type PaneTarget } from "../../../features/workspace/paneTargets";
 import { ago } from "../../../shared/time";
-import type { Presence } from "../../ui/identity";
+import { isHostSession, type Presence } from "../../ui/identity";
 
 /** One row of `subagents_list`, as the native side serialises it. */
 export type SubagentInfo = {
@@ -35,20 +35,18 @@ export type SeatView = {
 };
 
 /** The operator's own host session, the one rule every screen shares: not a seat, and no crew action may stop or swap it. */
-export function isHostSession(session: string): boolean {
-  return session.toLowerCase().startsWith("macbook");
-}
+export { isHostSession } from "../../ui/identity";
 
 /** A seat is a crew peer of this project; the human's own host session and non-agent tools are not seats (#13987). */
-export function seatPeers(peers: Peer[], project: string): Peer[] {
+export function seatPeers(peers: Peer[], project: string, machineId?: string): Peer[] {
   return peers
     .filter(p => p.session.endsWith(`:${project}`))
-    .filter(p => !isHostSession(p.session))
+    .filter(p => !isHostSession(p.session, machineId))
     .filter(isAgentPeer);
 }
 
-export function hostPeer(peers: Peer[], project: string): Peer | undefined {
-  return peers.find(p => p.session.endsWith(`:${project}`) && isHostSession(p.session));
+export function hostPeer(peers: Peer[], project: string, machineId?: string): Peer | undefined {
+  return peers.find(p => p.session.endsWith(`:${project}`) && isHostSession(p.session, machineId));
 }
 
 const WORDS = { working: "working", "needs-you": "needs you", ready: "ready", offline: "offline" } as const satisfies Record<Presence, string>;

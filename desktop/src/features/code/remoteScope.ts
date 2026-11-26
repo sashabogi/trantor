@@ -3,13 +3,13 @@
 // the ModePane's picker and the Files center, so the two can never disagree about whose
 // worktree is local.
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { isHostSession } from "../../v2/ui/identity";
+export { useOwnMachineId } from "../../v2/ui/useMachineId";
 import type { HubClient, Peer } from "../../shared/api/client";
 import { errorLine, isUnreachable, machineSsh, remoteSeatSnapshot, type RemoteSeatSnapshot } from "./remoteSeatApi";
 
 /** seat name → machine label, for this project's seats whose machine differs from ours. The
- *  orchestrator's MacBook-Pro session is filtered the same way scopeSeats does — it is not a
- *  seat with a worktree, it is the human's session. */
+ *  local orchestrator is filtered by machine identity, the same way scopeSeats does. */
 export function remoteSeatMachines(
   peers: Peer[],
   project: string,
@@ -20,27 +20,11 @@ export function remoteSeatMachines(
   for (const p of peers) {
     if (!p.session.endsWith(`:${project}`)) continue;
     const seat = p.session.split(":")[0];
-    if (seat.toLowerCase().startsWith("macbook")) continue;
+    if (isHostSession(p.session, ownMachine)) continue;
     const machine = p.machine?.trim();
     if (machine && machine !== ownMachine) out.set(seat, machine);
   }
   return out;
-}
-
-let ownMachineCache: string | undefined;
-
-/** This machine's label (~/.agent-bus/machine-id via the machine_id command), cached per run. */
-export function useOwnMachineId(): string | undefined {
-  const [own, setOwn] = useState<string | undefined>(ownMachineCache);
-  useEffect(() => {
-    if (ownMachineCache !== undefined) return;
-    let alive = true;
-    invoke<string>("machine_id")
-      .then(id => { ownMachineCache = id.trim() || undefined; if (alive) setOwn(ownMachineCache); })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, []);
-  return own;
 }
 
 /** machine label → ssh target (null = none configured). One probe per label; stable while the

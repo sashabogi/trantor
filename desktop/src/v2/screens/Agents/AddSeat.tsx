@@ -16,9 +16,9 @@ export function AddSeat({ report, crew }: { report: BalancesReport | null; crew:
       <div className="flex flex-wrap gap-2">
         {VENDORS.map(v => {
           const own = v === "Claude";
-          const plan = own ? { tone: "warn" as const, line: "your own quota" } : planLine(entryForVendor(v, report));
+          const plan = own ? { tone: "none" as const, line: "your Claude plan" } : planLine(entryForVendor(v, report));
           return (
-            <span key={v} title={own ? "Draws your own Claude plan: avoid for crew work" : `${v} plan: ${plan.line}`}
+            <span key={v} title={own ? "Uses your Claude plan" : `${v} plan: ${plan.line}`}
               className="inline-flex items-center gap-2 rounded-lg border border-[var(--v2-edge-2)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)]">
               <span aria-hidden className="h-2 w-2 rounded-full" style={{ background: modelHue(v) }} />
               {v}

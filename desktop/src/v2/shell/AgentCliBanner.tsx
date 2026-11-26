@@ -2,6 +2,7 @@
 // CLI's own updater, only on the operator's click) with a small copy-command beside it, and a
 // session dismiss. After a successful update it lists the sessions still on the old binary, one
 // confirmed handoff each. All else stays quiet (monitoring doctrine — no repeating nags).
+import { openSettingsAt } from "./settingsIntent";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentCliCompatibility, AgentCliUpdate } from "../../shared/api/client";
@@ -114,6 +115,13 @@ export function AgentCliSessions({ cli, refreshKey = 0 }: { cli: string; refresh
 function CliBanner({ report, onDismiss }: { report: AgentCliCompatibility; onDismiss: () => void }) {
   const update = useAgentCliUpdate(report.cli);
   const updated = update.result?.ok === true;
+  if (report.state === "not_installed") return (
+    <div role="alert" data-agent-cli-banner={report.cli} className="flex items-center gap-3 border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)] px-4 py-2">
+      <p className="m-0 flex-1 text-v2-base text-[var(--v2-warn)]">{report.label} is not installed.</p>
+      <Button onClick={() => openSettingsAt("accounts")}>Settings &gt; Accounts</Button>
+      <Button variant="ghost" onClick={onDismiss}>Dismiss</Button>
+    </div>
+  );
   return (
     <div role="alert" data-agent-cli-banner={report.cli}
       className="border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-soft)]">
@@ -143,11 +151,11 @@ function CliBanner({ report, onDismiss }: { report: AgentCliCompatibility; onDis
   );
 }
 
-/** Banners for every agent CLI below Trantor's minimum; nothing for any other state. */
+/** Show incompatible CLIs and the missing orchestrator CLI with a setup action. */
 export function AgentCliBanner() {
   const reports = useAgentCliCompatibility();
   const [dismissed, setDismissed] = useState<string[]>([]);
-  const below = reports.filter(r => r.state === "below_minimum" && !dismissed.includes(r.cli));
+  const below = reports.filter(r => (r.state === "below_minimum" || (r.cli === "claude" && r.state === "not_installed")) && !dismissed.includes(r.cli));
   if (!below.length) return null;
   return <>{below.map(r => <CliBanner key={r.cli} report={r} onDismiss={() => setDismissed(cur => [...cur, r.cli])} />)}</>;
 }

@@ -1,5 +1,5 @@
 // The left rail from the Workspace artboard: fleet screens, active-project tiles, settings (#v2-F).
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ArrowDownToLine, Blocks, Bot, ChevronsLeft, ChevronsRight, FolderOpen, Gauge, Inbox, LayoutDashboard, MessagesSquare, Play, Settings } from "lucide-react";
 import type { AppUpdate } from "../../shared/api/client";
 import { ProjectTile } from "../ui/ProjectTile";
@@ -7,7 +7,7 @@ import { IconButton } from "../ui/IconButton";
 import { PRESENCE_COLOR } from "../ui/identity";
 import { isLensScreen, type Navigate, type Screen } from "../routes";
 import { useRegisterCommands } from "./commands";
-import { openSettingsAt } from "./settingsIntent";
+import { openSettingsAt, watchSettingsSection } from "./settingsIntent";
 import { MODE_CONFIG, useShellMode } from "./shellMode";
 
 function readExpanded(key: string) {
@@ -57,6 +57,7 @@ const FLEET: { screen: Screen; label: string; icon: ReactNode }[] = [
 ];
 
 export function Rail({ screen, project, live, unread, needsYou, update, onNavigate, onWake }: RailProps) {
+  useEffect(() => watchSettingsSection(() => onNavigate("settings")), [onNavigate]);
   // #14070: each mode keeps its own choice, so Developer starts on icons whatever Orchestrator shows.
   const { railKey, landing } = MODE_CONFIG[useShellMode()];
   const [picked, setPicked] = useState<Record<string, boolean>>({});

@@ -12,7 +12,7 @@ import { SECTIONS, filterSections, type SectionId } from "./sections";
 import { takeSettingsSection, watchSettingsSection } from "../../shell/settingsIntent";
 import { useSettingsData } from "./useSettingsData";
 
-export function SettingsScreen({ client, project, onNavigate }: ScreenProps) {
+export function SettingsScreen({ client, project, onNavigate, onStartProject }: ScreenProps) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState<SectionId>(() => takeSettingsSection() ?? "autonomy");
   // #14204: a page asked for while Settings is already open clears the search so it cannot be hidden.
@@ -38,7 +38,7 @@ export function SettingsScreen({ client, project, onNavigate }: ScreenProps) {
             <h2 className="m-0 text-v2-heading font-[650]">{def?.label}</h2>
             <p className="mt-1 text-v2-base text-[var(--v2-muted)]">{def?.desc}</p>
           </header>
-          <Page id={active} props={{ client, project }} data={data} query={query} onNavigate={onNavigate} />
+          <Page id={active} props={{ client, project, onStartProject }} data={data} query={query} onNavigate={onNavigate} />
         </div>
       </div>
     </div>
@@ -47,7 +47,7 @@ export function SettingsScreen({ client, project, onNavigate }: ScreenProps) {
 
 type PageProps = {
   id: SectionId;
-  props: Pick<ScreenProps, "client" | "project">;
+  props: Pick<ScreenProps, "client" | "project" | "onStartProject">;
   data: ReturnType<typeof useSettingsData>;
   query: string;
   onNavigate: ScreenProps["onNavigate"];
@@ -75,7 +75,7 @@ function Page({ id, props, data, query, onNavigate }: PageProps) {
         <Button onClick={() => onNavigate("extensions")}>Open Extensions</Button>
       </div>
     );
-    case "hub": return <HubPage />;
+    case "hub": return <HubPage onStartProject={props.onStartProject} />;
     case "identity": return <IdentityPage me={data.me} />;
     case "about": return <><AboutPage /><AgentClisCard /></>;
   }

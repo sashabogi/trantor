@@ -263,3 +263,22 @@ describe("pure model", () => {
     expect(visibleSeats("grid", live, live[1]).map(x => x.key)).toEqual(["a", "b", "c"]);
   });
 });
+
+it("shows a peer-list failure with its reason and recovers when reopened", async () => {
+  let offline = true;
+  const client = new HubClient("http://hub.test", async ({ path }) => {
+    if (path.startsWith("/peers") && offline) throw new Error("hub unavailable for maintenance");
+    const reply = path.startsWith("/peers") ? { peers: [] } : path.startsWith("/tasks") ? { tasks: [] } : { holds: [] };
+    return { status: 200, body: JSON.stringify(reply) };
+  });
+  await mountScreen(client);
+  expect(host.textContent).toContain("Can't reach the hub.");
+  expect(host.textContent).toContain("hub unavailable for maintenance");
+  expect(host.textContent).not.toContain("Reading seats");
+  offline = false;
+  await act(async () => { root.unmount(); });
+  root = createRoot(host);
+  await mountScreen(client);
+  expect(host.textContent).not.toContain("Can't reach the hub.");
+  expect(host.textContent).not.toContain("Reading seats");
+});

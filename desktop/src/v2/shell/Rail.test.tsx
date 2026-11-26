@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Rail, type RailProps } from "./Rail";
-import { takeSettingsSection } from "./settingsIntent";
+import { openSettingsAt, takeSettingsSection } from "./settingsIntent";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -111,4 +111,12 @@ describe("Rail", () => {
     toggle();
     expect(host.querySelector('button[aria-label="Update v2.0.1"]')?.textContent).toBe("Update v2.0.1");
   });
+});
+
+it("navigates to Settings when a banner requests Accounts", () => {
+  const onNavigate = vi.fn();
+  mount({ onNavigate });
+  act(() => openSettingsAt("accounts"));
+  expect(onNavigate).toHaveBeenCalledWith("settings");
+  expect(takeSettingsSection()).toBe("accounts");
 });

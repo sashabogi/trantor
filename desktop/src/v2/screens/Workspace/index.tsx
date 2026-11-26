@@ -110,7 +110,8 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   const openCommit = (sha: string) => { setOpenIntent(project, { kind: "commit", sha, seat: (shownScope ?? scope) ?? undefined }); onNavigate("code"); };
 
   let body;
-  if (data.seats === null) body = <div className="m-5 text-v2-base text-[var(--v2-muted)]">Reading seats</div>;
+  if (data.error && data.seats === null) body = <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>;
+  else if (data.seats === null) body = <div className="m-5 text-v2-base text-[var(--v2-muted)]">Reading seats</div>;
   else if (!selected) body = <EmptyCrew />;
   else if (layout === "focus") {
     body = <WorkArea client={client} project={project} seat={selected} holds={data.holds.filter(h => h.session === selected.session)}
@@ -127,6 +128,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
         scopeName={scope ?? "project checkout"} seats={seatInfos} onPickScope={pickScope}
         onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} onShownScope={setShownScope} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
+        {data.error && data.seats !== null && <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>}
         <SeatStrip seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} recording={recording} onRecord={() => setRecording(r => !r)} />
         {selected && !selected.isHelper && !selected.agentInfo && <Inspector key={selected.key} project={project} seat={selected} card={cardOf(data.cards, selected)}

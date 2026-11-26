@@ -2,6 +2,8 @@
 // the center, the record on the right.
 // Honesty rule (design system): everything rendered is real hub data, peers, cards, events.
 // Anything without a live source ships as a stated placeholder, never an imitation.
+import { isHostSession } from "../../v2/ui/identity";
+import { useOwnMachineId } from "../../v2/ui/useMachineId";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { useTasks } from "../../shared/tasks";
@@ -21,20 +23,20 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { CrewControls } from "./CrewControls";
 import { loadRailOpen, saveRailOpen } from "./prefs";
 
-// A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are
+// A seat = a crew peer of this project (agent:project). Host sessions (<machine-id>:project) are
 // the human's own windows — real peers, but not seats you'd open a terminal on, and per #5367's
 // screenshot refinement the agents ARE the tabs: the host leaves the tab row and comes back as
 // a small "you" chip at its right end.
-function seatsOf(peers: Peer[], project: string): Peer[] {
+function seatsOf(peers: Peer[], project: string, machineId?: string): Peer[] {
   return peers
     .filter(p => p.session.endsWith(`:${project}`))
-    .filter(p => !p.session.toLowerCase().startsWith("macbook"))
+    .filter(p => !isHostSession(p.session, machineId))
     // #6148: the genesis brief-poster is a bus session, not a seat — non-agent kinds leave the strip.
     .filter(isAgentPeer);
 }
 
-function hostOf(peers: Peer[], project: string): Peer | undefined {
-  return peers.find(p => p.session.endsWith(`:${project}`) && p.session.toLowerCase().startsWith("macbook"));
+function hostOf(peers: Peer[], project: string, machineId?: string): Peer | undefined {
+  return peers.find(p => p.session.endsWith(`:${project}`) && isHostSession(p.session, machineId));
 }
 
 function SeatDot({ online }: { online: boolean }) {
@@ -93,6 +95,7 @@ function PaneEmptyState({ project }: { project: string }) {
 export function Workspace({ client, project, lens, onLens }: {
   client: HubClient; project: string; lens: Lens; onLens: (l: Lens) => void;
 }) {
+  const machineId = useOwnMachineId();
   const [peers, setPeers] = useState<Peer[]>([]);
   const tasks = useTasks(client, project);
   // The record rail folds (#5593, operator: "it reads as a log, not a live surface") —
@@ -120,10 +123,10 @@ export function Workspace({ client, project, lens, onLens }: {
     client.peers().then(setPeers).catch(() => {});
   }, [client]);
 
-  const seats = useMemo(() => seatsOf(peers, project), [peers, project]);
+  const seats = useMemo(() => seatsOf(peers, project, machineId), [peers, project, machineId]);
   const gridSeats = useMemo(() => liveGridSeats(seats), [seats]);
   const showMachineBadges = useMemo(() => machineBadgesVisible(seats), [seats]);
-  const host = useMemo(() => hostOf(peers, project), [peers, project]);
+  const host = useMemo(() => hostOf(peers, project, machineId), [peers, project, machineId]);
 
   // Is this project's own session hosted as a pane? `trantor open` records it, and until it does
   // the host stays the quiet "you" chip it has always been.

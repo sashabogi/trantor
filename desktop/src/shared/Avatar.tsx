@@ -2,6 +2,8 @@
 // remote assets); each SVG is viewBox 24 with currentColor fill so brand
 // color is CSS `color`. Resolution order: explicit `llm` prop, then the name's brand token,
 // then host-looking names resolve to Claude, else a deterministic monogram.
+import { isHostIdentity } from "../v2/ui/identity";
+import { useOwnMachineId } from "../v2/ui/useMachineId";
 import claudeSvg from "@lobehub/icons-static-svg/icons/claude.svg?raw";
 import deepseekSvg from "@lobehub/icons-static-svg/icons/deepseek.svg?raw";
 import kimiSvg from "@lobehub/icons-static-svg/icons/kimi.svg?raw";
@@ -35,17 +37,17 @@ const BRANDS = {
   qwen:       { svg: qwenSvg, hex: "#6336E7", label: "Qwen" },
 } as const satisfies Record<string, Brand>;
 
-const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
+
 
 /** The brand for a session/name: "deepseek:crm-platform" → deepseek; "MacBook-Example:x" → claude.
  *  #11604: multi-instance seats register the -N-suffixed agent id as their llm ("codex-2",
  *  heartbeat RELAY_AGENT verbatim) — the suffix is an instance number, not a brand, so it is
  *  stripped before the brand table lookup; an unknown base still monograms. */
-export function brandFor(name: string, llm?: string): Brand | null {
+export function brandFor(name: string, llm?: string, machineId?: string): Brand | null {
   const key = (llm || name.split(":")[0] || "").toLowerCase().trim();
   const brand = dictGet(BRANDS, key) ?? dictGet(BRANDS, key.replace(/-\d+$/, ""));
   if (brand) return brand;
-  if (HOSTISH.test(name.split(":")[0] ?? "")) return BRANDS.claude;
+  if (isHostIdentity(name, machineId)) return BRANDS.claude;
   return null;
 }
 
@@ -56,7 +58,8 @@ export function hueOf(name: string) {
 }
 
 export function Avatar({ name, llm, size = 52 }: { name: string; llm?: string; size?: number }) {
-  const brand = brandFor(name, llm);
+  const machineId = useOwnMachineId();
+  const brand = brandFor(name, llm, machineId);
   if (brand) {
     return (
       <span className="flex shrink-0 items-center justify-center rounded-full"
@@ -81,16 +84,17 @@ export function Avatar({ name, llm, size = 52 }: { name: string; llm?: string; s
 }
 
 /** Display name for a sender: the LLM first, the machine second — "claude · laptop". */
-export function displayName(session: string, llm?: string): string {
+export function displayName(session: string, llm?: string, machineId?: string): string {
   const head = session.split(":")[0] ?? session;
-  const brand = brandFor(session, llm);
-  if (brand && HOSTISH.test(head)) return `${brand.label.toLowerCase().split(" ")[0]} · ${head}`;
+  const brand = brandFor(session, llm, machineId);
+  if (brand && isHostIdentity(session, machineId)) return `${brand.label.toLowerCase().split(" ")[0]} · ${head}`;
   return head;
 }
 
 /** The bare tinted mark, for inline use next to a name — no circle. */
 export function BrandGlyph({ name, llm, size = 13 }: { name: string; llm?: string; size?: number }) {
-  const brand = brandFor(name, llm);
+  const machineId = useOwnMachineId();
+  const brand = brandFor(name, llm, machineId);
   if (!brand) return null;
   return (
     <span aria-label={brand.label} title={brand.label}
@@ -103,10 +107,11 @@ export function BrandGlyph({ name, llm, size = 13 }: { name: string; llm?: strin
 export function AgentChip({ session, llm, model, size = 12 }: {
   session: string; llm?: string; model?: string; size?: number;
 }) {
+  const machineId = useOwnMachineId();
   return (
     <span className="tr-chip max-w-full">
       <BrandGlyph name={session} llm={llm} size={size} />
-      <span className="truncate">{displayName(session, llm)}</span>
+      <span className="truncate">{displayName(session, llm, machineId)}</span>
       {model && <span className="tr-mono truncate opacity-75">{model}</span>}
     </span>
   );

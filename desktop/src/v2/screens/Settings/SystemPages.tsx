@@ -1,4 +1,5 @@
 // Hub, Identity, Phone, Accounts and Agents: the classic panes and probes in 2.0 chrome (#13994).
+import { StartCard } from "../Projects/StartCard";
 import { useEffect, useState } from "react";
 import { HubClient, hubForProject, knownProjects, type AgentCliCompatibility } from "../../../shared/api/client";
 import { AccountsPane } from "../../../features/settings/providers/AccountsPane";
@@ -39,10 +40,10 @@ function useHubRows(): HubRow[] {
   return rows;
 }
 
-export function HubPage() {
+export function HubPage({ onStartProject }: { onStartProject?: () => void }) {
   const rows = useHubRows();
   return (
-    <Section title="Hub and machines" sub="A project lives on exactly one hub. Pin a project to a hub from the terminal with trantor hub set.">
+    <Section title="Hub and machines" sub="If you have a remote hub, connect a project with trantor hub set <project> <url>.">
       <div className="flex flex-col gap-2.5">
         {rows.map(h => (
           <div key={h.url} className="rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel-2)] p-3">
@@ -54,7 +55,7 @@ export function HubPage() {
             <div className="mt-2 flex flex-wrap gap-1.5">{h.projects.map(p => <Chip key={p} mono>{p}</Chip>)}</div>
           </div>
         ))}
-        {!rows.length && <p className="m-0 text-v2-base text-[var(--v2-muted)]">No pins yet. Run trantor hub set &lt;project&gt; &lt;url&gt;</p>}
+        {!rows.length && <StartCard onStart={onStartProject} />}
       </div>
     </Section>
   );

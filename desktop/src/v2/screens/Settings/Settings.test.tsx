@@ -35,7 +35,7 @@ describe("nav search", () => {
   it("filters sections by label, description and inner rows", () => {
     expect(filterSections("").length).toBe(SECTIONS.length);
     expect(filterSections("deploy").map(s => s.id)).toEqual(["autonomy"]);
-    expect(filterSections("netcup").map(s => s.id)).toEqual(["hub"]);
+    expect(filterSections("machines").map(s => s.id)).toEqual(["hub"]);
     expect(filterSections("zzzz")).toEqual([]);
   });
 

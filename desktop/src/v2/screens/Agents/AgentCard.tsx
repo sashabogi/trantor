@@ -1,4 +1,5 @@
 // One seat on the roster: who, what state, what card, what it may do, its plan, and the actions (#13992).
+import { useOwnMachineId } from "../../ui/useMachineId";
 import { useState } from "react";
 import { AlertTriangle, ArrowLeftRight, MessageSquare, RotateCw, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import type { BalanceChip } from "../../../features/fleet/balanceChips";
@@ -59,13 +60,14 @@ function PlanBar({ plan, vendor }: { plan: BalanceChip | null; vendor: string })
 }
 
 function MessageBox({ client, view, onDone }: { client: HubClient; view: SeatView; onDone: () => void }) {
+  const machineId = useOwnMachineId();
   const [text, setText] = useState("");
   const [note, setNote] = useState("");
   const send = () => client.send(view.peer.session, text.trim(), view.project || undefined)
     .then(() => { setNote("sent"); setText(""); onDone(); }).catch((e: Error) => setNote(e.message));
   return (
     <div className="mt-2 flex items-center gap-2">
-      <input aria-label={`Message ${seatLabel(view.peer.session)}`} value={text} onChange={e => setText(e.target.value)}
+      <input aria-label={`Message ${seatLabel(view.peer.session, machineId)}`} value={text} onChange={e => setText(e.target.value)}
         onKeyDown={e => { if (e.key === "Enter" && text.trim()) void send(); else if (e.key === "Escape") onDone(); }} placeholder="Write a message"
         className="min-w-0 flex-1 rounded-lg border border-[var(--v2-edge-2)] bg-[var(--v2-bg)] px-2.5 py-1.5 text-v2-body text-[var(--v2-text)]" />
       <button type="button" disabled={!text.trim()} onClick={() => void send()}
@@ -87,10 +89,11 @@ function Notice({ crew, seat }: { crew: Crew; seat: string }) {
 }
 
 function Actions({ view, onNavigate, duty, crew, onMessage }: Pick<AgentCardProps, "view" | "onNavigate" | "duty" | "crew"> & { onMessage: () => void }) {
-  const name = seatLabel(view.peer.session);
+  const machineId = useOwnMachineId();
+  const name = seatLabel(view.peer.session, machineId);
   const offline = view.presence === "offline";
   const seat = seatName(view.peer.session);
-  const host = isHostSession(view.peer.session);
+  const host = isHostSession(view.peer.session, machineId);
   // #14268: a stop asks inline first, and Escape or Keep running backs out
   const [asking, setAsking] = useState(false);
   const stopBusy = duty ? duty.busy : !!crew?.busy;
@@ -102,7 +105,7 @@ function Actions({ view, onNavigate, duty, crew, onMessage }: Pick<AgentCardProp
       <IconButton label="Open its terminal" title="Open its terminal in the Workspace" onClick={() => onNavigate("workspace", view.project || undefined)}><Terminal size={14} /></IconButton>
       {crew && (host
         ? <IconButton label={`Swap ${name}`} title={ORCH_NOTE} disabled><ArrowLeftRight size={14} /></IconButton>
-        : <PopMenu heading={`Swap ${name} to`} empty="No other agent is installed, enabled and within quota"
+        : <PopMenu heading={`Swap ${name} to`} empty={crew.unavailableReason?.(seatAgent(view.peer.session)) ?? "Reading installed agents"}
             items={crew.available.filter(a => a.id !== seatAgent(view.peer.session)).map(a => ({ id: a.id, label: a.label, sub: "keeps the card", disabledReason: crew.busy ? "Another seat action is running" : null, onPick: () => void crew.swap(seat, a.id) }))}
             trigger={p => (
               <IconButton {...p} label={`Swap ${name}`} title="Swap model, keep the card" disabled={crew.busy}><ArrowLeftRight size={14} /></IconButton>
@@ -123,19 +126,20 @@ function Actions({ view, onNavigate, duty, crew, onMessage }: Pick<AgentCardProp
 }
 
 export function AgentCard(props: AgentCardProps) {
+  const machineId = useOwnMachineId();
   const { view, card, plan, level, onNavigate } = props;
   const [composing, setComposing] = useState(false);
   const p = view.peer;
   const model = p.model || "";
   const warn = plan && plan.tone !== "ok" && view.presence !== "offline";
   return (
-    <article data-presence={view.presence} aria-label={seatLabel(p.session)}
+    <article data-presence={view.presence} aria-label={seatLabel(p.session, machineId)}
       className={`rounded-xl border border-[var(--v2-edge)] bg-[var(--v2-panel)] p-3 ${view.presence === "offline" ? "opacity-55" : ""}`}>
       <div className="flex items-center gap-2.5">
         <Avatar name={p.session} size={28} presence={view.presence} surface="var(--v2-panel)" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-v2-base font-semibold">{seatLabel(p.session)}</span>
+            <span className="truncate text-v2-base font-semibold">{seatLabel(p.session, machineId)}</span>
             <span className="inline-flex items-center gap-1.5 text-v2-small text-[var(--v2-muted)]">
               <span aria-hidden className="h-1.5 w-1.5 rounded-full" style={{ background: modelHue(`${view.vendor} ${model}`) }} />
               {view.vendor.toLowerCase()}{model && <> · <span className="text-[var(--v2-text-2)]">{model}</span></>}

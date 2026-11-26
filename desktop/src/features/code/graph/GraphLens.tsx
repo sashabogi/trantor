@@ -2,6 +2,7 @@
 // the one lens the mode pane stands down for, so this surface carries its own ProjectHeader and
 // the seat-scope picker (writing the SAME seat state the Code lens reads). REUSES GraphView, no
 // fork: it renders exactly as the in-Code graph tab does.
+import { useOwnMachineId } from "../../../v2/ui/useMachineId";
 import { useEffect, useMemo, useState } from "react";
 import type { HubClient } from "../../../shared/api/client";
 import { ProjectHeader, type Lens } from "../../project/ProjectHeader";
@@ -21,17 +22,18 @@ export function GraphLens({ client, project, lens, onLens, seat, onSeat, onOpenF
   /** Injected by the drill; the app builds it from the hub client, as Files.tsx does. */
   api?: GraphApi;
 }) {
+  const machineId = useOwnMachineId();
   const graphApi = useMemo(() => api ?? graphApiFor(client), [api, client]);
 
   // The seats of this project — the scope chips. Same peers poll every lens runs.
   const [seats, setSeats] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
-    const load = () => { client.peers().then(ps => { if (alive) setSeats(scopeSeats(ps, project)); }).catch(() => {}); };
+    const load = () => { client.peers().then(ps => { if (alive) setSeats(scopeSeats(ps, project, machineId)); }).catch(() => {}); };
     load();
     const iv = setInterval(load, 12_000);
     return () => { alive = false; clearInterval(iv); };
-  }, [client, project]);
+  }, [client, project, machineId]);
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="graph-lens">
