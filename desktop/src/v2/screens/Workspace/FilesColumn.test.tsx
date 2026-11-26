@@ -266,22 +266,22 @@ describe("Workspace parity with the Code screen (#14344)", () => {
     expect(column()?.querySelector('[role="treeitem"][data-path="README.md"]')?.getAttribute("data-selected")).toBe("true");
   });
 
-  it("a conflicted file's Resolve opens Code on that file instead of doing nothing", async () => {
+  it("a conflicted file's Resolve opens Code's merge view on that file", async () => {
     conflicted = true;
     await mountScreen();
     const note = column()?.querySelector('[data-note="conflicts"]');
     expect(note?.textContent).toContain("in conflict");
     await click(note?.querySelector("button") ?? null);
     expect(navigated).toEqual(["code"]);
-    expect(takeOpenIntent("trantor")).toEqual({ kind: "change", path: "src/c.ts", seat: undefined });
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "conflict", path: "src/c.ts", seat: undefined });
   });
 
-  it("the chip on a conflicted row opens the same place", async () => {
+  it("the chip on a conflicted row opens the same merge view", async () => {
     conflicted = true;
     await mountScreen();
     await click(column()?.querySelector('[data-change="src/c.ts"] button[title="Resolve this conflict"]') ?? null);
     expect(navigated).toEqual(["code"]);
-    expect(takeOpenIntent("trantor")).toEqual({ kind: "change", path: "src/c.ts", seat: undefined });
+    expect(takeOpenIntent("trantor")).toEqual({ kind: "conflict", path: "src/c.ts", seat: undefined });
   });
 });
 

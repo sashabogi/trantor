@@ -80,6 +80,14 @@ describe("open intent", () => {
     expect(takeOpenIntent("trantor")).toBeUndefined();
   });
 
+  // #14344: the Workspace sidebar's Resolve on a conflicted file lands on the merge view, not the diff.
+  it("a conflict intent opens the Merge conflicts tab, in the seat's scope, and is consumed", async () => {
+    setOpenIntent("trantor", { kind: "conflict", path: "src/c.ts", seat: "codex-8" });
+    await mount();
+    expect(activeTab()).toContain("Merge conflicts");
+    expect(takeOpenIntent("trantor")).toBeUndefined();
+  });
+
   it("a folder intent opens the Explorer with that folder and the ones above it left open", async () => {
     const mem = new Map<string, string>();
     vi.stubGlobal("localStorage", { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); }, removeItem: (k: string) => { mem.delete(k); } });

@@ -102,6 +102,8 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
         setOverride(true);
       } else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
       else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
+      // the seat comes from the intent, not from `scope`, which this render has not seen change yet
+      else if (intent.kind === "conflict") { setConflictPath(intent.path); openTab({ id: "conflict", kind: "conflict", label: "Merge conflicts", scope: seat }); }
       else activateTab("source");
     };
     apply();

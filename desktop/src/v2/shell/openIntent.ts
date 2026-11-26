@@ -7,6 +7,8 @@ export type OpenIntent =
   | { kind: "folder"; path: string; seat?: string }
   | { kind: "source-control"; seat?: string }
   | { kind: "change"; path: string; seat?: string }
+  /** #14344: open the merge view on a conflicted file (the Workspace sidebar's Resolve). */
+  | { kind: "conflict"; path: string; seat?: string }
   | { kind: "commit"; sha: string; seat?: string };
 
 const pending = new Map<string, OpenIntent>();
