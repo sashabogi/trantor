@@ -183,3 +183,6 @@ machine.
 - Load completion and in-page URL changes are tracked by sampling each webview every 300 ms.
 - Not yet: emulation inside a pop-out window, a `window` handle for popups (`postMessage` to the
   opener does not reach it), clearing find highlights.
+- A page whose load never finishes (streaming media keeps WebKit's `isLoading` up) is not an
+  error: after the wait the core asks the document; `interactive` or `complete` settles it, and
+  `open` / `new_page` return the page with `loading: true` when it is still not ready.

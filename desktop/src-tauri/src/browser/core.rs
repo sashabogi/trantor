@@ -86,6 +86,9 @@ struct PageRec {
     shown: bool,
     /// Set when a navigation was issued; a "not loading" sample inside the settle window is stale.
     awaiting: Option<Instant>,
+    /// The url whose document reported ready while WebKit still said loading (a page that
+    /// streams media never clears isLoading); loading samples for it are ignored.
+    settled_url: Option<String>,
     driver_gen: u64,
     applied_rect: Option<Rect>,
     applied_zoom: f64,
@@ -176,6 +179,7 @@ impl PageRec {
             popup: false,
             shown: false,
             awaiting: None,
+            settled_url: None,
             driver_gen: 0,
             applied_rect: None,
             applied_zoom: 1.0,
@@ -269,6 +273,7 @@ fn observe(rec: &mut PageRec, ev: &BackendEvent, settle: Duration, now: Instant)
     let (mut changed, mut finished, mut moved) = (false, false, false);
     if let Some(u) = url.as_ref().filter(|u| real_url(u) && **u != rec.st.url) {
         rec.st.url = u.clone();
+        rec.settled_url = None;
         changed = true;
         moved = !rec.st.loading;
     }
@@ -284,7 +289,9 @@ fn observe(rec: &mut PageRec, ev: &BackendEvent, settle: Duration, now: Instant)
         rec.can_forward = f;
         changed = true;
     }
-    if *loading {
+    if *loading && rec.settled_url.as_deref() == Some(rec.st.url.as_str()) {
+        // the document already said ready; WebKit's flag stays up for streaming pages
+    } else if *loading {
         rec.awaiting = None;
         if !rec.st.loading {
             rec.st.loading = true;
@@ -995,10 +1002,11 @@ impl BrowserCore {
                 let id = self.create_page(&project, url.as_deref(), false, false)?;
                 let action = host.map(|h| format!("opening {h}")).unwrap_or_else(|| "opening a new page".into());
                 self.with_driver(&project, &id, who, action, |me| {
-                    if url.is_some() && !me.wait_loaded(&project, &id, me.load_timeout) {
-                        return Err(BrowserError::new("timeout", "the page did not finish loading"));
-                    }
-                    Ok(me.page_result(&project, &id))
+                    // a page that never finishes (streaming) is still a page: report it, not a timeout
+                    let loading = url.is_some() && !me.wait_loaded(&project, &id, me.load_timeout);
+                    let mut r = me.page_result(&project, &id);
+                    r["loading"] = json!(loading);
+                    Ok(r)
                 })
             }
             "close_page" => {
@@ -1123,11 +1131,9 @@ impl BrowserCore {
         if self.page_url(project, page) != url || !self.peek(project, |p| p.page(page).is_some_and(|r| r.st.loading)).unwrap_or(false) {
             self.navigate(project, url, Some(page))?;
         }
-        if !self.wait_loaded(project, page, self.load_timeout) {
-            return Err(BrowserError::new("timeout", format!("{url} did not finish loading")));
-        }
+        let loading = !self.wait_loaded(project, page, self.load_timeout);
         let st = self.page_result(project, page);
-        Ok(json!({ "url": st["url"], "title": st["title"], "page": page }))
+        Ok(json!({ "url": st["url"], "title": st["title"], "page": page, "loading": loading }))
     }
 
     fn op_read(&self, project: &str, page: &str, max: usize) -> BrowserResult<Value> {
@@ -1194,10 +1200,31 @@ impl BrowserCore {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return false;
+                drop(g);
+                return self.settle_if_ready(project, page);
             }
             g = self.changed.wait_timeout(g, left).unwrap_or_else(|e| e.into_inner()).0;
         }
+    }
+
+    /// The wait ran out: ask the document itself. Ready (interactive or complete) settles the
+    /// page even if WebKit still reports loading.
+    fn settle_if_ready(&self, project: &str, page: &str) -> bool {
+        let ready = self
+            .run_script(project, page, &scripts::evaluate_expr("document.readyState"))
+            .ok()
+            .and_then(|v| v["value"].as_str().map(str::to_string))
+            .is_some_and(|r| r == "complete" || r == "interactive");
+        if ready {
+            self.update(project, |p| {
+                if let Some(r) = p.page_mut(page) {
+                    r.st.loading = false;
+                    r.awaiting = None;
+                    r.settled_url = Some(r.st.url.clone());
+                }
+            });
+        }
+        ready
     }
 
     // ---- hosts -------------------------------------------------------------------------------

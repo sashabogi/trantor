@@ -277,15 +277,41 @@ fn open_op_navigates_waits_for_load_and_reveals_the_tab() {
 }
 
 #[test]
-fn open_times_out_when_the_page_never_finishes() {
+fn open_reports_a_page_that_never_finishes_as_still_loading_not_an_error() {
     let r = rig();
     let mut cfg = CoreConfig::new(r.bus.clone());
     cfg.load_timeout = Duration::from_millis(100);
     let core = BrowserCore::new(r.fake.clone(), r.rec.clone(), HostRules::in_memory(), FrameStore::in_memory(), cfg);
-    // The fake only reports loads through its sink; with none attached the page never finishes.
+    // The fake only reports loads through its sink; with none attached the page never finishes,
+    // and with no eval hook the document cannot say it is ready either.
     *lock(&r.fake.sink) = None;
     let v = core.handle_request(&req("open", json!({ "url": "http://localhost:1/" })));
-    assert_eq!(v["error"], "timeout");
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["loading"], true, "{v}");
+}
+
+#[test]
+fn a_streaming_page_whose_document_is_ready_settles_and_ignores_later_loading_samples() {
+    let r = rig();
+    let mut cfg = CoreConfig::new(r.bus.clone());
+    cfg.load_timeout = Duration::from_millis(100);
+    let core = BrowserCore::new(r.fake.clone(), r.rec.clone(), HostRules::in_memory(), FrameStore::in_memory(), cfg);
+    *lock(&r.fake.sink) = None;
+    // WebKit never clears isLoading (media keeps streaming), but the document says complete
+    set_eval(&r, |js| {
+        assert!(js.contains("document.readyState"), "{js}");
+        json!({"ok": true, "value": "complete"}).to_string()
+    });
+    let v = core.handle_request(&req("new_page", json!({ "url": "http://localhost:2/" })));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["loading"], false, "{v}");
+    let page = v["page"].as_str().expect("page id").to_string();
+    // the sampler keeps reporting loading for the same url: ignored
+    core.apply_page_event("p", &page, BackendEvent::Observed { url: None, title: None, loading: true, can_back: None, can_forward: None });
+    assert!(!core.state("p").loading, "a settled page does not flip back to loading");
+    // a real navigation clears the settle: the next loading sample counts again
+    core.apply_page_event("p", &page, BackendEvent::Observed { url: Some("http://localhost:2/next".into()), title: None, loading: true, can_back: None, can_forward: None });
+    assert!(core.state("p").loading, "a new url loads normally");
 }
 
 #[test]
