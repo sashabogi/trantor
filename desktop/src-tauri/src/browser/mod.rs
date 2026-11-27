@@ -68,6 +68,7 @@ pub fn init(app: &AppHandle<Wry>) {
             let _ = crate::changes::app_log(format!("browser: no agent socket ({e})"));
         }
     }
+    #[cfg(debug_assertions)]
     drill(app, core);
 }
 
@@ -80,8 +81,9 @@ pub fn shutdown(app: &AppHandle<Wry>) {
     }
 }
 
-/// Live drill, inert unless TRANTOR_BROWSER_DRILL=<project> is set: opens TRANTOR_BROWSER_DRILL_URL
+/// Debug builds only. Live drill, inert unless TRANTOR_BROWSER_DRILL=<project> is set: opens TRANTOR_BROWSER_DRILL_URL
 /// (default https://example.com) at a fixed rect and answers every host ask with "once".
+#[cfg(debug_assertions)]
 fn drill(app: &AppHandle<Wry>, core: Arc<BrowserCore>) {
     let Ok(project) = std::env::var("TRANTOR_BROWSER_DRILL") else { return };
     let url = std::env::var("TRANTOR_BROWSER_DRILL_URL").unwrap_or_else(|_| "https://example.com".into());

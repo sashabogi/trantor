@@ -25,7 +25,11 @@ pub fn serve(core: Arc<BrowserCore>) -> std::io::Result<PathBuf> {
         }
         let _ = std::fs::remove_file(&path);
     }
-    let listener = UnixListener::bind(&path)?;
+    // owner-only from creation: the bus dir is world-readable, so a chmod after bind leaves a gap
+    let old_mask = unsafe { libc::umask(0o177) };
+    let bound = UnixListener::bind(&path);
+    unsafe { libc::umask(old_mask) };
+    let listener = bound?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     std::thread::spawn(move || {
         for conn in listener.incoming().flatten() {
