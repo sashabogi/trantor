@@ -137,6 +137,8 @@ pub fn run() {
             native_notify::install_delegate();
             browser::init(app.handle());
             remote::start(app.handle().clone());
+            // #14513: geometry-event saves, so window state survives a kill and not only a clean exit.
+            window_state_save::arm(app.handle());
             // #6668 acceptance drill: TRANTOR_HANDOFF_DRILL=<project> opens that project's Chat
             // on a pane holding a bare shell and proves no chain starts (src/handoff_drill.rs).
             handoff_drill::arm(app.handle());

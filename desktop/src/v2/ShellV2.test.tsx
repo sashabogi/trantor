@@ -15,17 +15,20 @@ const EMPTY = JSON.stringify({ peers: [], messages: [], cursor: 0, tasks: [], pr
 
 const overrides = new Map<string, unknown>();
 const calls: string[] = [];
+const ipc: { command: string; args: unknown }[] = [];
 let host: HTMLDivElement;
 let root: Root;
+let mem: Map<string, string>;
 beforeEach(() => {
-  overrides.clear(); calls.length = 0;
-  const mem = new Map<string, string>();
+  overrides.clear(); calls.length = 0; ipc.length = 0;
+  mem = new Map();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
   });
-  mockIPC(command => {
+  mockIPC((command, args) => {
     calls.push(command);
+    ipc.push({ command, args });
     if (overrides.has(command)) return overrides.get(command);
     if (command === "known_projects") return ["crebral-cortex", "trantor"];
     if (command === "hub_for_project") return "http://127.0.0.1:4477";
@@ -169,5 +172,53 @@ describe("ShellV2", () => {
     expect(host.textContent).not.toContain("trantor hub set");
     await click("button");
     expect(onStartProject).toHaveBeenCalledOnce();
+  });
+});
+
+// #14513: the shell reopens where the operator left it — the last fleet screen, else the
+// active project's remembered lens — and a navigation records where a relaunch must land.
+describe("ShellV2 reopen state", () => {
+  const screenShown = () => host.querySelector("main")?.getAttribute("data-screen");
+
+  it("reopens on the active project's remembered lens", async () => {
+    overrides.set("project_lens_get", '"code"');
+    await mount();
+    expect(screenShown()).toBe("code");
+  });
+
+  it("the last fleet screen wins over the project's lens", async () => {
+    mem.set("trantor.v2.screen", "inbox");
+    overrides.set("project_lens_get", '"code"');
+    await mount();
+    expect(screenShown()).toBe("inbox");
+  });
+
+  it("an invalid stored lens lands on Dashboard", async () => {
+    overrides.set("project_lens_get", '"chat"');
+    await mount();
+    expect(heading()).toBe("Dashboard");
+  });
+
+  it("with no projects it stays on Dashboard and reads no lens", async () => {
+    overrides.set("known_projects", []);
+    await mount();
+    // the Dashboard's own empty state fills the heading; the screen is what must stay.
+    expect(screenShown()).toBe("dashboard");
+    expect(calls).not.toContain("project_lens_get");
+  });
+
+  it("opening a project's lens remembers it per project and retires the fleet key", async () => {
+    mem.set("trantor.v2.screen", "inbox");
+    await mount();
+    await click('nav button[title="trantor"]');
+    expect(screenShown()).toBe("workspace");
+    expect(mem.has("trantor.v2.screen")).toBe(false);
+    expect(ipc.find(c => c.command === "project_lens_set")?.args).toEqual({ project: "trantor", lens: "workspace" });
+  });
+
+  it("a fleet navigation is remembered globally", async () => {
+    await mount();
+    await click('nav button[aria-label="Inbox"]');
+    expect(mem.get("trantor.v2.screen")).toBe("inbox");
   });
 });

@@ -12,6 +12,8 @@ import type { PaneTarget } from "../../../features/workspace/paneTargets";
 import { closeCardSheet, currentCardSheet } from "../../shell/cardIntent";
 import { takeOpenIntent } from "../../shell/openIntent";
 import { WorkspaceScreen } from "./index";
+import { tabKey } from "./tabState";
+import type { BrowserState } from "./browserModel";
 import { ComposerAdapter, judge } from "./ComposerAdapter";
 import { DEFAULT_PANES, WorkspacePanesContext, type WorkspacePanes } from "./panes";
 import { gridColumns, takesSeatMessage, visibleSeats, type SeatView } from "./seatModel";
@@ -60,11 +62,15 @@ let host: HTMLDivElement;
 let root: Root;
 let ipc: { command: string; args: unknown }[];
 let localPanes: HerdrSeat[];
+// #14513: what browser_state answers in this test; null is the away/empty core.
+let browserStateReply: BrowserState | null = null;
+let mem: Map<string, string>;
 beforeEach(() => {
   ipc = [];
   localPanes = [];
   mockIPC((command, args) => {
     ipc.push({ command, args });
+    if (command === "browser_state") return browserStateReply;
     if (command === "herdr_seats") return JSON.stringify(localPanes);
     if (command === "identity_name") return "sasha";
     if (command === "autonomy_get") return JSON.stringify({ resolved: { harness: "prompt", push: false, commit: true } });
@@ -82,7 +88,8 @@ beforeEach(() => {
   });
   // #14030: a fresh store per test. The Workspace persists the picked seat and layout, which leaked between
   // tests where the runtime has a real localStorage, and a bare localStorage does not exist where it has none.
-  const mem = new Map<string, string>();
+  mem = new Map();
+  browserStateReply = null;
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
@@ -508,4 +515,55 @@ it("shows a peer-list failure with its reason and recovers when reopened", async
   await mountScreen(client);
   expect(host.textContent).not.toContain("Can't reach the hub.");
   expect(host.textContent).not.toContain("Reading seats");
+});
+
+// #14513: the Workspace's last tab reopens per project, and a Browser tab only when the
+// project's browser really has a page.
+describe("reopen state", () => {
+  const selected = () => [...host.querySelectorAll('[role="tablist"][aria-label="Seat views"] [role="tab"]')]
+    .find(t => t.getAttribute("aria-selected") === "true")?.textContent ?? "";
+  const workTab = (label: string) => [...host.querySelectorAll('[role="tablist"][aria-label="Seat views"] [role="tab"]')]
+    .find(t => (t.textContent ?? "").startsWith(label)) ?? null;
+
+  it("a remembered tab reopens for the project", async () => {
+    mem.set(tabKey("trantor"), "changes");
+    await mountScreen(fakeClient([]));
+    expect(selected()).toContain("Changes");
+  });
+
+  it("a stray stored value is ignored and Terminal stands", async () => {
+    mem.set(tabKey("trantor"), "files");
+    await mountScreen(fakeClient([]));
+    expect(selected()).toContain("Terminal");
+  });
+
+  it("a remembered Browser tab reopens when the project's browser has a page", async () => {
+    mem.set(tabKey("trantor"), "browser");
+    browserStateReply = { project: "trantor", url: "https://github.com", title: "GitHub", loading: false, can_back: true, can_forward: false,
+      popped_out: false, driver: null, held_by_user: false, pages: [{ id: "p1", url: "https://github.com", title: "GitHub", loading: false, driver: null }],
+      active_page: "p1", zoom: 1, user_agent: "Safari", emulation: null };
+    await mountScreen(fakeClient([]));
+    expect(selected()).toContain("Browser");
+    expect(ipc.find(c => c.command === "browser_state")?.args).toEqual({ project: "trantor" });
+  });
+
+  it("a remembered Browser tab falls back to Terminal when no page is open", async () => {
+    mem.set(tabKey("trantor"), "browser");
+    browserStateReply = { project: "trantor", url: "", title: "", loading: false, can_back: false, can_forward: false,
+      popped_out: false, driver: null, held_by_user: false, pages: [], active_page: "", zoom: 1, user_agent: "Safari", emulation: null };
+    await mountScreen(fakeClient([]));
+    expect(selected()).toContain("Terminal");
+    // the Browser tab never mounted, so its placeholder never opened a browser
+    expect(ipc.filter(c => c.command === "browser_open")).toHaveLength(0);
+  });
+
+  it("picking a tab remembers it, and the choice never crosses projects", async () => {
+    const client = fakeClient([]);
+    await mountScreen(client);
+    await click(workTab("Changes"));
+    expect(mem.get(tabKey("trantor"))).toBe("changes");
+    await act(async () => { root.render(withPanes(<WorkspaceScreen client={client} project="other" onNavigate={() => {}} />)); });
+    expect(selected()).toContain("Terminal");
+    expect(mem.has(tabKey("other"))).toBe(false);
+  });
 });

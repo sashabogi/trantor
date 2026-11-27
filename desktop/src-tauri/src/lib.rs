@@ -29,6 +29,7 @@ mod sessions;
 mod terminal;
 mod remote_terminal;
 mod trantor_cli;
+mod window_state_save;
 mod local_hub;
 mod setup;
 mod hub;

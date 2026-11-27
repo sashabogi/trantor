@@ -8,8 +8,9 @@ import { useLocalHub } from "./shell/useLocalHub";
 import "./theme.css";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { backToClassic } from "./toggle";
-import { isLensScreen, type Navigate, type Screen, type ScreenProps } from "./routes";
+import { isLensScreen, type FleetScreen, type LensScreen, type Navigate, type Screen, type ScreenProps } from "./routes";
 import { MODE_CONFIG, saveMode, useShellMode, type Mode } from "./shell/shellMode";
+import { fleetScreenOf, initialScreen, projectLensGet, rememberScreen, SCREEN_KEY } from "./shell/screenState";
 import { useShellData } from "./shell/useShellData";
 import { TopBar } from "./shell/TopBar";
 import { ShortcutLayer } from "./shell/ShortcutLayer";
@@ -122,18 +123,42 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
   const onboarding = useOnboardingGate();
   const { setActive } = data;
   const [screen, setScreen] = useState<Screen>("dashboard");
+  // #14513: reopen where the operator left it — the last fleet screen, else the active
+  // project's remembered lens — once the project list settles, so a stale saved project
+  // never lends its lens. Screen stays "dashboard" until then.
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    if (restored || !data.projects.length) return;
+    let alive = true;
+    const apply = (lens: LensScreen | null) => {
+      if (!alive) return;
+      setRestored(true);
+      let fleet: FleetScreen | null = null;
+      try { fleet = fleetScreenOf(localStorage.getItem(SCREEN_KEY)); } catch { /* storage blocked */ }
+      const next = initialScreen(fleet, lens, data.active);
+      setScreen(cur => (cur === "dashboard" ? next : cur));
+    };
+    if (!data.active) { apply(null); return; }
+    void projectLensGet(data.active).then(apply);
+    return () => { alive = false; };
+  }, [restored, data.projects.length, data.active]);
   const mode = useShellMode();
   const landing = MODE_CONFIG[mode].landing;
   const [palette, setPalette] = useState<PaletteScope | null>(null);
   const onNavigate: Navigate = useCallback((next, project) => {
     if (project) setActive(project);
+    // #14513: every navigation is where a relaunch must land.
+    rememberScreen(next, project ?? data.active);
     setScreen(next);
-  }, [setActive]);
+  }, [setActive, data.active]);
   // #14070: a mode moves the project on screen to its own landing lens; Developer also leaves a fleet screen for the code.
   const onMode = (next: Mode) => {
     if (next === mode || MODE_CONFIG[next].unavailable) return;
     saveMode(next);
-    if (data.active && (isLensScreen(screen) || next === "developer")) setScreen(MODE_CONFIG[next].landing);
+    if (data.active && (isLensScreen(screen) || next === "developer")) {
+      rememberScreen(MODE_CONFIG[next].landing, data.active);
+      setScreen(MODE_CONFIG[next].landing);
+    }
   };
   const togglePalette = useCallback(() => setPalette(cur => (cur ? null : { kind: "global" })), []);
   usePaletteKey(togglePalette);

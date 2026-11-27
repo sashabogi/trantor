@@ -4,7 +4,7 @@ import { useActivePane } from "../../ui/useActivePane";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { BROWSER_REVEAL_EVENT } from "./browserModel";
+import { BROWSER_REVEAL_EVENT, type BrowserState } from "./browserModel";
 import { DrillMode } from "../../../features/drill/DrillMode";
 import type { ScreenProps } from "../../routes";
 import { ChatLinks } from "../../chat/LinkContext";
@@ -19,6 +19,7 @@ import { SeatStrip } from "./SeatStrip";
 import { liveSeats, tileSeats, visibleSeats, type Layout, type SeatView } from "./seatModel";
 import { useCrew } from "./useCrew";
 import { useSeatDiff } from "./useSeatDiff";
+import { browserHasPage, readStoredTab, restoredTab, storeTab } from "./tabState";
 import { cardOf, useMayDo, useWorkspaceData } from "./useWorkspaceData";
 import { WorkArea, type WorkTab } from "./WorkArea";
 
@@ -72,6 +73,11 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   }, [project]);
   const [layout, setLayout] = useState<Layout>(readLayout);
   const [tab, setTab] = useState<WorkTab>("terminal");
+  // #14513: the picked tab is where this project's Workspace reopens.
+  const pickTab = useCallback((t: WorkTab) => {
+    setTab(t);
+    storeTab(project, t);
+  }, [project]);
   // #14505: a maximized browser fills the Workspace; Esc or Restore puts the columns back.
   const [browserMax, setBrowserMax] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -92,20 +98,34 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
     try { localStorage.setItem(LAYOUT_KEY, l); } catch { /* storage blocked: the layout lasts the session */ }
   }, []);
   const focusSeat = (key: string) => { setSelKey(key); pickLayout("focus"); };
-  // Every project opens on Terminal: a tab picked in one project (an empty Browser) never follows you to the next.
-  useEffect(() => { setTab("terminal"); setBrowserMax(false); }, [project]);
+  // #14513: every project starts on Terminal until its remembered tab settles, and the choice
+  // never crosses projects — a Browser tab only when the browser really has a page.
+  useEffect(() => {
+    setTab("terminal");
+    setBrowserMax(false);
+    let alive = true;
+    const stored = readStoredTab(project);
+    if (stored && stored !== "terminal") {
+      const apply = (hasPage: boolean) => {
+        if (alive) setTab(cur => (cur === "terminal" ? restoredTab(stored, hasPage) : cur));
+      };
+      if (stored !== "browser") apply(true);
+      else invoke<BrowserState>("browser_state", { project }).then(known => apply(browserHasPage(known))).catch(() => apply(false));
+    }
+    return () => { alive = false; };
+  }, [project]);
   // An agent that opens a page brings the Browser tab forward, so you can watch it drive.
   useEffect(() => {
     const off = listen<{ project: string }>(BROWSER_REVEAL_EVENT, e => {
       if (e.payload.project !== project) return;
       pickLayout("focus");
-      setTab("browser");
+      pickTab("browser");
     });
     return () => { void off.then(stop => stop()).catch(() => {}); };
-  }, [project, pickLayout]);
+  }, [project, pickLayout, pickTab]);
   const message = () => {
     pickLayout("focus");
-    setTab("terminal");
+    pickTab("terminal");
     requestAnimationFrame(() => messageRef.current?.focus());
   };
 
@@ -145,7 +165,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   else if (!selected) body = <EmptyCrew />;
   else if (layout === "focus") {
     body = <WorkArea client={client} project={project} seat={selected} card={cardOf(data.cards, selected)} crew={crew} holds={data.holds.filter(h => h.session === selected.session)}
-      diff={diff} tab={tab} onTab={setTab} messageRef={messageRef} onDecided={data.refresh} onNavigate={onNavigate} onMessage={message}
+      diff={diff} tab={tab} onTab={pickTab} messageRef={messageRef} onDecided={data.refresh} onNavigate={onNavigate} onMessage={message}
       browserMax={browserMax} onBrowserMax={setBrowserMax} />;
   } else {
     body = <SeatGrid project={project} seats={visibleSeats(layout, tileSeats(seats), selected)} layout={layout}
