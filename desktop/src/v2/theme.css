@@ -92,6 +92,44 @@
 .v2-mono { font-family: var(--v2-mono); }
 .v2-hover:hover:not(:disabled) { background: var(--v2-raised); color: var(--v2-text); }
 
+/* #14512: the PanelToggle primitive (docs/design/v2/PanelToggles.dc.html §B). Shaded means
+   open; hover previews the click by fading the fill — open to .35, closed in at .45 — over
+   160ms. The focus variant swaps geometry on hover: the maximised fill fades out while the
+   page region fades in, and vice versa. */
+.v2-panel-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--v2-text);
+  cursor: pointer;
+}
+.v2-panel-toggle:hover:not(:disabled) { background: var(--v2-row-hover); }
+.v2-panel-toggle[data-open="false"] { color: var(--v2-muted); }
+.v2-panel-toggle[data-open="false"]:hover:not(:disabled) { color: var(--v2-text-2); }
+.v2-panel-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.v2-panel-toggle .v2-pt-shade { fill: currentColor; opacity: 1; transition: opacity 160ms var(--v2-ease); }
+.v2-panel-toggle[data-open="false"] .v2-pt-shade { opacity: 0; }
+.v2-panel-toggle[data-open="true"]:hover:not(:disabled) .v2-pt-shade { opacity: 0.35; }
+.v2-panel-toggle[data-open="false"]:hover:not(:disabled) .v2-pt-shade { opacity: 0.45; }
+.v2-panel-toggle .v2-pt-divider { opacity: 0; transition: opacity 160ms var(--v2-ease); }
+.v2-panel-toggle[data-open="false"] .v2-pt-divider { opacity: 1; }
+.v2-panel-toggle[data-open="false"]:hover:not(:disabled) .v2-pt-divider { opacity: 0; }
+.v2-panel-toggle .v2-pt-focus-full { fill: currentColor; opacity: 0; transition: opacity 160ms var(--v2-ease); }
+.v2-panel-toggle[data-open="true"] .v2-pt-focus-full { opacity: 1; }
+.v2-panel-toggle[data-open="true"]:hover:not(:disabled) .v2-pt-focus-full { opacity: 0; }
+.v2-panel-toggle .v2-pt-focus-in { fill: none; stroke: currentColor; stroke-width: 1.1; opacity: 1; transition: opacity 160ms var(--v2-ease); }
+.v2-panel-toggle[data-open="true"] .v2-pt-focus-in { opacity: 0; }
+.v2-panel-toggle[data-open="false"]:hover:not(:disabled) .v2-pt-focus-in { opacity: 0; }
+.v2-panel-toggle[data-open="true"]:hover:not(:disabled) .v2-pt-focus-in { fill: currentColor; fill-opacity: 0.5; stroke: none; opacity: 1; }
+.v2-panel-toggle .v2-pt-focus-preview { fill: currentColor; opacity: 0; transition: opacity 160ms var(--v2-ease); }
+.v2-panel-toggle[data-open="false"]:hover:not(:disabled) .v2-pt-focus-preview { opacity: 0.3; }
+
 /* #13984 drill: classic lenses embedded in 2.0 drop their own title + lens row; the 2.0 ProjectFrame owns both. */
 [data-v2-embed] :is(.tr-pane, [data-testid="graph-lens"]) > header:first-child { display: none; }
 
@@ -237,6 +275,8 @@
   .v2-hovercard,
   .v2-composer, .v2-composer::before, .v2-composer::after { animation: none !important; transition: none !important; }
   [data-v2-pane][data-working]:not([data-active]), .v2-breathe { border-color: var(--v2-accent-edge); }
+  .v2-panel-toggle .v2-pt-shade, .v2-panel-toggle .v2-pt-divider,
+  .v2-panel-toggle .v2-pt-focus-full, .v2-panel-toggle .v2-pt-focus-in, .v2-panel-toggle .v2-pt-focus-preview { transition: none; }
 }
 
 /* #14365: seat astronauts, ported from docs/design/v2/SeatAstronauts.dc.html. Transform and opacity only. */

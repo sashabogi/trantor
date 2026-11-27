@@ -89,10 +89,15 @@ describe("ChatHeader", () => {
     const actions = { sheet: null, onSheet, changed: 3, sessionId: "session-1", project: "p", onGit, onClose };
     await act(async () => root.render(<ChatHeader state={base} actions={actions} />));
     const buttons = [...host.querySelectorAll<HTMLButtonElement>("button")];
-    expect(buttons.map(b => b.getAttribute("aria-label"))).toEqual(["New chat", "Sessions", "Git", "More", "Close chat"]);
-    await act(async () => { buttons[1].click(); buttons[2].click(); buttons[4].click(); });
+    // #14512: the X that hid the chat column is gone; closing is the More menu and the top bar's right toggle.
+    expect(buttons.map(b => b.getAttribute("aria-label"))).toEqual(["New chat", "Sessions", "Git", "More"]);
+    await act(async () => { buttons[1].click(); buttons[2].click(); });
     expect(onSheet).toHaveBeenCalledWith("sessions");
     expect(onGit).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => buttons[3].click());
+    const close = [...host.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(i => i.textContent === "Close chat");
+    await act(async () => { close?.click(); });
     expect(onClose).toHaveBeenCalledOnce();
     await act(async () => buttons[0].click());
     expect(host.querySelector('[role="menu"]')?.textContent).toContain("Hand off to a fresh session");

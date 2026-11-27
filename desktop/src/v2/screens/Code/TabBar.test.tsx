@@ -34,10 +34,10 @@ afterEach(() => { act(() => root.unmount()); host.remove(); });
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 10)); });
 const render = async (over: Over = {}) => {
   await act(async () => {
-    root.render(<TabBar tabs={TABS} activeId={FILE_TAB.id} sidebarFolded={false}
+    root.render(<TabBar tabs={TABS} activeId={FILE_TAB.id}
       dirty={over.dirty ?? new Set<string>()} confirmId={over.confirmId ?? null}
       onActivate={onActivate} onRequestClose={onRequestClose} onConfirmClose={onConfirmClose} onCancelClose={onCancelClose}
-      onShowSidebar={() => undefined} onNew={() => undefined} />);
+      onNew={() => undefined} />);
   });
   await flush();
 };
@@ -89,5 +89,12 @@ describe("TabBar unsaved question (#14268)", () => {
     await render({ confirmId: FILE_TAB.id });
     await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
     expect(onCancelClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the scattered controls are gone (#14512)", () => {
+  it("no PanelLeftOpen lead button: the top bar's left toggle brings the sidebar back", async () => {
+    await render();
+    expect(host.querySelector('button[aria-label="Show the source control sidebar"]')).toBeNull();
   });
 });

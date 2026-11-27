@@ -7,6 +7,7 @@ import { useActivePane } from "../../ui/useActivePane";
 // (the picked file, the chips, the history rows) lives here instead of inside SourceControlTab.
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { takeOpenIntent, watchOpenIntent, type OpenIntent } from "../../shell/openIntent";
+import { usePanelSlot } from "../../shell/panelSlots";
 import { revealFolder } from "./revealFolder";
 import type { Card } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
@@ -79,6 +80,9 @@ function LocalCodeScreen({ client, project, onNavigate, intent }: ScreenProps & 
   const snap = state.kind === "ok" ? state.snap : null;
   const view: ScmView = viewPick ?? (snap?.seatBacked ? "history" : "changes");
   const visible = sidebarVisible(tabs.active.kind, override);
+  // #14512: the top-bar cluster drives this side list and the chat rail; their old controls are gone.
+  usePanelSlot("left", { open: visible, toggle: () => setOverride(!visible) });
+  usePanelSlot("right", { open: chatOpen, toggle: () => setChatOpen(o => !o) });
   const chips = useMemo(() => (snap ? changeChips(snap) : []), [snap]);
   const selectedChange = useMemo(() => pickChange(chips.map(c => c.path), picked, changeFocus), [chips, picked, changeFocus]);
   const seatNames = useMemo(() => seats.map(s => s.seat), [seats]);
@@ -192,9 +196,9 @@ function LocalCodeScreen({ client, project, onNavigate, intent }: ScreenProps & 
       )}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-[6px]">
         <div {...editorPane} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
-          <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
+          <TabBar tabs={tabs.tabs} activeId={tabs.activeId} dirty={tabs.dirty} confirmId={tabs.confirmId}
             onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
-            onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
+            onNew={() => { setSide("search"); setOverride(true); }} />
           {/* #14495: the classic return chip, only while the open tab IS the file the graph opened. */}
           {graphOrigin?.project === project && graphOrigin.path === activePath && (
             <div className="flex shrink-0 items-center border-b border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-3 py-1">

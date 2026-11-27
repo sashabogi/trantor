@@ -1,11 +1,11 @@
 import { useActivePane } from "../../ui/useActivePane";
 // The chat on the right (#13988): a folded rail by default so the diff keeps the width, a Composer2
 // when open, and since #14494 the conversation itself — the same transcript source the Workspace
-// chat column reads for the orchestrator, drawn with the shared 2.0 Transcript, so a reply arrives
-// without leaving Code. Crew seats have no transcript here, so those notes stay honest about the Workspace.
+// chat column reads for the orchestrator. #14512: folding is the top bar's right toggle, not a
+// header button; crew-seat notes stay honest about the Workspace.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { MessageSquare, PanelRightClose } from "lucide-react";
+import { MessageSquare } from "lucide-react";
 import { isPinned } from "../../../features/chat/scrollPin";
 import { applyBackfill, emptyChat, type Backfill, type ChatState } from "../../../features/chat/streaming";
 import { hubActivity } from "../../../features/workspace/seatActivity";
@@ -136,7 +136,6 @@ export function ChatRail({ client, project, peers, open, onToggle, draft, onDraf
       <div className="flex items-center gap-2 border-b border-[var(--v2-edge)] px-3 py-2">
         <span className="flex-1 text-v2-base font-semibold">Chat</span>
         <span className="inline-flex items-center gap-1.5 text-v2-body text-[var(--v2-muted)]"><Avatar name={name} size={16} />{name}</span>
-        <IconButton label="Fold the chat" title="Fold the chat into the rail" size={26} onClick={onToggle}><PanelRightClose size={14} aria-hidden /></IconButton>
       </div>
       {talk ? (
         <ChatConversation project={project} running={running} nudge={nudge} seat={name} empty={hint} />

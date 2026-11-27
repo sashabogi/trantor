@@ -11,12 +11,15 @@ import { RightPanel } from "./RightPanel";
 import { DEFAULT_PANES, WorkspacePanesContext } from "./panes";
 import { OPEN_KEY, WIDTH_KEY } from "./chatColumnState";
 import { takeOpenIntent } from "../../shell/openIntent";
+import { getPanelSlot, togglePanel } from "../../shell/panelSlots";
 import type { SeatView } from "./seatModel";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const PANES = { ...DEFAULT_PANES, TerminalPane: () => <div data-testid="terminal" />, RightPanel: ({ onClose }: { onClose: () => void }) => <section aria-label="Project panel"><button type="button" aria-label="Close chat" onClick={onClose} /></section> };
+// #14512: no close X rides the chat column anymore; the real panel closes from the More menu
+// and the top bar's right toggle, which these tests drive through the slot the screen registers.
+const PANES = { ...DEFAULT_PANES, TerminalPane: () => <div data-testid="terminal" />, RightPanel: () => <section aria-label="Project panel" /> };
 const client = () => new HubClient("http://hub.test", async () => ({ status: 200, body: JSON.stringify({ peers: [], tasks: [], holds: [] }) }));
 
 let host: HTMLDivElement;
@@ -136,13 +139,15 @@ describe("panes as panels (#14250)", () => {
 });
 
 describe("collapsing", () => {
-  it("closes to a rail, reopens at the same width, and remembers across mounts", async () => {
+  it("closes to a rail from the top bar's right toggle, reopens at the same width, and remembers", async () => {
     await mountScreen();
     await drag(600, 520);
-    await click(byLabel("Close chat"));
+    expect(getPanelSlot("right")?.open).toBe(true);
+    await act(async () => { togglePanel("right"); });
     expect(column()).toBeNull();
     expect(host.querySelector('aside[aria-label="Chat rail"]')).not.toBeNull();
     expect(localStorage.getItem(OPEN_KEY)).toBe("false");
+    expect(getPanelSlot("right")?.open).toBe(false);
     await click(byLabel("Open chat"));
     expect(widthNow()).toBe(480);
     expect(localStorage.getItem(OPEN_KEY)).toBe("true");
@@ -161,15 +166,16 @@ describe("header", () => {
     await act(async () => { await new Promise(r => setTimeout(r, 20)); });
   };
 
-  it("has icon buttons, no Files button and no tablist", async () => {
+  it("has icon buttons, no Files button, no close X and no tablist", async () => {
     await mountPanel();
     expect(host.querySelector('[role="tablist"]')).toBeNull();
     expect(byLabel("Files")).toBeNull();
-    for (const l of ["New chat", "Sessions", "Git", "More", "Close chat"]) {
+    for (const l of ["New chat", "Sessions", "Git", "More"]) {
       const b = byLabel(l);
       expect(b, l).not.toBeNull();
       expect(b?.title, l).not.toBe("");
     }
+    expect(byLabel("Close chat")).toBeNull();
     expect(byLabel("New chat")?.disabled).toBe(false);
   });
 
