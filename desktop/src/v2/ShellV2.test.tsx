@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockIPC, clearMocks } from "@tauri-apps/api/mocks";
 import { ShellV2, LensScreenView } from "./ShellV2";
 import { ONBOARDING_REOPENED } from "../features/onboarding/onboardingApi";
+import { takeBoardCard } from "./shell/boardIntent";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -169,5 +170,46 @@ describe("ShellV2", () => {
     expect(host.textContent).not.toContain("trantor hub set");
     await click("button");
     expect(onStartProject).toHaveBeenCalledOnce();
+  });
+
+  // #14495: a palette card result opens the Board with that card's drawer, as classic AppShell did.
+  it("a palette card result opens the Board with that card's drawer", async () => {
+    const card = { id: 77, project: "trantor", title: "Palette drill card", status: "todo", updated: Date.now() - 1000 };
+    const body = (over: Record<string, unknown> = {}) => JSON.stringify({
+      peers: [], messages: [], cursor: 0, tasks: [card], proposals: [], pendingCount: 0, holds: [],
+      events: [], entries: [], machines: [], ts: Date.now(), staleAfterMs: 90_000, ...over,
+    });
+    mockIPC((command, args) => {
+      calls.push(command);
+      if (command === "known_projects") return ["trantor"];
+      if (command === "hub_for_project") return "http://127.0.0.1:4477";
+      if (command === "identity_name") return "sasha";
+      if (command === "handoff_states") return [];
+      if (command === "local_sessions") return [{ project: "trantor", status: "working" }];
+      if (command === "plugin:event|listen") return 1;
+      if (command === "search_files") return "[]";
+      if (command === "hub_request") {
+        // SAFETY: mockIPC types args as unknown; hub_request carries the signed request's own fields.
+        const named = (args ?? {}) as { path?: string };
+        if (named.path?.startsWith("/card?id=")) return { status: 200, body: body({ task: { ...card, checklist: [] } }) };
+        return { status: 200, body: body() };
+      }
+      return null;
+    }, { shouldMockEvents: true });
+    await mount();
+    await click('nav button[title="trantor"]');
+    await click('button[title^="Search"]');
+    const input = host.querySelector<HTMLInputElement>('input[placeholder^="Search trantor"]');
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "Palette drill");
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(host.querySelector("main")?.getAttribute("data-screen")).toBe("board");
+    const drawer = host.querySelector('aside[aria-label="Card #77"]');
+    expect(drawer).not.toBeNull();
+    expect(drawer?.textContent).toContain("Palette drill card");
+    takeBoardCard("trantor");
   });
 });

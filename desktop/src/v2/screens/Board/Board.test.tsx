@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HubClient, type Card, type Peer } from "../../../shared/api/client";
+import { openBoardCard, takeBoardCard } from "../../shell/boardIntent";
 import { BoardScreen } from "./index";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -239,6 +240,36 @@ describe("BoardScreen drawer", () => {
     await flush();
     await click(q('button[aria-label="Close card"]'));
     expect(q('aside[aria-label="Card #1"]')).toBeNull();
+  });
+});
+
+// #14495: a palette card result opens the board with that card's drawer, not a board to re-search.
+describe("BoardScreen palette focus (#14495)", () => {
+  afterEach(() => { takeBoardCard("p"); takeBoardCard("other"); });
+
+  it("a card asked for before the mount opens with its drawer", async () => {
+    openBoardCard("p", 3);
+    await mount(fakeClient().client);
+    await flush();
+    const drawer = q('aside[aria-label="Card #3"]');
+    expect(drawer).not.toBeNull();
+    expect(drawer?.textContent).toContain("open the app");
+  });
+
+  it("a card asked for while the board is already showing opens without a remount", async () => {
+    const { client } = fakeClient();
+    await mount(client);
+    expect(q('aside[aria-label="Card #3"]')).toBeNull();
+    await act(async () => { openBoardCard("p", 3); });
+    await flush();
+    expect(q('aside[aria-label="Card #3"]')).not.toBeNull();
+  });
+
+  it("a card asked for in another project opens nothing here", async () => {
+    openBoardCard("other", 1);
+    await mount(fakeClient().client);
+    await flush();
+    expect(host.querySelector("aside")).toBeNull();
   });
 });
 
