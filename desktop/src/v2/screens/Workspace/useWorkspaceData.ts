@@ -122,8 +122,13 @@ export function useMayDo(project: string): MayDo {
   return mayDo;
 }
 
-/** The card a seat is working: its own assignee in doing or testing, never someone else's. */
+/** The card a seat is working: its own assignee in doing or testing, never someone else's.
+ *  #14514: the hub lists cards oldest-first and `find` took the FIRST open card, so a seat with
+ *  an old never-closed card (the orchestrator's September spike) pinned its row to it forever.
+ *  The card a seat is on NOW is the one it touched LAST: candidates rank by updated, newest first. */
 export function cardOf(cards: Card[], seat: SeatView): Card | undefined {
-  return cards.find(c => (c.status === "doing" || c.status === "testing") && c.assignee === seat.session)
-    ?? cards.find(c => (c.status === "doing" || c.status === "testing") && c.assignee === seat.agent);
+  const newest = (assignee: string) => cards
+    .filter(c => (c.status === "doing" || c.status === "testing") && c.assignee === assignee)
+    .sort((a, b) => (b.updated ?? b.ts ?? 0) - (a.updated ?? a.ts ?? 0))[0];
+  return newest(seat.session) ?? newest(seat.agent);
 }

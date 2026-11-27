@@ -5,7 +5,7 @@ import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { HubClient, type FileHold, type Peer } from "../../../shared/api/client";
+import { HubClient, type Card, type FileHold, type Peer } from "../../../shared/api/client";
 import type { Composer } from "../../../features/chat/Composer";
 import { surfaceFor, type HerdrSeat } from "../../../features/workspace/herdr";
 import type { PaneTarget } from "../../../features/workspace/paneTargets";
@@ -42,7 +42,8 @@ const CREW = JSON.stringify({ agents: [
 const CARDS = [{ id: 13970, project: "trantor", title: "Restore at login", status: "doing", assignee: "codex-8:trantor" }];
 const HOLD: FileHold = { id: 7, project: "trantor", file: "src/a.ts", session: "codex-8:trantor", other: "glm-5:trantor", status: "pending", ts: now };
 
-type HubReply = { peers: Peer[] } | { tasks: typeof CARDS } | { holds: FileHold[] } | { ok: boolean; id: number };
+// #14514: tasks may carry optional stamps (updated/ts) the slim hub rows really send.
+type HubReply = { peers: Peer[] } | { tasks: Card[] } | { holds: FileHold[] } | { ok: boolean; id: number };
 type Calls ={ path: string; method: string; body: string | null }[];
 function fakeClient(calls: Calls, holds: FileHold[] = []) {
   return new HubClient("http://hub.test", async ({ method, path, body }) => {
@@ -203,6 +204,31 @@ describe("selection and inspector", () => {
     expect(terminalAgents()).toEqual(["glm-5"]);
     expect(host.querySelector('button[aria-label="Message glm-5"]')).not.toBeNull();
     expect(host.textContent).not.toContain("#13970");
+  });
+
+  it("the orchestrator's row shows the card it works on now, never its oldest open card (#14514)", async () => {
+    // The operator's screenshot: the row read a September spike stuck in testing while the
+    // orchestrator worked newer cards. The hub serves tasks oldest-first, so this fixture
+    // puts the stale card FIRST — the card it touched last must still win.
+    localPanes = [{ project: "trantor", agent: "MacBook-Pro:Ember", surface: "s1", kind: "orch", status: "working" }];
+    const tasks = [
+      { id: 9743, project: "trantor", title: "Spike: run fast-jev-compaction fully local", status: "testing", assignee: "MacBook-Pro:trantor", updated: now - 60 * 86_400_000 },
+      { id: 13970, project: "trantor", title: "Restore at login", status: "doing", assignee: "codex-8:trantor" },
+      { id: 14516, project: "trantor", title: "The browser contract, wave 2", status: "doing", assignee: "MacBook-Pro:trantor", updated: now - 5 * 60_000 },
+    ];
+    const client = new HubClient("http://hub.test", async ({ path }) => {
+      const json = (reply: HubReply) => ({ status: 200, body: JSON.stringify(reply) });
+      if (path.startsWith("/peers")) return json({ peers: PEERS });
+      if (path.startsWith("/tasks")) return json({ tasks });
+      if (path.startsWith("/holds")) return json({ holds: [] });
+      return json({ ok: true, id: 1 });
+    });
+    await mountScreen(client);
+    // The orchestrator leads the strip and is picked first: its row reads the touched-last card.
+    expect(host.textContent).toContain("#14516");
+    expect(host.textContent).toContain("The browser contract, wave 2");
+    expect(host.textContent).not.toContain("9743");
+    expect(host.textContent).not.toContain("Spike: run fast-jev-compaction");
   });
 
   it("Grid shows every live seat's terminal and a header click focuses that seat", async () => {
