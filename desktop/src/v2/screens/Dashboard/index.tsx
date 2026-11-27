@@ -5,6 +5,7 @@ import { orchestratorOpen } from "../../../features/workspace/herdr";
 import type { ScreenProps } from "../../routes";
 import { Seg } from "../../ui/Seg";
 import { actionableCount, buildQueue, dashboardGroups, liveSeats } from "./model";
+import { DutyDarkNote } from "./DutyDark";
 import { NeedsYou } from "./NeedsYou";
 import { Collisions, idleMoves, Machines, StatTiles, YourMove, type Move } from "./Panels";
 import { ProjectSidebar } from "./ProjectSidebar";
@@ -62,6 +63,7 @@ export function DashboardScreen({ client, onNavigate, onStartProject }: ScreenPr
     <div className="flex h-full min-h-0">
       <ProjectSidebar projects={projects} cards={data.cards} open={data.open} peers={data.peers} interrupted={data.interrupted} onNavigate={onNavigate} onStartProject={onStartProject} />
       <main className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
+        <DutyDarkNote client={client} />
         <div className="mb-4 flex items-end gap-3">
           <div className="min-w-0 flex-1">
             <h1 className="m-0 text-v2-small font-semibold uppercase tracking-[0.12em] text-[var(--v2-muted)]">Dashboard</h1>
