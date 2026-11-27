@@ -1,8 +1,13 @@
 // Fleet balance chip drills (#5555, v7 revision): every row kind → the one chip, all branches of
 // the pure helper. Pure inputs, pure assertions — no window. Reset short-forms are asserted
 // against Date.now()-relative timestamps so they cannot decay.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { chipFrom, isStale, isZombie, promptCacheLine, sortRows, toneClass, untilLong, type BalanceRow } from "./balanceChips";
+
+// Rows are built from Date.now() and formatted a moment later: on a slow CI runner "2h" became
+// "1h 59m" and failed the v0.18.136 release. One frozen clock for the file.
+beforeAll(() => { vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-27T12:00:00Z") }); });
+afterAll(() => { vi.useRealTimers(); });
 
 const row = (r: Partial<BalanceRow>): BalanceRow => ({
   provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, low: false,
