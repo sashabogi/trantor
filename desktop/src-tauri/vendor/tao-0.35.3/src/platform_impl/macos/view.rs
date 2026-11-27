@@ -135,6 +135,10 @@ pub fn new_view(ns_window: &NSWindow) -> (Option<Retained<NSView>>, Weak<Mutex<C
 
 pub unsafe fn set_ime_position(ns_view: &NSView, input_context: id, x: f64, y: f64) {
   let state_ptr: *mut c_void = *ns_view.get_ivar("taoState");
+  // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+  if state_ptr.is_null() {
+    return;
+  }
   let state = &mut *(state_ptr as *mut ViewState);
   let Some(window) = state.ns_window.load() else {
     return;
@@ -289,7 +293,9 @@ extern "C" fn dealloc(this: &Object, _sel: Sel) {
     let state: *mut c_void = *this.get_ivar("taoState");
     let marked_text: *mut NSMutableAttributedString = *this.get_ivar("markedText");
     let _: () = msg_send![marked_text, release];
-    drop(Box::from_raw(state as *mut ViewState));
+    if !state.is_null() {
+      drop(Box::from_raw(state as *mut ViewState));
+    }
   }
 }
 
@@ -320,6 +326,10 @@ extern "C" fn view_did_move_to_window(this: &Object, _sel: Sel) {
   trace!("Triggered `viewDidMoveToWindow`");
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     if let Some(tracking_rect) = state.tracking_rect.take() {
@@ -341,6 +351,10 @@ extern "C" fn view_did_move_to_window(this: &Object, _sel: Sel) {
 extern "C" fn frame_did_change(this: &Object, _sel: Sel, _event: id) {
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     if let Some(tracking_rect) = state.tracking_rect.take() {
@@ -362,6 +376,10 @@ extern "C" fn frame_did_change(this: &Object, _sel: Sel, _event: id) {
 extern "C" fn draw_rect(this: &Object, _sel: Sel, rect: NSRect) {
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     if let Some(position) = state.traffic_light_inset {
@@ -393,6 +411,10 @@ extern "C" fn touch_bar(_this: &Object, _sel: Sel) -> id {
 extern "C" fn reset_cursor_rects(this: &Object, _sel: Sel) {
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     let bounds: NSRect = msg_send![this, bounds];
@@ -477,6 +499,10 @@ unsafe fn set_marked_text_inner(this: &mut Object, string: id) {
     *marked_text_ref = Retained::into_raw(marked_text);
 
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
     state.in_ime_preedit = true;
     state.key_triggered_ime = true;
@@ -527,6 +553,10 @@ extern "C" fn first_rect_for_character_range(
   unsafe {
     trace!("Triggered `firstRectForCharacterRange`");
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+    }
     let state = &mut *(state_ptr as *mut ViewState);
     let (x, y) = state.ime_spot.unwrap_or_else(|| {
       state
@@ -561,6 +591,10 @@ extern "C" fn insert_text(
 unsafe fn insert_text_inner(this: &Object, string: &NSString) {
   {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
     let Some(window_id) = live_window_id(state) else {
       trace!("Completed `insertText` (window already gone)");
@@ -722,6 +756,10 @@ extern "C" fn key_down(this: &mut Object, _sel: Sel, event: &NSEvent) {
 unsafe fn key_down_inner(this: &mut Object, event: &NSEvent) {
   {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
     let Some(window_id) = live_window_id(state) else {
       trace!("Completed `keyDown` (window already gone)");
@@ -785,6 +823,10 @@ extern "C" fn key_up(this: &Object, _sel: Sel, event: &NSEvent) {
   trace!("Triggered `keyUp`");
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     state.is_key_down = false;
@@ -814,6 +856,10 @@ extern "C" fn flags_changed(this: &Object, _sel: Sel, ns_event: &NSEvent) {
   trace!("Triggered `flagsChanged`");
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
     let Some(window_id) = live_window_id(state) else {
       trace!("Completed `flagsChanged` (window already gone)");
@@ -955,6 +1001,10 @@ extern "C" fn cancel_operation(this: &Object, _sel: Sel, _sender: id) {
   unsafe {
     let mtm = MainThreadMarker::new_unchecked();
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     let event: Retained<NSEvent> = msg_send![&NSApp(mtm), currentEvent];
@@ -982,6 +1032,10 @@ extern "C" fn cancel_operation(this: &Object, _sel: Sel, _sender: id) {
 fn mouse_click(this: &Object, event: &NSEvent, button: MouseButton, button_state: ElementState) {
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     update_potentially_stale_modifiers(state, event);
@@ -1035,6 +1089,10 @@ extern "C" fn other_mouse_up(this: &NSView, _sel: Sel, event: &NSEvent) {
 fn mouse_motion(this: &NSView, event: &NSEvent) {
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     let window_point = event.locationInWindow();
@@ -1094,6 +1152,10 @@ extern "C" fn mouse_entered(this: &Object, _sel: Sel, _event: id) {
   trace!("Triggered `mouseEntered`");
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     if let Some(window_id) = live_window_id(state) {
@@ -1114,6 +1176,10 @@ extern "C" fn mouse_exited(this: &Object, _sel: Sel, _event: id) {
   trace!("Triggered `mouseExited`");
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     if let Some(window_id) = live_window_id(state) {
@@ -1137,6 +1203,10 @@ extern "C" fn scroll_wheel(this: &NSView, _sel: Sel, event: &NSEvent) {
 
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     let delta = {
@@ -1161,6 +1231,10 @@ extern "C" fn scroll_wheel(this: &NSView, _sel: Sel, event: &NSEvent) {
     };
 
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     update_potentially_stale_modifiers(state, event);
@@ -1190,6 +1264,10 @@ extern "C" fn pressure_change_with_event(this: &NSView, _sel: Sel, event: &NSEve
 
   unsafe {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
+    // a view torn down by AppKit (passkey sheet) still gets events: no state, ignore them
+    if state_ptr.is_null() {
+      return;
+    }
     let state = &mut *(state_ptr as *mut ViewState);
 
     let pressure = event.pressure();
