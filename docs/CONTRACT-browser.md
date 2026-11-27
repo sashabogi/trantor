@@ -186,3 +186,8 @@ machine.
 - A page whose load never finishes (streaming media keeps WebKit's `isLoading` up) is not an
   error: after the wait the core asks the document; `interactive` or `complete` settles it, and
   `open` / `new_page` return the page with `loading: true` when it is still not ready.
+- Pages survive a relaunch (#14522): each project's open pages and active page persist in
+  `browser/pages.json` (popups and blank pages are not saved). At launch they appear in
+  `pages` with `restored: true` and no webview; the first `browser_open` with a rect or the first
+  page-targeting agent op creates them (active first). Back/forward history and pop-out state are
+  not restored.
