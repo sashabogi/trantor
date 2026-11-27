@@ -90,3 +90,79 @@ The relay MCP server exposes `browser_open`, `browser_read`, `browser_click`, `b
 
 Multiple pages, downloads, file uploads, DevTools, extensions, the hub route for remote seats,
 visual baselines.
+
+## Wave 2 (B3, B4, B5), added 2026-11-26
+
+Everything above stays valid. Additions are backward compatible: every command and socket op gains
+an optional `page` (absent = the active page).
+
+### Departures from wave 1 the build settled
+
+- `once` lasts for the visit to that host (until the page leaves the host or closes); `deny`
+  answers only the next op. `browser_steps(project) -> Step[]` and the event
+  `browser://reveal { project }` exist. Error codes add `bad_request` and `unsupported`. A click
+  point is `{ "x", "y" }` at the top level. A blank page is hidden and reports `url: ""`.
+- Rects are DOM coordinates; the macOS backend adds the window's title-bar inset itself.
+
+### Pages
+
+`BrowserState` gains `pages: [{ id, url, title, loading, driver }]` and `active_page: String`
+(`""` when none). The top-level `url`, `title`, `loading`, `driver`, `can_back`, `can_forward`
+describe the active page, so wave 1 readers keep working.
+
+| Command | Args | Returns |
+|---|---|---|
+| `browser_new_page` | `url: Option<String>` | page id (becomes active) |
+| `browser_close_page` | `page: String` | `()`; closing the last page = Nothing open |
+| `browser_select_page` | `page: String` | `()` |
+
+Only the active page is shown; the others stay alive, hidden. Pop out moves the whole page set.
+A page an agent opens with `new_page` is named in the page strip by its driver. A site's
+`window.open` / `target=_blank` opens a new page (sign-in popups included) instead of replacing the
+current one; the popup page closes itself when the site calls `window.close()`.
+
+### B5 commands
+
+| Command | Args | Returns |
+|---|---|---|
+| `browser_zoom` | `level: Option<f64>` (`None` = reset to 1.0), clamped 0.3 to 3.0 | `()` |
+| `browser_find` | `text: String`, `backwards: bool` | `{ found: bool }` |
+| `browser_find_clear` | | `()` |
+| `browser_inspect` | | `()` (opens Web Inspector for the active page) |
+| `browser_set_user_agent` | `preset: Option<String>` (`None` = default Safari) | `()` reloads |
+| `browser_emulate` | `device: Option<Device>` | `()` |
+| `browser_history` | | `[{ url, title, at }]`, newest first, 500 kept per project |
+| `browser_favorites` | | `[{ url, title }]` |
+| `browser_favorite_toggle` | `url`, `title` | `bool` (now a favorite) |
+| `browser_permissions` | | `[{ host, rule: "site" }]` |
+| `browser_permission_revoke` | `host` | `()` |
+| `browser_clear_storage` | | `()` (cookies, storage, cache of this project's data store; pages reload) |
+
+`Device { name, w, h, mobile: bool }`. Presets (name, w, h, mobile): `iPhone 15` 393x852 true,
+`iPhone SE` 375x667 true, `Pixel 8` 412x915 true, `iPad` 820x1180 true, `Laptop` 1280x800 false,
+`Desktop` 1920x1080 false; custom sizes are allowed. Emulation places the page at the device size
+centred in the tab's rect (a letterbox); a device larger than the rect is scaled down with the page
+zoom so it fits, and the letterbox ignores clicks. A mobile device also switches the user agent to
+that device's (iPhone and iPad: Mobile Safari; Pixel: Chrome Android) until emulation ends.
+WebKit cannot fake touch or device pixel ratio: the device bar says so.
+
+`BrowserState` gains `zoom: f64`, `user_agent: String` (preset name or `"Safari"`),
+`emulation: Option<Device>`. Zoom, user agent, emulation, history, favorites persist per project.
+
+### Socket ops added
+
+`pages`, `new_page { url? }`, `close_page { page }`, `select_page { page }`,
+`resize { device? | w, h | none }` (the agent's `browser_resize`), `back`, `forward`, `reload`,
+`evaluate { script }` (always asks the operator once per host, like a new host; returns
+`{ value }` as JSON).
+
+### Agent tools (B3, in mcp.mjs)
+
+`browser_open { url, new_page? }`, `browser_read { max_chars? }`, `browser_click { ref | selector |
+x, y }`, `browser_type { ref | selector, text, submit? }`, `browser_scroll { dy }`,
+`browser_screenshot { ref? }` (returns the PNG as an MCP image plus its path),
+`browser_resize { device? | w, h }`, `browser_pages`, `browser_back`, `browser_forward`. Each
+connects to `<bus>/browser.sock` with the calling session's id and display label. On
+`held_by_user` or `waiting_for_approval` the tool waits, re-checking `state` every second up to 120
+s, and says what it is waiting for; on `no_app` it says Trantor's desktop app is not open on this
+machine.
