@@ -612,6 +612,9 @@ fn start_file_watch(
     map.insert(key.clone(), FileWatch { stop, _watcher: watcher });
     drop(guard);
 
+    // FSEvents reports real paths: a root reached through a symlink (macOS /var -> /private/var,
+    // a symlinked projects folder) must be stripped by its real path too, or nothing matches.
+    let real_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     tauri::async_runtime::spawn_blocking(move || {
         let mut batch: Vec<String> = Vec::new();
         let mut last_emit = Instant::now();
@@ -624,7 +627,7 @@ fn start_file_watch(
                         continue;
                     }
                     for path in event.paths {
-                        let rel = path.strip_prefix(&root).unwrap_or(&path);
+                        let rel = path.strip_prefix(&root).or_else(|_| path.strip_prefix(&real_root)).unwrap_or(&path);
                         let rel_str = rel.to_string_lossy().to_string();
                         if !rel_str.is_empty() && !is_ignored(rel, TREE_SKIP) {
                             batch.push(rel_str);
