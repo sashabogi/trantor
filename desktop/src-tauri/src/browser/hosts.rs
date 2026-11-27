@@ -47,6 +47,8 @@ pub struct HostRules {
     allowed: HashMap<String, BTreeSet<String>>,
     once: HashSet<(String, String)>,
     denied: HashSet<(String, String)>,
+    eval_once: HashSet<(String, String)>,
+    eval_denied: HashSet<(String, String)>,
     pending: Vec<Ask>,
 }
 
@@ -65,7 +67,6 @@ impl HostRules {
         HostRules { path: Some(path), allowed, ..Self::default() }
     }
 
-    #[cfg(test)]
     pub fn allowed_for(&self, project: &str) -> Vec<String> {
         self.allowed.get(project).map(|s| s.iter().cloned().collect()).unwrap_or_default()
     }
@@ -73,6 +74,8 @@ impl HostRules {
     pub fn check(&mut self, project: &str, host: &str, session: &str, label: &str, new_id: impl FnOnce() -> String) -> Decision {
         let host = norm(host);
         let key = (project.to_string(), host.clone());
+        // a script grant is for the visit: any drive on another host ends it
+        self.eval_once.retain(|(p, h)| p != project || *h == host);
         if host.is_empty() || is_local(&host) || self.allowed.get(project).is_some_and(|s| s.contains(&host)) {
             return Decision::Allow;
         }
@@ -84,10 +87,33 @@ impl HostRules {
         if self.denied.remove(&key) {
             return Decision::Denied;
         }
-        if self.pending.iter().any(|a| a.project == project && a.host == host) {
+        if self.pending.iter().any(|a| a.project == project && a.host == host && a.kind.is_none()) {
             return Decision::Waiting;
         }
-        let ask = Ask { project: project.into(), id: new_id(), session: session.into(), label: label.into(), host };
+        let ask = Ask { project: project.into(), id: new_id(), session: session.into(), label: label.into(), host, kind: None };
+        self.pending.push(ask.clone());
+        Decision::Ask(ask)
+    }
+
+    /// Running a script always asks once per host (a granted `site` does not cover it), and the
+    /// grant lasts for the visit like `once`. Localhost never asks.
+    pub fn check_eval(&mut self, project: &str, host: &str, session: &str, label: &str, new_id: impl FnOnce() -> String) -> Decision {
+        let host = norm(host);
+        let key = (project.to_string(), host.clone());
+        if host.is_empty() || is_local(&host) {
+            return Decision::Allow;
+        }
+        self.eval_once.retain(|(p, h)| p != project || *h == host);
+        if self.eval_once.contains(&key) {
+            return Decision::Allow;
+        }
+        if self.eval_denied.remove(&key) {
+            return Decision::Denied;
+        }
+        if self.pending.iter().any(|a| a.project == project && a.host == host && a.kind.is_some()) {
+            return Decision::Waiting;
+        }
+        let ask = Ask { project: project.into(), id: new_id(), session: session.into(), label: label.into(), host, kind: Some("evaluate".into()) };
         self.pending.push(ask.clone());
         Decision::Ask(ask)
     }
@@ -97,6 +123,14 @@ impl HostRules {
         let pos = self.pending.iter().position(|a| a.id == id).ok_or_else(|| format!("no open ask {id}"))?;
         let ask = self.pending.remove(pos);
         let key = (ask.project.clone(), ask.host.clone());
+        if ask.kind.is_some() {
+            // an evaluate grant is never persisted: once and site both cover this visit
+            match choice {
+                Choice::Deny => self.eval_denied.insert(key),
+                _ => self.eval_once.insert(key),
+            };
+            return Ok(ask);
+        }
         match choice {
             Choice::Once => {
                 self.once.insert(key);
@@ -115,6 +149,7 @@ impl HostRules {
     /// Ends every "once" grant for a project (its browser closed).
     pub fn end_visit(&mut self, project: &str) {
         self.once.retain(|(p, _)| p != project);
+        self.eval_once.retain(|(p, _)| p != project);
     }
 
     pub fn revoke(&mut self, project: &str, host: &str) {

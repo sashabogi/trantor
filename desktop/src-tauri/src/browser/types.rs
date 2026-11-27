@@ -1,5 +1,6 @@
 //! Shapes shared by the commands, the events and the agent socket (docs/CONTRACT-browser.md).
 
+use super::device::{Device, DEFAULT_UA};
 use serde::{Deserialize, Serialize};
 
 /// Logical pixels, relative to the main window's content.
@@ -29,7 +30,18 @@ pub struct Driver {
     pub since: u64,
 }
 
+/// One entry of the page strip.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PageState {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    pub loading: bool,
+    pub driver: Option<Driver>,
+}
+
+/// The top-level url, title, loading, driver and history flags describe the active page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrowserState {
     pub project: String,
     pub url: String,
@@ -40,6 +52,51 @@ pub struct BrowserState {
     pub popped_out: bool,
     pub driver: Option<Driver>,
     pub held_by_user: bool,
+    pub pages: Vec<PageState>,
+    pub active_page: String,
+    pub zoom: f64,
+    pub user_agent: String,
+    pub emulation: Option<Device>,
+}
+
+impl Default for BrowserState {
+    fn default() -> Self {
+        BrowserState {
+            project: String::new(),
+            url: String::new(),
+            title: String::new(),
+            loading: false,
+            can_back: false,
+            can_forward: false,
+            popped_out: false,
+            driver: None,
+            held_by_user: false,
+            pages: Vec::new(),
+            active_page: String::new(),
+            zoom: 1.0,
+            user_agent: DEFAULT_UA.to_string(),
+            emulation: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub url: String,
+    pub title: String,
+    pub at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Favorite {
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Permission {
+    pub host: String,
+    pub rule: String,
 }
 
 /// Payload of `browser://ask`.
@@ -50,6 +107,9 @@ pub struct Ask {
     pub session: String,
     pub label: String,
     pub host: String,
+    /// "evaluate" when the ask is for running a script; absent for a plain host ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// One line of the Steps list.
@@ -90,7 +150,13 @@ pub enum BackendEvent {
     LoadStarted(String),
     LoadFinished(String),
     Title(String),
+    /// The site asked for a new window (window.open, target=_blank, a sign-in popup).
     NewWindow(String),
+    /// The page called window.close().
+    CloseRequested,
+    /// What the webview itself says now, sampled even while the page is hidden. `loading` is a
+    /// level, the rest are set only when they changed since the last sample.
+    Observed { url: Option<String>, title: Option<String>, loading: bool, can_back: Option<bool>, can_forward: Option<bool> },
     PopoutClosed,
 }
 

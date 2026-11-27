@@ -123,6 +123,23 @@ return JSON.stringify({ok:true,rect:{x:r.left,y:r.top,w:r.width,h:r.height}});
     wrap(target, body)
 }
 
+fn evaluate_wrap(value_expr: &str) -> String {
+    format!(
+        "(function(){{try{{var v=({value_expr});var out;try{{out=JSON.stringify(v);}}catch(e){{out=JSON.stringify(String(v));}}return JSON.stringify({{ok:true,value:out===undefined?null:JSON.parse(out)}});}}catch(err){{return JSON.stringify({{ok:false,error:'script_error',message:String(err&&err.message||err)}});}}}})()"
+    )
+}
+
+/// A script that is one expression, run directly so a strict CSP does not matter. A statement
+/// list fails to parse here and the core falls back to `evaluate_eval`.
+pub fn evaluate_expr(src: &str) -> String {
+    evaluate_wrap(src)
+}
+
+/// Any script, through indirect eval (blocked on pages that forbid unsafe-eval).
+pub fn evaluate_eval(src: &str) -> String {
+    evaluate_wrap(&format!("(0,eval)({})", Value::String(src.to_string())))
+}
+
 /// Parses a script result. Some platforms hand back the JSON string, some a JSON-encoded string.
 pub fn parse_result(raw: &str) -> Option<Value> {
     let v: Value = serde_json::from_str(raw.trim()).ok()?;
@@ -142,6 +159,13 @@ mod tests {
         let s = click(&evil);
         assert!(s.ends_with(r#"({"selector":"a'); alert(1); ('"})"#));
         assert!(read(20000).contains(r#"({"max":20000})"#));
+    }
+
+    #[test]
+    fn evaluate_embeds_the_script_and_never_breaks_out_of_the_json_string() {
+        let e = evaluate_eval("1'); alert(1); ('");
+        assert!(e.contains(r#"(0,eval)("1'); alert(1); ('")"#));
+        assert!(evaluate_expr("history.pushState({}, '', '/x')").contains("var v=(history.pushState"));
     }
 
     #[test]

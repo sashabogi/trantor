@@ -6,12 +6,15 @@ type EvalHook = Box<dyn Fn(&str) -> String + Send + Sync>;
 
 #[derive(Default)]
 struct Fake {
-    pages: Mutex<Vec<String>>,
+    pages: Mutex<Vec<(String, String)>>,
     calls: Mutex<Vec<String>>,
     sink: Mutex<Option<Sink>>,
     eval: Mutex<Option<EvalHook>>,
     frame: Mutex<Option<Rect>>,
     popout_frames: Mutex<Vec<Option<Rect>>>,
+    /// When set, a page never reports its load finishing (as a hidden page did in the field).
+    mute_loads: std::sync::atomic::AtomicBool,
+    found: std::sync::atomic::AtomicBool,
 }
 
 impl Fake {
@@ -21,15 +24,24 @@ impl Fake {
     fn calls(&self) -> Vec<String> {
         lock(&self.calls).clone()
     }
+    fn exists(&self, project: &str) -> bool {
+        lock(&self.pages).iter().any(|(p, _)| p == project)
+    }
+    fn last(&self, prefix: &str) -> Option<String> {
+        self.calls().into_iter().rev().find(|c| c.starts_with(prefix))
+    }
     /// Simulates a page load finishing a moment after navigation starts.
-    fn load(&self, project: &str, url: &str) {
+    fn load(&self, project: &str, page: &str, url: &str) {
+        if self.mute_loads.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
         let sink = lock(&self.sink).clone();
-        let (p, u) = (project.to_string(), url.to_string());
+        let (p, g, u) = (project.to_string(), page.to_string(), url.to_string());
         if let Some(s) = sink {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(20));
-                s(&p, BackendEvent::Title("Example".into()));
-                s(&p, BackendEvent::LoadFinished(u));
+                s(&p, &g, BackendEvent::Title("Example".into()));
+                s(&p, &g, BackendEvent::LoadFinished(u));
             });
         }
     }
@@ -39,43 +51,40 @@ impl Backend for Fake {
     fn set_sink(&self, sink: Sink) {
         *lock(&self.sink) = Some(sink);
     }
-    fn exists(&self, project: &str) -> bool {
-        lock(&self.pages).iter().any(|p| p == project)
-    }
-    fn open(&self, project: &str, url: &str, rect: Rect, visible: bool) -> BrowserResult<()> {
-        self.log(format!("open {project} {url} {} visible={visible}", rect.w));
-        lock(&self.pages).push(project.to_string());
-        self.load(project, url);
+    fn open_page(&self, project: &str, page: &str, url: &str, spec: PageSpec) -> BrowserResult<()> {
+        self.log(format!("open {project} {page} {url} {} visible={} popup={} zoom={}", spec.rect.w, spec.visible, spec.popup, spec.zoom));
+        lock(&self.pages).push((project.to_string(), page.to_string()));
+        self.load(project, page, url);
         Ok(())
     }
-    fn set_rect(&self, project: &str, rect: Rect) -> BrowserResult<()> {
-        self.log(format!("rect {project} {},{},{},{}", rect.x, rect.y, rect.w, rect.h));
+    fn set_rect(&self, project: &str, page: &str, rect: Rect) -> BrowserResult<()> {
+        self.log(format!("rect {project} {page} {},{},{},{}", rect.x, rect.y, rect.w, rect.h));
         Ok(())
     }
-    fn set_visible(&self, project: &str, visible: bool) -> BrowserResult<()> {
-        self.log(format!("visible {project} {visible}"));
+    fn set_visible(&self, project: &str, page: &str, visible: bool) -> BrowserResult<()> {
+        self.log(format!("visible {project} {page} {visible}"));
         Ok(())
     }
-    fn navigate(&self, project: &str, url: &str) -> BrowserResult<()> {
-        self.log(format!("navigate {project} {url}"));
-        self.load(project, url);
+    fn navigate(&self, project: &str, page: &str, url: &str) -> BrowserResult<()> {
+        self.log(format!("navigate {project} {page} {url}"));
+        self.load(project, page, url);
         Ok(())
     }
-    fn eval(&self, _: &str, js: &str, _: Duration) -> BrowserResult<String> {
+    fn eval(&self, _: &str, _: &str, js: &str, _: Duration) -> BrowserResult<String> {
         let g = lock(&self.eval);
         match g.as_ref() {
             Some(f) => Ok(f(js)),
             None => Err(BrowserError::new("timeout", "no eval hook")),
         }
     }
-    fn run_script(&self, project: &str, js: &str) -> BrowserResult<()> {
-        self.log(format!("script {project} {js}"));
+    fn run_script(&self, project: &str, page: &str, js: &str) -> BrowserResult<()> {
+        self.log(format!("script {project} {page} {js}"));
         Ok(())
     }
-    fn history(&self, _: &str) -> (bool, bool) {
+    fn history(&self, _: &str, _: &str) -> (bool, bool) {
         (true, false)
     }
-    fn snapshot(&self, _: &str, clip: Option<Rect>) -> BrowserResult<Vec<u8>> {
+    fn snapshot(&self, _: &str, _: &str, clip: Option<Rect>) -> BrowserResult<Vec<u8>> {
         self.log(format!("snapshot clip={}", clip.is_some()));
         Ok(vec![0x89, b'P', b'N', b'G'])
     }
@@ -88,9 +97,38 @@ impl Backend for Fake {
         self.log(format!("put_back {project} {}", rect.w));
         Ok(*lock(&self.frame))
     }
-    fn close(&self, project: &str) -> BrowserResult<Option<Rect>> {
-        lock(&self.pages).retain(|p| p != project);
+    fn close_page(&self, project: &str, page: &str) -> BrowserResult<Option<Rect>> {
+        self.log(format!("close_page {project} {page}"));
+        lock(&self.pages).retain(|(p, g)| !(p == project && g == page));
         Ok(None)
+    }
+    fn close(&self, project: &str) -> BrowserResult<Option<Rect>> {
+        lock(&self.pages).retain(|(p, _)| p != project);
+        Ok(None)
+    }
+    fn set_zoom(&self, project: &str, page: &str, zoom: f64) -> BrowserResult<()> {
+        self.log(format!("zoom {project} {page} {zoom:.3}"));
+        Ok(())
+    }
+    fn find(&self, project: &str, page: &str, text: &str, backwards: bool) -> BrowserResult<bool> {
+        self.log(format!("find {project} {page} {text} {backwards}"));
+        Ok(self.found.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    fn find_clear(&self, project: &str, page: &str) -> BrowserResult<()> {
+        self.log(format!("find_clear {project} {page}"));
+        Ok(())
+    }
+    fn inspect(&self, project: &str, page: &str) -> BrowserResult<()> {
+        self.log(format!("inspect {project} {page}"));
+        Ok(())
+    }
+    fn set_user_agent(&self, project: &str, page: &str, ua: &str) -> BrowserResult<()> {
+        self.log(format!("ua {project} {page} {ua}"));
+        Ok(())
+    }
+    fn clear_storage(&self, project: &str) -> BrowserResult<()> {
+        self.log(format!("clear_storage {project}"));
+        Ok(())
     }
 }
 
@@ -130,6 +168,7 @@ fn rig_with(linger_ms: u64) -> Rig {
     let mut cfg = CoreConfig::new(bus.clone());
     cfg.linger = Duration::from_millis(linger_ms);
     cfg.load_timeout = Duration::from_secs(3);
+    cfg.settle = Duration::from_millis(60);
     let core = BrowserCore::new(fake.clone(), rec.clone(), HostRules::in_memory(), FrameStore::in_memory(), cfg);
     Rig { core, fake, rec, bus }
 }
@@ -144,7 +183,7 @@ const R: Rect = Rect { x: 10.0, y: 20.0, w: 800.0, h: 500.0 };
 fn rig_at(url: &str) -> Rig {
     let r = rig();
     r.core.open("p", Some(url.into()), R).expect("open");
-    assert!(r.core.wait_loaded("p", Duration::from_secs(3)));
+    assert!(r.core.wait_loaded("p", "pg1", Duration::from_secs(3)));
     r
 }
 
@@ -170,7 +209,7 @@ fn state_and_rect_serialize_with_the_contract_field_names() {
         ..Default::default()
     };
     let v = serde_json::to_value(&st).expect("serialize");
-    for k in ["project", "url", "title", "loading", "can_back", "can_forward", "popped_out", "driver", "held_by_user"] {
+    for k in ["project", "url", "title", "loading", "can_back", "can_forward", "popped_out", "driver", "held_by_user", "pages", "active_page", "zoom", "user_agent", "emulation"] {
         assert!(v.get(k).is_some(), "missing {k}");
     }
     assert_eq!(v["driver"]["since"], 7);
@@ -233,7 +272,7 @@ fn open_op_navigates_waits_for_load_and_reveals_the_tab() {
     // A second open reuses the page and navigates it.
     let v = r.core.handle_request(&req("open", json!({ "url": "http://localhost:5173/next" })));
     assert_eq!(v["ok"], true);
-    assert!(r.fake.calls().iter().any(|c| c == "navigate p http://localhost:5173/next"));
+    assert!(r.fake.calls().iter().any(|c| c == "navigate p pg1 http://localhost:5173/next"));
     assert!(lock(&r.rec.states).iter().any(|s| s.loading), "loading state was emitted");
 }
 
@@ -412,9 +451,9 @@ fn take_over_blocks_every_op_but_state_until_given_back() {
 
 #[test]
 fn the_driver_is_set_during_an_op_lingers_after_and_overlapping_ops_extend_it() {
-    let r = rig_with(150);
+    let r = rig_with(400);
     r.core.open("p", Some("http://localhost:3000/".into()), R).expect("open");
-    assert!(r.core.wait_loaded("p", Duration::from_secs(3)));
+    assert!(r.core.wait_loaded("p", "pg1", Duration::from_secs(3)));
     let core_slot: Arc<OnceLock<Arc<BrowserCore>>> = Arc::new(OnceLock::new());
     let _ = core_slot.set(r.core.clone());
     let during = Arc::new(Mutex::new(None::<Driver>));
@@ -428,11 +467,11 @@ fn the_driver_is_set_during_an_op_lingers_after_and_overlapping_ops_extend_it() 
     assert_eq!((d.session.as_str(), d.label.as_str(), d.action.as_str()), ("s1", "codex-8", "reading the page"));
     assert!(d.since > 0);
     assert!(r.core.state("p").driver.is_some(), "still there right after the op");
-    std::thread::sleep(Duration::from_millis(100));
-    r.core.handle_request(&req("read", json!({})));
-    std::thread::sleep(Duration::from_millis(100));
-    assert!(r.core.state("p").driver.is_some(), "the second op carried the line past the first timer");
     std::thread::sleep(Duration::from_millis(250));
+    r.core.handle_request(&req("read", json!({})));
+    std::thread::sleep(Duration::from_millis(250));
+    assert!(r.core.state("p").driver.is_some(), "the second op carried the line past the first timer");
+    std::thread::sleep(Duration::from_millis(500));
     assert_eq!(r.core.state("p").driver, None, "gone after the linger");
     let last = lock(&r.rec.states).last().cloned().expect("state");
     assert_eq!(last.driver, None);
@@ -441,14 +480,14 @@ fn the_driver_is_set_during_an_op_lingers_after_and_overlapping_ops_extend_it() 
 
 #[test]
 fn page_events_update_state_and_emit() {
-    let r = rig();
+    let r = rig_at("http://localhost:3000/");
     r.core.apply_event("p", BackendEvent::LoadStarted("http://a/".into()));
     assert!(r.core.state("p").loading);
     r.core.apply_event("p", BackendEvent::Title("A".into()));
     r.core.apply_event("p", BackendEvent::LoadFinished("http://a/#x".into()));
     let st = r.core.state("p");
     assert_eq!((st.loading, st.url.as_str(), st.title.as_str()), (false, "http://a/#x", "A"));
-    r.core.refresh_history("p");
+    r.core.refresh_history("p", "pg1");
     let st = r.core.state("p");
     assert_eq!((st.can_back, st.can_forward), (true, false));
     assert!(lock(&r.rec.states).len() >= 4);
@@ -462,17 +501,17 @@ fn open_command_is_idempotent_and_back_forward_reload_run_scripts() {
     r.core.open("p", None, Rect { x: 0.0, y: 0.0, w: 300.0, h: 200.0 }).expect("reopen");
     let calls = r.fake.calls();
     assert_eq!(calls.iter().filter(|c| c.starts_with("open ")).count(), 1);
-    assert!(calls.contains(&"rect p 0,0,300,200".to_string()));
-    r.core.back("p").expect("back");
-    r.core.forward("p").expect("forward");
-    r.core.reload("p").expect("reload");
+    assert!(calls.contains(&"rect p pg1 0,0,300,200".to_string()));
+    r.core.back("p", None).expect("back");
+    r.core.forward("p", None).expect("forward");
+    r.core.reload("p", None).expect("reload");
     let calls = r.fake.calls();
     for s in ["history.back()", "history.forward()", "location.reload()"] {
         assert!(calls.iter().any(|c| c.ends_with(s)), "{s}");
     }
-    assert_eq!(r.core.navigate("p", "file:///etc/hosts").expect_err("file").code, "bad_request");
+    assert_eq!(r.core.navigate("p", "file:///etc/hosts", None).expect_err("file").code, "bad_request");
     r.core.set_visible("p", false).expect("hide");
-    assert!(r.fake.calls().contains(&"visible p false".to_string()));
+    assert!(r.fake.calls().contains(&"visible p pg1 false".to_string()));
 }
 
 #[test]
@@ -541,4 +580,460 @@ fn the_socket_serves_json_lines_with_mode_0600() {
     super::super::socket::remove(&short);
     assert!(!path.exists());
     let _ = std::fs::remove_dir_all(&short);
+}
+
+// ---- wave 2: pages ------------------------------------------------------------------------
+
+fn wait_for(what: &str, f: impl Fn() -> bool) {
+    for _ in 0..100 {
+        if f() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("timed out waiting for {what}");
+}
+
+#[test]
+fn pages_lifecycle_and_the_top_level_fields_mirror_the_active_page() {
+    let r = rig_at("http://localhost:3000/");
+    let id2 = r.core.create_page("p", Some("http://localhost:4000/x"), false, true).expect("new page");
+    assert_eq!(id2, "pg2");
+    wait_for("pg2 load", || !r.core.state("p").loading);
+    let st = r.core.state("p");
+    assert_eq!((st.pages.len(), st.active_page.as_str(), st.url.as_str()), (2, "pg2", "http://localhost:4000/x"));
+    assert_eq!(st.pages[0].url, "http://localhost:3000/");
+    // only the active page is shown
+    assert_eq!(r.fake.last("visible p pg1").as_deref(), Some("visible p pg1 false"));
+    r.core.select_page("p", "pg1").expect("select");
+    let st = r.core.state("p");
+    assert_eq!((st.active_page.as_str(), st.url.as_str()), ("pg1", "http://localhost:3000/"));
+    assert_eq!(r.fake.last("visible p pg1").as_deref(), Some("visible p pg1 true"));
+    assert_eq!(r.fake.last("visible p pg2").as_deref(), Some("visible p pg2 false"));
+    assert_eq!(r.core.select_page("p", "nope").expect_err("unknown").code, "not_found");
+    // closing the active page falls back to a neighbour
+    r.core.close_page("p", "pg1").expect("close");
+    let st = r.core.state("p");
+    assert_eq!((st.pages.len(), st.active_page.as_str()), (1, "pg2"));
+    assert!(r.fake.calls().contains(&"close_page p pg1".to_string()));
+    assert!(lock(&r.rec.states).last().map(|s| s.pages.len() == 1).unwrap_or(false), "state emitted");
+}
+
+#[test]
+fn closing_the_last_page_is_nothing_open_and_a_navigate_opens_a_fresh_one() {
+    let r = rig_at("http://localhost:3000/");
+    r.core.take_over("p");
+    r.core.close_page("p", "pg1").expect("close");
+    let st = r.core.state("p");
+    assert_eq!((st.url.as_str(), st.active_page.as_str(), st.pages.len(), st.held_by_user), ("", "", 0, true));
+    assert_eq!(r.core.back("p", None).expect_err("nothing").code, "not_found");
+    r.core.navigate("p", "http://localhost:3000/again", None).expect("navigate opens");
+    assert_eq!(r.core.state("p").active_page, "pg2");
+}
+
+#[test]
+fn a_site_popup_opens_a_new_page_and_window_close_closes_only_popups() {
+    let r = rig_at("http://localhost:3000/");
+    r.core.apply_event("p", BackendEvent::NewWindow("javascript:alert(1)".into()));
+    r.core.apply_event("p", BackendEvent::NewWindow("https://accounts.example/login".into()));
+    wait_for("popup page", || r.core.state("p").pages.len() == 2);
+    let st = r.core.state("p");
+    assert_eq!((st.active_page.as_str(), st.pages[1].url.as_str()), ("pg2", "https://accounts.example/login"));
+    assert!(r.fake.calls().iter().any(|c| c.starts_with("open p pg2 https://accounts.example/login") && c.contains("popup=true")));
+    // window.close() on the opener (not a popup) does nothing
+    r.core.apply_page_event("p", "pg1", BackendEvent::CloseRequested);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(r.core.state("p").pages.len(), 2);
+    r.core.apply_page_event("p", "pg2", BackendEvent::CloseRequested);
+    wait_for("popup closed", || r.core.state("p").pages.len() == 1);
+    assert_eq!(r.core.state("p").active_page, "pg1");
+}
+
+#[test]
+fn events_from_a_page_that_is_gone_are_ignored() {
+    let r = rig_at("http://localhost:3000/");
+    r.core.apply_page_event("p", "pg9", BackendEvent::LoadStarted("http://ghost/".into()));
+    assert_eq!(r.core.state("p").url, "http://localhost:3000/");
+}
+
+// ---- wave 2: B5 ---------------------------------------------------------------------------
+
+#[test]
+fn zoom_clamps_resets_and_persists_per_project() {
+    let dir = std::env::temp_dir().join(format!("trantor-prefs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let fake = Arc::new(Fake::default());
+    let mk = || {
+        let cfg = CoreConfig { data_dir: Some(dir.clone()), ..CoreConfig::new(dir.join("bus")) };
+        BrowserCore::new(fake.clone(), Arc::new(Rec::default()), HostRules::in_memory(), FrameStore::in_memory(), cfg)
+    };
+    let core = mk();
+    core.open("p", Some("http://localhost:3000/".into()), R).expect("open");
+    core.zoom("p", Some(10.0)).expect("zoom");
+    assert_eq!(core.state("p").zoom, 3.0);
+    assert_eq!(fake.last("zoom p pg1").as_deref(), Some("zoom p pg1 3.000"));
+    core.zoom("p", Some(0.1)).expect("zoom");
+    assert_eq!(core.state("p").zoom, 0.3);
+    core.zoom("p", Some(1.5)).expect("zoom");
+    core.set_user_agent("p", Some("chrome")).expect("ua");
+    core.emulate("p", device::preset("Laptop")).expect("emulate");
+    let again = mk();
+    let st = again.state("p");
+    assert_eq!((st.zoom, st.user_agent.as_str(), st.emulation.map(|d| d.name)), (1.5, "Chrome", Some("Laptop".to_string())));
+    assert_eq!(again.state("other").zoom, 1.0);
+    core.emulate("p", None).expect("end emulation");
+    core.zoom("p", None).expect("reset");
+    assert_eq!(core.state("p").zoom, 1.0);
+    assert_eq!(fake.last("zoom p pg1").as_deref(), Some("zoom p pg1 1.000"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn emulation_letterboxes_scales_with_zoom_and_restores() {
+    let r = rig_at("http://localhost:3000/");
+    // R is 800x500 at (10,20); an iPhone 15 is 393x852, so it scales to 500/852
+    r.core.emulate("p", device::preset("iPhone 15")).expect("emulate");
+    let scale = 500.0 / 852.0;
+    let w = 393.0 * scale;
+    let want = format!("rect p pg1 {},{},{},{}", 10.0 + (800.0 - w) / 2.0, 20.0, w, 500.0);
+    assert_eq!(r.fake.last("rect p pg1"), Some(want));
+    assert_eq!(r.fake.last("zoom p pg1"), Some(format!("zoom p pg1 {scale:.3}")));
+    assert_eq!(r.core.state("p").emulation.map(|d| d.name), Some("iPhone 15".to_string()));
+    // the tab resizing re-letterboxes
+    r.core.set_rect("p", Rect { x: 0.0, y: 0.0, w: 1000.0, h: 1000.0 }).expect("rect");
+    assert_eq!(r.fake.last("rect p pg1"), Some("rect p pg1 303.5,74,393,852".to_string()));
+    assert_eq!(r.fake.last("zoom p pg1"), Some("zoom p pg1 1.000".to_string()));
+    // zoom multiplies with the fit scale
+    r.core.zoom("p", Some(2.0)).expect("zoom");
+    assert_eq!(r.fake.last("zoom p pg1"), Some("zoom p pg1 2.000".to_string()));
+    // ending emulation restores the full rect
+    r.core.emulate("p", None).expect("end");
+    assert_eq!(r.fake.last("rect p pg1"), Some("rect p pg1 0,0,1000,1000".to_string()));
+    assert_eq!(r.core.state("p").emulation, None);
+    assert_eq!(r.core.emulate("p", Some(device::custom(5.0, 5.0))).expect_err("tiny").code, "bad_request");
+}
+
+#[test]
+fn a_mobile_device_switches_the_user_agent_until_emulation_ends() {
+    let r = rig_at("http://localhost:3000/");
+    let ua_calls = || r.fake.calls().iter().filter(|c| c.starts_with("ua p pg1")).cloned().collect::<Vec<_>>();
+    let reloads = || r.fake.calls().iter().filter(|c| c.ends_with("location.reload()")).count();
+    r.core.emulate("p", device::preset("iPhone 15")).expect("emulate");
+    assert!(ua_calls()[0].contains("iPhone;") && ua_calls().len() == 1);
+    assert_eq!(reloads(), 1);
+    r.core.set_user_agent("p", Some("Chrome")).expect("ua");
+    assert_eq!(ua_calls().len(), 1, "the phone's UA stays while emulating");
+    r.core.emulate("p", device::preset("Laptop")).expect("laptop");
+    assert!(ua_calls()[1].contains("Chrome/") && !ua_calls()[1].contains("Mobile"));
+    r.core.emulate("p", device::preset("Pixel 8")).expect("pixel");
+    assert!(ua_calls()[2].contains("Android"));
+    r.core.emulate("p", None).expect("end");
+    assert!(ua_calls()[3].contains("Chrome/"), "restored to the operator's choice");
+    assert_eq!(r.core.state("p").user_agent, "Chrome");
+}
+
+#[test]
+fn user_agent_presets_apply_reload_and_reset_to_safari() {
+    let r = rig_at("http://localhost:3000/");
+    assert_eq!(r.core.state("p").user_agent, "Safari");
+    assert_eq!(r.core.set_user_agent("p", Some("netscape")).expect_err("unknown").code, "bad_request");
+    r.core.set_user_agent("p", Some("Firefox")).expect("ua");
+    assert!(r.fake.last("ua p pg1").is_some_and(|c| c.contains("Firefox/")));
+    assert!(r.fake.last("script p pg1").is_some_and(|c| c.ends_with("location.reload()")));
+    let n = r.fake.calls().len();
+    r.core.set_user_agent("p", Some("Firefox")).expect("same");
+    assert_eq!(r.fake.calls().len(), n, "no change, no reload");
+    r.core.set_user_agent("p", None).expect("reset");
+    assert!(r.fake.last("ua p pg1").is_some_and(|c| c.contains("Version/18.5 Safari")));
+    assert_eq!(r.core.state("p").user_agent, "Safari");
+}
+
+#[test]
+fn find_inspect_and_find_clear_reach_the_page() {
+    let r = rig_at("http://localhost:3000/");
+    r.fake.found.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(r.core.find("p", "domain", false, None).expect("find"));
+    assert_eq!(r.fake.last("find p").as_deref(), Some("find p pg1 domain false"));
+    assert!(!r.core.find("p", "", false, None).expect("empty find clears"));
+    assert_eq!(r.fake.last("find_clear").as_deref(), Some("find_clear p pg1"));
+    r.core.find_clear("p", Some("pg1")).expect("clear");
+    r.core.inspect("p", None).expect("inspect");
+    assert_eq!(r.fake.last("inspect").as_deref(), Some("inspect p pg1"));
+    assert_eq!(r.core.find("p", "x", true, Some("pg7")).expect_err("page").code, "not_found");
+}
+
+#[test]
+fn history_is_newest_first_deduped_titled_and_capped_at_500() {
+    let r = rig_at("http://localhost:3000/");
+    for i in 0..520 {
+        r.core.apply_event("p", BackendEvent::LoadFinished(format!("http://localhost:3000/{i}")));
+    }
+    let h = r.core.history("p");
+    assert_eq!(h.len(), 500);
+    assert_eq!(h[0].url, "http://localhost:3000/519");
+    assert_eq!(h[499].url, "http://localhost:3000/20");
+    r.core.apply_event("p", BackendEvent::LoadFinished("http://localhost:3000/519".into()));
+    assert_eq!(r.core.history("p").len(), 500, "a repeat of the newest url does not add a row");
+    r.core.apply_event("p", BackendEvent::Title("Late title".into()));
+    assert_eq!(r.core.history("p")[0].title, "Late title");
+    assert!(r.core.history("other").is_empty());
+    r.core.apply_event("p", BackendEvent::LoadFinished("about:blank".into()));
+    assert_eq!(r.core.history("p")[0].url, "http://localhost:3000/519");
+}
+
+#[test]
+fn favorites_toggle_on_and_off_per_project() {
+    let r = rig();
+    assert!(r.core.favorite_toggle("p", "https://a.test/", "A"));
+    assert!(r.core.favorite_toggle("p", "https://b.test/", "B"));
+    assert_eq!(r.core.favorites("p").iter().map(|f| f.url.as_str()).collect::<Vec<_>>(), vec!["https://a.test/", "https://b.test/"]);
+    assert!(!r.core.favorite_toggle("p", "https://a.test/", "A"));
+    assert_eq!(r.core.favorites("p"), vec![Favorite { url: "https://b.test/".into(), title: "B".into() }]);
+    assert!(r.core.favorites("q").is_empty());
+}
+
+#[test]
+fn permissions_list_the_allowed_hosts_and_revoke_asks_again() {
+    let r = rig_at("https://example.com/");
+    set_eval(&r, |_| json!({"ok": true, "url": "u", "title": "t", "text": "", "outline": []}).to_string());
+    r.core.handle_request(&req("read", json!({})));
+    let id = lock(&r.rec.asks)[0].id.clone();
+    r.core.answer(&id, "site").expect("answer");
+    assert_eq!(r.core.permissions("p"), vec![Permission { host: "example.com".into(), rule: "site".into() }]);
+    assert_eq!(r.core.handle_request(&req("read", json!({})))["ok"], true);
+    r.core.permission_revoke("p", "Example.com");
+    assert!(r.core.permissions("p").is_empty());
+    assert_eq!(r.core.handle_request(&req("read", json!({})))["error"], "waiting_for_approval");
+}
+
+#[test]
+fn clear_storage_wipes_the_store_then_reloads_every_page() {
+    let r = rig_at("http://localhost:3000/");
+    r.core.create_page("p", Some("http://localhost:3000/b"), false, true).expect("second");
+    r.core.clear_storage("p").expect("clear");
+    let calls = r.fake.calls();
+    let at = calls.iter().position(|c| c == "clear_storage p").expect("cleared");
+    let after = &calls[at..];
+    assert!(after.iter().any(|c| c.starts_with("script p pg1") && c.ends_with("location.reload()")));
+    assert!(after.iter().any(|c| c.starts_with("script p pg2") && c.ends_with("location.reload()")));
+}
+
+// ---- wave 2: socket ops ---------------------------------------------------------------------
+
+#[test]
+fn pages_new_page_select_and_close_over_the_socket() {
+    let r = rig_at("http://localhost:3000/");
+    let v = r.core.handle_request(&req("new_page", json!({ "url": "http://localhost:3000/two" })));
+    assert_eq!((v["ok"].clone(), v["page"].clone(), v["url"].clone()), (json!(true), json!("pg2"), json!("http://localhost:3000/two")));
+    // the agent is named on the page it opened
+    let st = r.core.state("p");
+    assert_eq!(st.pages[1].driver.as_ref().map(|d| d.label.as_str()), Some("codex-8"));
+    assert_eq!(st.pages[0].driver, None);
+    let v = r.core.handle_request(&req("pages", json!({})));
+    assert_eq!((v["pages"].as_array().map(Vec::len), v["active_page"].clone()), (Some(2), json!("pg2")));
+    assert_eq!(r.core.handle_request(&req("select_page", json!({ "page": "pg1" })))["ok"], true);
+    assert_eq!(r.core.state("p").url, "http://localhost:3000/");
+    assert_eq!(r.core.handle_request(&req("select_page", json!({})))["error"], "bad_request");
+    assert_eq!(r.core.handle_request(&req("close_page", json!({ "page": "pg9" })))["error"], "not_found");
+    assert_eq!(r.core.handle_request(&req("close_page", json!({ "page": "pg2" })))["ok"], true);
+    assert_eq!(r.core.handle_request(&req("close_page", json!({ "page": "pg1" })))["ok"], true);
+    assert_eq!(r.core.handle_request(&req("pages", json!({})))["active_page"], "");
+    // a blank new page has no url; a host that is not allowed asks first
+    assert_eq!(r.core.handle_request(&req("new_page", json!({})))["ok"], true);
+    assert_eq!(r.core.state("p").url, "");
+    assert_eq!(r.core.handle_request(&req("new_page", json!({ "url": "https://news.example.org/" })))["error"], "waiting_for_approval");
+}
+
+#[test]
+fn the_page_argument_targets_a_page_and_unknown_pages_are_not_found() {
+    let r = rig_at("http://localhost:3000/");
+    r.core.create_page("p", Some("http://localhost:3000/b"), false, true).expect("second");
+    wait_for("load", || !r.core.state("p").loading);
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let s2 = seen.clone();
+    let core2 = r.core.clone();
+    set_eval(&r, move |_| {
+        lock(&s2).push(core2.state("p").pages.iter().map(|p| p.driver.is_some().to_string()).collect::<Vec<_>>().join(","));
+        json!({"ok": true, "url": "u", "title": "t", "text": "", "outline": []}).to_string()
+    });
+    assert_eq!(r.core.handle_request(&req("read", json!({ "page": "pg1" })))["ok"], true);
+    // while the op ran the driver sat on pg1 only
+    assert_eq!(lock(&seen)[0], "true,false");
+    assert_eq!(r.core.handle_request(&req("read", json!({ "page": "pg8" })))["error"], "not_found");
+}
+
+#[test]
+fn back_forward_and_reload_ops_run_scripts_on_the_page() {
+    let r = rig_at("http://localhost:3000/");
+    for (op, js) in [("back", "history.back()"), ("forward", "history.forward()"), ("reload", "location.reload()")] {
+        assert_eq!(r.core.handle_request(&req(op, json!({})))["ok"], true, "{op}");
+        assert_eq!(r.fake.last("script p pg1").as_deref(), Some(format!("script p pg1 {js}").as_str()));
+    }
+    r.core.take_over("p");
+    assert_eq!(r.core.handle_request(&req("back", json!({})))["error"], "held_by_user");
+}
+
+#[test]
+fn resize_takes_a_preset_name_a_device_object_w_and_h_or_nothing() {
+    let r = rig_at("http://localhost:3000/");
+    let v = r.core.handle_request(&req("resize", json!({ "device": "iphone 15" })));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["emulation"]["name"], "iPhone 15");
+    assert_eq!(r.core.state("p").emulation.map(|d| (d.w, d.h, d.mobile)), Some((393.0, 852.0, true)));
+    let v = r.core.handle_request(&req("resize", json!({ "device": { "name": "Fold", "w": 600, "h": 700, "mobile": true } })));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(r.core.state("p").emulation.map(|d| d.name), Some("Fold".to_string()));
+    let v = r.core.handle_request(&req("resize", json!({ "w": 640, "h": 480 })));
+    assert_eq!(v["ok"], true);
+    assert_eq!(r.core.state("p").emulation.map(|d| (d.w, d.h, d.mobile)), Some((640.0, 480.0, false)));
+    assert_eq!(r.core.handle_request(&req("resize", json!({ "device": "Nokia 3310" })))["error"], "bad_request");
+    assert_eq!(r.core.handle_request(&req("resize", json!({ "w": 640 })))["error"], "bad_request");
+    assert_eq!(r.core.handle_request(&req("resize", json!({ "device": { "w": 1 } })))["error"], "bad_request");
+    let v = r.core.handle_request(&req("resize", json!({})));
+    assert_eq!((v["ok"].clone(), v["emulation"].clone()), (json!(true), Value::Null));
+    assert_eq!(r.core.state("p").emulation, None);
+}
+
+#[test]
+fn evaluate_always_asks_once_per_host_and_returns_json() {
+    let r = rig_at("https://example.com/");
+    set_eval(&r, |js| {
+        assert!(js.contains("history.pushState"), "{js}");
+        json!({"ok": true, "value": {"a": [1, null]}}).to_string()
+    });
+    let ev = || r.core.handle_request(&req("evaluate", json!({ "script": "history.pushState({}, '', '/spa-test');" })));
+    // the page's host is not allowed yet: the ordinary ask comes first
+    assert_eq!(ev()["error"], "waiting_for_approval");
+    let id = lock(&r.rec.asks)[0].id.clone();
+    assert!(lock(&r.rec.asks)[0].kind.is_none());
+    r.core.answer(&id, "site").expect("allow the host");
+    // an allowed host still asks for the script, with its own ask
+    assert_eq!(ev()["error"], "waiting_for_approval");
+    let ask = lock(&r.rec.asks)[1].clone();
+    assert_eq!((ask.host.as_str(), ask.kind.as_deref()), ("example.com", Some("evaluate")));
+    assert_eq!(ev()["error"], "waiting_for_approval");
+    assert_eq!(lock(&r.rec.asks).len(), 2, "one open ask at a time");
+    r.core.answer(&ask.id, "once").expect("answer");
+    let v = ev();
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(v["value"], json!({"a": [1, null]}));
+    assert_eq!(ev()["ok"], true, "once covers the visit");
+    // another host ends the visit (the drive ask comes first there)
+    r.core.apply_event("p", BackendEvent::LoadFinished("https://other.test/".into()));
+    assert_eq!(ev()["error"], "waiting_for_approval");
+    r.core.apply_event("p", BackendEvent::LoadFinished("https://example.com/".into()));
+    assert_eq!(ev()["error"], "waiting_for_approval");
+    assert_eq!(lock(&r.rec.asks).last().and_then(|a| a.kind.clone()).as_deref(), Some("evaluate"));
+}
+
+#[test]
+fn evaluate_deny_localhost_and_script_errors() {
+    let r = rig_at("https://example.com/");
+    set_eval(&r, |_| json!({"ok": true, "value": 1}).to_string());
+    r.core.handle_request(&req("read", json!({})));
+    let id = lock(&r.rec.asks)[0].id.clone();
+    r.core.answer(&id, "site").expect("allow");
+    let ev = |s: &str| r.core.handle_request(&req("evaluate", json!({ "script": s })));
+    assert_eq!(ev("1")["error"], "waiting_for_approval");
+    let id = lock(&r.rec.asks)[1].id.clone();
+    r.core.answer(&id, "deny").expect("deny");
+    assert_eq!(ev("1")["error"], "denied");
+    assert_eq!(ev("1")["error"], "waiting_for_approval", "asks again after a denial");
+    assert_eq!(r.core.handle_request(&req("evaluate", json!({})))["error"], "bad_request");
+    // localhost never asks; a script failure comes back as bad_request with the page's words
+    let l = rig_at("http://localhost:3000/");
+    set_eval(&l, |_| json!({"ok": false, "error": "script_error", "message": "boom is not defined"}).to_string());
+    let v = l.core.handle_request(&req("evaluate", json!({ "script": "boom" })));
+    assert_eq!((v["error"].clone(), v["message"].clone()), (json!("bad_request"), json!("boom is not defined")));
+}
+
+#[test]
+fn evaluate_falls_back_to_eval_when_the_script_is_not_an_expression() {
+    let r = rig_at("http://localhost:3000/");
+    let n = Arc::new(Mutex::new(0u32));
+    let n2 = n.clone();
+    set_eval(&r, move |js| {
+        let mut c = lock(&n2);
+        *c += 1;
+        if *c == 1 {
+            assert!(js.contains("var v=(var x = 1; x)"), "expression attempt first");
+            return String::new(); // a syntax error gives the callback nothing
+        }
+        assert!(js.contains("(0,eval)(\"var x = 1; x\")"), "{js}");
+        json!({"ok": true, "value": 1}).to_string()
+    });
+    let v = r.core.handle_request(&req("evaluate", json!({ "script": "var x = 1; x" })));
+    assert_eq!((v["ok"].clone(), v["value"].clone()), (json!(true), json!(1)));
+}
+
+// ---- wave 2: the two live-drill bugs ----------------------------------------------------------
+
+#[test]
+fn a_page_that_loads_hidden_still_finishes_through_the_webviews_own_state() {
+    let r = rig();
+    r.fake.mute_loads.store(true, std::sync::atomic::Ordering::SeqCst);
+    r.core.create_page("p", Some("http://localhost:3000/"), false, true).expect("page");
+    assert!(r.core.state("p").loading);
+    let idle = BackendEvent::Observed { url: None, title: None, loading: false, can_back: None, can_forward: None };
+    // a sample taken before the navigation started is stale inside the settle window
+    r.core.apply_page_event("p", "pg1", idle.clone());
+    assert!(r.core.state("p").loading, "stale sample ignored");
+    std::thread::sleep(Duration::from_millis(80));
+    r.core.apply_page_event("p", "pg1", idle);
+    assert!(!r.core.state("p").loading);
+    assert!(r.core.wait_loaded("p", "pg1", Duration::from_millis(10)));
+    assert_eq!(r.core.history("p")[0].url, "http://localhost:3000/");
+}
+
+#[test]
+fn the_open_op_returns_when_only_the_webview_says_the_page_loaded() {
+    let r = rig();
+    r.fake.mute_loads.store(true, std::sync::atomic::Ordering::SeqCst);
+    let core = r.core.clone();
+    let poker = std::thread::spawn(move || {
+        // like the backend's sampler: first it sees the load running, later not
+        std::thread::sleep(Duration::from_millis(100));
+        core.apply_page_event("p", "pg1", BackendEvent::Observed { url: Some("http://localhost:5173/".into()), title: Some("Home".into()), loading: true, can_back: None, can_forward: None });
+        std::thread::sleep(Duration::from_millis(100));
+        core.apply_page_event("p", "pg1", BackendEvent::Observed { url: None, title: None, loading: false, can_back: Some(true), can_forward: None });
+    });
+    let started = Instant::now();
+    let v = r.core.handle_request(&req("open", json!({ "url": "http://localhost:5173/" })));
+    poker.join().expect("poker");
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!((v["url"].as_str(), v["title"].as_str()), (Some("http://localhost:5173/"), Some("Home")));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(r.core.state("p").can_back);
+}
+
+#[test]
+fn single_page_app_url_and_title_changes_are_reported() {
+    let r = rig_at("https://crebral.health/");
+    std::thread::sleep(Duration::from_millis(100)); // the load's own history refresh settles
+    let before = lock(&r.rec.states).len();
+    let ev = BackendEvent::Observed { url: Some("https://crebral.health/dashboard".into()), title: Some("Dashboard".into()), loading: false, can_back: Some(true), can_forward: None };
+    r.core.apply_page_event("p", "pg1", ev);
+    let st = r.core.state("p");
+    assert_eq!((st.url.as_str(), st.title.as_str(), st.can_back, st.loading), ("https://crebral.health/dashboard", "Dashboard", true, false));
+    assert_eq!(st.pages[0].url, "https://crebral.health/dashboard");
+    assert!(lock(&r.rec.states).len() > before, "browser://state was emitted");
+    assert_eq!(r.core.history("p")[0].url, "https://crebral.health/dashboard");
+    // an unchanged sample is not a change: no event, no new history row
+    let (n, rows) = (lock(&r.rec.states).len(), r.core.history("p").len());
+    r.core.apply_page_event("p", "pg1", BackendEvent::Observed { url: None, title: None, loading: false, can_back: None, can_forward: None });
+    assert_eq!((lock(&r.rec.states).len(), r.core.history("p").len()), (n, rows));
+    // the blank page never overwrites a real url
+    r.core.apply_page_event("p", "pg1", BackendEvent::Observed { url: Some("about:blank".into()), title: None, loading: false, can_back: None, can_forward: None });
+    assert_eq!(r.core.state("p").url, "https://crebral.health/dashboard");
+}
+
+#[test]
+fn a_new_page_made_while_the_tab_is_hidden_reveals_it_and_shows_when_the_tab_does() {
+    let r = rig();
+    let v = r.core.handle_request(&req("new_page", json!({ "url": "http://localhost:3000/" })));
+    assert_eq!(v["ok"], true);
+    assert_eq!(*lock(&r.rec.reveals), vec!["p".to_string()]);
+    assert!(r.fake.calls()[0].contains("visible=false"));
+    r.core.set_visible("p", true).expect("tab shown");
+    assert_eq!(r.fake.last("visible p pg1").as_deref(), Some("visible p pg1 true"));
 }

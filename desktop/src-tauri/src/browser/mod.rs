@@ -2,9 +2,11 @@
 
 pub mod commands;
 mod core;
+mod device;
 mod hosts;
 mod scripts;
 mod socket;
+mod store;
 mod types;
 
 #[cfg(target_os = "macos")]
@@ -56,7 +58,7 @@ pub fn init(app: &AppHandle<Wry>) {
         Arc::new(TauriEmitter(app.clone())),
         HostRules::load(data.join("hosts.json")),
         FrameStore::load(data.join("frames.json")),
-        CoreConfig::new(bus.clone()),
+        CoreConfig { data_dir: Some(data.clone()), ..CoreConfig::new(bus.clone()) },
     );
     app.manage(BrowserHandle(core.clone()));
     match socket::serve(core.clone()) {
@@ -95,6 +97,26 @@ fn drill(app: &AppHandle<Wry>, core: Arc<BrowserCore>) {
             let _ = answerer.answer(&ask.id, "once");
         }
     });
+    if std::env::var_os("TRANTOR_BROWSER_DRILL_IDLE").is_some() {
+        // Socket-driven drill: a hidden tab with a rect, an agent opens pages over the socket, and
+        // the tab is shown a few seconds after the first reveal so screenshots have pixels.
+        let shower = core.clone();
+        let name = project.clone();
+        app.listen("browser://reveal", move |_| {
+            let (core, name) = (shower.clone(), name.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(6));
+                let _ = core.set_visible(&name, true);
+            });
+        });
+        let idle = core.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let _ = idle.open(&project, None, Rect { x: 40.0, y: 80.0, w: 900.0, h: 600.0 });
+            drill_commands(&idle, &project);
+        });
+        return;
+    }
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(3));
         let r = core.open(&project, Some(url), Rect { x: 40.0, y: 80.0, w: 900.0, h: 600.0 });
@@ -129,4 +151,38 @@ fn drill(app: &AppHandle<Wry>, core: Arc<BrowserCore>) {
             step("take_over", Ok(()));
         }
     });
+}
+
+/// Debug builds only: runs lines of `<bus>/drill.cmd` (zoom, find, ua, inspect, history,
+/// favorite, permissions, clear_storage) against the drill project and appends results to
+/// `<bus>/drill.out`, for the commands the agent socket does not carry.
+#[cfg(debug_assertions)]
+fn drill_commands(core: &Arc<BrowserCore>, project: &str) {
+    use std::io::Write;
+    let (cmd, out) = (crate::desktop_bus_dir().join("drill.cmd"), crate::desktop_bus_dir().join("drill.out"));
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let Ok(text) = std::fs::read_to_string(&cmd) else { continue };
+        let _ = std::fs::remove_file(&cmd);
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let (word, arg) = line.split_once(' ').unwrap_or((line, ""));
+            let res = match word {
+                "zoom" => format!("{:?}", core.zoom(project, arg.parse().ok())),
+                "find" => format!("{:?}", core.find(project, arg, false, None)),
+                "find_clear" => format!("{:?}", core.find_clear(project, None)),
+                "inspect" => format!("{:?}", core.inspect(project, None)),
+                "ua" => format!("{:?}", core.set_user_agent(project, (arg != "none").then_some(arg))),
+                "history" => format!("{:?}", core.history(project).iter().take(5).collect::<Vec<_>>()),
+                "favorite" => format!("{:?}", core.favorite_toggle(project, arg, "drill")),
+                "favorites" => format!("{:?}", core.favorites(project)),
+                "permissions" => format!("{:?}", core.permissions(project)),
+                "clear_storage" => format!("{:?}", core.clear_storage(project)),
+                "state" => format!("{:?}", core.state(project)),
+                other => format!("unknown {other}"),
+            };
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&out) {
+                let _ = writeln!(f, "{line} -> {res}");
+            }
+        }
+    }
 }
