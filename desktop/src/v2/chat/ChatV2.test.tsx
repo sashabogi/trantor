@@ -84,11 +84,11 @@ describe("Chat in the 2.0 shell", () => {
     expect(host.textContent).toContain("Orchestrator");
   });
 
-  it("carries the model the session reported in the header", async () => {
+  it("keeps the model the session reported out of the header (#14515: the composer names it)", async () => {
     const { deps } = makeDeps(talk, [], { model: "fable" });
     await mount(deps);
     const status = host.querySelector("header");
-    expect(status?.textContent).toContain("fable");
+    expect(status?.textContent).not.toContain("fable");
   });
 
   it("wires the first prompt and session branch into the single header", async () => {
@@ -96,8 +96,9 @@ describe("Chat in the 2.0 shell", () => {
     await mount(deps);
     const header = host.querySelector("header");
     expect(header?.querySelector('[title="Fix the login form"]')).not.toBeNull();
-    expect(header?.querySelector('[title="chat-checkout"]')).not.toBeNull();
-    expect(header?.textContent).toContain("Opus 5.5");
+    expect(header?.textContent).toContain("on chat-checkout");
+    expect(header?.querySelector('[title="This chat\'s session works on branch chat-checkout"]')).not.toBeNull();
+    expect(header?.textContent).not.toContain("Opus 5.5");
     expect(host.querySelector('[data-testid="chat-status"]')).toBeNull();
   });
 

@@ -19,7 +19,7 @@ const mount = async (state = base, brand?: string) => {
 };
 
 describe("ChatHeader", () => {
-  it("orders the avatar, truncated title, branch and human model name in one header", async () => {
+  it("orders the avatar, truncated title and branch chip; the model name stays in the composer (#14515)", async () => {
     await mount();
     const header = host.querySelector("header")!;
     expect(header.children[0].getAttribute("role")).toBe("img");
@@ -27,10 +27,10 @@ describe("ChatHeader", () => {
     expect(title?.textContent).toBe(base.title);
     expect(title?.getAttribute("title")).toBe(base.title);
     expect(title?.className).toContain("truncate");
-    expect(header.children[2].textContent).toBe(base.branch);
+    expect(header.children[2].textContent).toBe("on fix/login");
     expect(header.children[2].querySelector("svg")).not.toBeNull();
-    expect(header.children[2].querySelector("[title]")?.getAttribute("title")).toBe(base.branch);
-    expect(header.children[3].textContent).toBe("Opus 5.5");
+    expect(header.children[2].querySelector("[title]")?.getAttribute("title")).toBe("This chat's session works on branch fix/login");
+    expect(host.textContent).not.toContain("Opus 5.5");
     expect(host.textContent).not.toContain("claude-opus-5-5");
     expect(host.querySelector('[data-testid="chat-status"]')).toBeNull();
   });
@@ -39,7 +39,9 @@ describe("ChatHeader", () => {
     await mount({ ...base, title: "  Saved session name  ", branch: "", model: "" });
     expect(host.querySelector("header")?.textContent).toContain("Saved session name");
     expect(host.querySelector('[title="Saved session name"]')).not.toBeNull();
-    expect(host.querySelector("[data-tone]")).toBeNull();
+    expect(host.querySelector('[data-tone]')).toBeNull();
+    // #14515: an unknown branch renders no chip, not a bare "on".
+    expect(host.querySelector("[title^=\"This chat's session works on branch\"]")).toBeNull();
     await mount({ ...base, title: "   " });
     expect(host.querySelector('[title="New chat"]')).not.toBeNull();
   });

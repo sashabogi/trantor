@@ -1,8 +1,6 @@
 // Inline session controls shared by the v2 chat header.
 import { ArrowLeft } from "lucide-react";
 import { Button } from "../ui/Button";
-import { Chip } from "../ui/Chip";
-import { modelLabel } from "../ui/identity";
 
 export type HandoffControl = {
   confirming: boolean;
@@ -16,13 +14,12 @@ export type HandoffControl = {
 const SMALL = "!px-2 !py-1 !text-v2-small";
 
 export type StatusLineProps = {
-  model: string; handoff: HandoffControl | null; onBack: (() => void) | null;
+  handoff: HandoffControl | null; onBack: (() => void) | null;
 };
 
-export function StatusLine({ model, handoff, onBack }: StatusLineProps) {
+export function StatusLine({ handoff, onBack }: StatusLineProps) {
   return (
     <div className="flex shrink-0 items-center gap-1">
-      {model && <Chip mono title={model}>{modelLabel(model)}</Chip>}
       {handoff && (handoff.confirming ? (
         <>
           <Button variant="quiet" className={SMALL} disabledReason={handoff.disabledReason}

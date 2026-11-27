@@ -3,7 +3,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Clock, GitBranch, MoreHorizontal, Plus, X } from "lucide-react";
 import { brandFor } from "../../../shared/Avatar";
-import { StatusLine, type StatusLineProps } from "../../chat/StatusLine";
+import { StatusLine, type HandoffControl } from "../../chat/StatusLine";
 import { brandOfModel } from "../../ui/identity";
 import { useOwnMachineId } from "../../ui/useMachineId";
 import { Chip } from "../../ui/Chip";
@@ -48,7 +48,11 @@ function NewChatMenu({ project }: { project: string }) {
   );
 }
 
-export type ChatHeaderState = StatusLineProps & {
+export type ChatHeaderState = {
+  /** The session's model: the avatar's brand reads it. The model NAME shows in the composer, not here (#14515). */
+  model: string;
+  handoff: HandoffControl | null;
+  onBack: (() => void) | null;
   title: string;
   branch: string;
   text: string | null;
@@ -79,8 +83,8 @@ export function ChatHeader({ state, brand, actions }: {
         <div title={title} className="truncate text-v2-base font-medium text-[var(--v2-text)]">{title}</div>
         {state.text && <div data-testid="chat-status" data-tone={state.tone} title={state.text} className="truncate text-v2-small text-[var(--v2-muted)]">{state.text}</div>}
       </div>
-      {state.branch && <span className="flex min-w-0 max-w-24 [&>span]:min-w-0 [&>span]:max-w-full"><Chip mono title={state.branch} icon={<GitBranch size={12} className="shrink-0" aria-hidden />}><span className="truncate">{state.branch}</span></Chip></span>}
-      <StatusLine model={state.model} handoff={state.handoff} onBack={state.onBack} />
+      {state.branch && <span className="flex min-w-0 max-w-28 [&>span]:min-w-0 [&>span]:max-w-full"><Chip mono title={`This chat's session works on branch ${state.branch}`} icon={<GitBranch size={12} className="shrink-0" aria-hidden />}><span className="truncate">on {state.branch}</span></Chip></span>}
+      <StatusLine handoff={state.handoff} onBack={state.onBack} />
       {actions && <HeaderButtons {...actions} />}
     </header>
   );
