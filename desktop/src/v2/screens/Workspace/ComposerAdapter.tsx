@@ -1,10 +1,13 @@
 // Composer2 standing in for the classic composer inside the classic Chat, through Chat's own
 // `deps.Composer` seam. It sends over the identical path: invoke("pane_send") with herdr's verdict (#13987).
-import { useEffect, useState, type ComponentProps } from "react";
+// #14488: words and chips live in the classic composerDraft slots — one per project, debounced to
+// composer_draft_set — so a draft survives a restart and never rides into another project.
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Composer } from "../../../features/chat/Composer";
 import { modelLabel } from "../../../features/chat/modelLabel";
 import { brandOfModel, modelLabel as vendorModelLabel } from "../../ui/identity";
+import { canSendDraft, composerDraftApi, draftSlots, emptyDraft, flushSaves, isEmptyDraft, scheduleSave, type ComposerDraft } from "../../../features/chat/composerDraft";
 import { normalizeAttachments, composerSlot, type PromptVerdict } from "../../../features/chat/streaming";
 import { parseAutonomy } from "./useWorkspaceData";
 import { useAttachments } from "../../ui/useAttachments";
@@ -82,7 +85,12 @@ function useHarness(project: string) {
 }
 
 export function ComposerAdapter(p: ClassicProps) {
-  const [value, setValue] = useState("");
+  // #14488: the draft is words + chips + the project they were written for (#11665), in one slot
+  // per project — the adapter is mounted once for whichever project is selected, so when the
+  // `project` prop moves the draft is swapped here rather than carried into the new one.
+  const [current, setCurrent] = useState<ComposerDraft>(() => draftSlots.get(p.project) ?? emptyDraft(p.project));
+  if (current.project !== p.project) setCurrent(draftSlots.get(p.project) ?? emptyDraft(p.project));
+  const value = current.text;
   const [note, setNote] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const harness = useHarness(p.project);
@@ -92,16 +100,55 @@ export function ComposerAdapter(p: ClassicProps) {
   const attachments = useAttachments();
   const blockedQuestion = p.blockedAsk?.questions[0]?.question ?? null;
   const disabledReason = !p.live ? p.liveWhy : !p.target ? "There is no pane to send to" : null;
+  // Chips are born in the attachments hook (drop, paste, pick); the draft mirrors them so the slot
+  // and the disk copy carry the whole draft. The ref skips the mount pass: a slot-restored draft's
+  // chips must not be wiped by the hook's initial empty row.
+  const seenChips = useRef(attachments.chips);
+  useEffect(() => {
+    if (seenChips.current === attachments.chips) return;
+    seenChips.current = attachments.chips;
+    setCurrent(c => ({ ...c, chips: attachments.chips }));
+  }, [attachments.chips]);
+  // Every edit lands in the project's slot and, debounced, on disk. An untouched empty draft is
+  // not written: it would clobber the persisted one before the restore below has read it.
+  useEffect(() => {
+    if (isEmptyDraft(current) && !draftSlots.get(current.project)) return;
+    draftSlots.put(current);
+    scheduleSave(current);
+  }, [current]);
+  useEffect(() => () => flushSaves(), []);
+  // A project switch swaps the whole draft (#11665): the outgoing words and chips stay in their
+  // own slot (the mirror effect above put them there), the incoming project brings only its own.
+  useEffect(() => {
+    attachments.restore(draftSlots.get(p.project)?.chips ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.project]);
+  // After a restart the slot is empty but the disk may hold this project's draft: read it once the
+  // project is shown, unless the operator already typed (a slot exists by then).
+  useEffect(() => {
+    if (draftSlots.get(p.project)) return;
+    let alive = true;
+    void composerDraftApi.get(p.project).then(saved => {
+      if (!alive || !saved || draftSlots.get(p.project)) return;
+      draftSlots.put(saved);
+      setCurrent(c => (c.project === p.project && isEmptyDraft(c) ? saved : c));
+      attachments.restore(saved.chips);
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.project]);
   const line = (text: string) => invoke<PromptVerdict>("pane_send", { target: p.target, text })
     .then(d => d ?? { outcome: "stalled", error: "the desktop did not answer" },
       e => ({ outcome: "stalled", error: String(e) }));
   const send = (raw: string) => {
+    // #14488: the draft goes only to the project it was written for, refused here the classic way.
+    if (!canSendDraft(current, p.project)) { setNote("This draft belongs to another project — not sent"); return; }
     // #13984 drill: chips serialize at send and clear with the words, the classic order (serializeForSend, then normalize).
     const text = normalizeAttachments(attachments.serialize(raw).trim());
     void line(text).then(d => {
       const r = judge(d, blockedQuestion);
       setNote(r.note);
-      if (r.clear) { setValue(""); attachments.clear(); }
+      if (r.clear) { setCurrent(c => emptyDraft(c.project)); attachments.clear(); }
       p.onSent();
       mode.read();
     });
@@ -143,7 +190,7 @@ export function ComposerAdapter(p: ClassicProps) {
     <div className="v2-composer-gutter">
       <div className="v2-composer-float flex flex-col gap-1.5">
         {shown && <div role="status" className="text-v2-body text-[var(--v2-warn)]">{shown}</div>}
-        <Composer2 busy={p.working} value={value} onChange={v => { setValue(v); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
+        <Composer2 busy={p.working} value={value} onChange={v => { setCurrent(c => ({ ...c, text: v })); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
           permissionHeading={PERMISSION_HEADING}
           label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
           agent="orchestrator" model={{ id: p.model || "unknown", label: shownModel(p.model) }}

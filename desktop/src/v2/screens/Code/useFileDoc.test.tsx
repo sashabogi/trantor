@@ -81,7 +81,8 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(async () => { await act(async () => root.unmount()); await flush(); host.remove(); clearMocks(); draftDrop("trantor", null, "src/a.ts"); draftDrop("trantor", "glm-5", "src/a.ts"); });
+// Real timers first: a fake-timer test below must not leave the flush's setTimeout hanging.
+afterEach(async () => { vi.useRealTimers(); await act(async () => root.unmount()); await flush(); host.remove(); clearMocks(); draftDrop("trantor", null, "src/a.ts"); draftDrop("trantor", "glm-5", "src/a.ts"); });
 
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
 const mount = async (props: DocProps) => { await act(async () => { root.render(<DocHarness {...props} />); }); await flush(); };
@@ -363,5 +364,112 @@ describe("external file changes (#14486)", () => {
     expect(attr("dirty")).toBe("false");
     expect(attr("conflict")).toBe("");
     expect(draftFor("trantor", null, "src/a.ts")).toBeNull();
+  });
+});
+
+// #14488: the draft rides to disk — debounced draft_persist while typing (the baseline rides
+// along as a companion so a restart can check the draft against the disk), resume from the copy
+// the last exit persisted, and a save that holds the write-behind then retires it with
+// draft_forget.
+describe("useFileDoc drafts on disk", () => {
+  type Named = { project?: string; path?: string; seat?: string | null; text?: string };
+  const settle = () => act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); });
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  // Fake timers make the shared flush helper's setTimeout hang, so these render and click their own way.
+  const renderDoc = async (props: DocProps) => { await act(async () => { root.render(<DocHarness {...props} />); }); await settle(); };
+  const clickDoc = async (label: string) => {
+    await act(async () => { [...host.querySelectorAll("button")].find(b => b.textContent === label)?.click(); });
+    await settle();
+  };
+
+  it("persists the draft and its baseline as they are typed, debounced, and flushes the pending writes on unmount", async () => {
+    vi.useFakeTimers();
+    const persist: Named[] = [];
+    mockIPC((command, args) => {
+      // SAFETY: mockIPC types args as unknown; the file commands are invoked with an object of named args.
+      const named = (args ?? {}) as Named;
+      if (command === "read_file") return JSON.stringify({ text: "hello", truncated: false, bytes: 5 });
+      if (command === "draft_persist") { persist.push(named); return null; }
+      return null;
+    });
+    await renderDoc({ project: "trantor", scope: null, path: "src/a.ts" });
+    await clickDoc("type");
+    await advance(599);
+    expect(persist).toEqual([]);
+    await advance(1);
+    expect(persist).toEqual([
+      { project: "trantor", path: "src/a.ts", seat: null, text: "hellox" },
+      { project: "trantor", path: "src/a.ts\u0000baseline", seat: null, text: "\"hello\"" },
+    ]);
+    await clickDoc("type");
+    await act(async () => { root.unmount(); });
+    expect(persist.slice(-2)).toEqual([
+      { project: "trantor", path: "src/a.ts", seat: null, text: "helloxx" },
+      { project: "trantor", path: "src/a.ts\u0000baseline", seat: null, text: "\"hello\"" },
+    ]);
+  });
+
+  it("resumes the draft the last exit persisted, still dirty, with the disk unchanged", async () => {
+    mockIPC((command, args) => {
+      // SAFETY: mockIPC types args as unknown; the file commands are invoked with an object of named args.
+      const named = (args ?? {}) as Named;
+      if (command === "read_file") return JSON.stringify({ text: "hello", truncated: false, bytes: 5 });
+      if (command === "draft_load" && named.path === "src/a.ts") return "persisted words";
+      if (command === "draft_load" && named.path === "src/a.ts\u0000baseline") return JSON.stringify("hello");
+      return null;
+    });
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    expect(attr("draft")).toBe("persisted words");
+    expect(attr("dirty")).toBe("true");
+    expect(attr("conflict")).toBe("");
+  });
+
+  // The merged rule: a restored draft is checked against the disk baseline, so a file an agent
+  // rewrote while the app was closed shows the notice — the draft never silently wins.
+  it("a restart whose file changed on disk shows the conflict notice and refuses the save", async () => {
+    const wrote: string[] = [];
+    mockIPC((command, args) => {
+      // SAFETY: mockIPC types args as unknown; the file commands are invoked with an object of named args.
+      const named = (args ?? {}) as Named;
+      if (command === "read_file") return JSON.stringify({ text: "agent wrote while the app was closed", truncated: false, bytes: 5 });
+      if (command === "draft_load" && named.path === "src/a.ts") return "persisted words";
+      if (command === "draft_load" && named.path === "src/a.ts\u0000baseline") return JSON.stringify("hello");
+      if (command === "file_write_plain") { wrote.push(named.path ?? ""); return null; }
+      return null;
+    });
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    expect(attr("draft")).toBe("persisted words");
+    expect(attr("conflict")).toBe("agent wrote while the app was closed");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("changed on disk");
+    await click("save");
+    expect(wrote).toEqual([]);
+  });
+
+  it("a save holds the write-behind and retires the draft and its baseline with draft_forget once the write lands", async () => {
+    vi.useFakeTimers();
+    const persist: Named[] = [];
+    const forget: Named[] = [];
+    mockIPC((command, args) => {
+      // SAFETY: mockIPC types args as unknown; the file commands are invoked with an object of named args.
+      const named = (args ?? {}) as Named;
+      if (command === "read_file") return JSON.stringify({ text: "hello", truncated: false, bytes: 5 });
+      if (command === "file_write_plain") { writes.push({ command, args: { project: named.project ?? "", path: named.path ?? "", seat: named.seat ?? null, text: named.text ?? "" } }); return null; }
+      if (command === "draft_persist") { persist.push(named); return null; }
+      if (command === "draft_forget") { forget.push(named); return null; }
+      return null;
+    });
+    await renderDoc({ project: "trantor", scope: null, path: "src/a.ts" });
+    await clickDoc("type");
+    await advance(300);
+    // A clean load retires any ghost twice (the open read and the watcher's first refresh); the
+    // assertion below is about what the SAVE retires, so start its count here.
+    forget.length = 0;
+    await clickDoc("save");
+    await advance(600);
+    expect(persist).toEqual([]);
+    expect(forget).toEqual([
+      { project: "trantor", path: "src/a.ts", seat: null },
+      { project: "trantor", path: "src/a.ts\u0000baseline", seat: null },
+    ]);
   });
 });

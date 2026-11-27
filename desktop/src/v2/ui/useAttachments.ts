@@ -19,6 +19,8 @@ export type AttachmentsApi = {
   pick: (files: File[]) => void;
   /** Paste door: an image on the clipboard becomes a chip, text pastes untouched. */
   onPaste: (e: ClipboardEvent<HTMLTextAreaElement>) => void;
+  /** #14488: adopt a saved draft's chips — the restore path from composer_draft_get. */
+  restore: (chips: AttachmentChip[]) => void;
   /** The classic wire text: chips ahead of the words (serializeForSend). */
   serialize: (draft: string) => string;
   error: string | null;
@@ -84,7 +86,7 @@ export function useAttachments(): AttachmentsApi {
   const pick = (files: File[]) => saveAll(files.filter(f => f.type.startsWith("image/")));
 
   return {
-    chips, rootRef, error, onPaste, pick,
+    chips, rootRef, error, onPaste, pick, restore: next => setChips(next),
     remove: id => setChips(cs => removeChip(cs, id)),
     clear: () => setChips([]),
     serialize: draft => serializeForSend(chips, draft),

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { readFile, writePlain, type FileBody } from "../../../features/code/fileApi";
-import { draftBaseline, draftDrop, draftFor, draftKeep } from "./drafts";
+import { draftBaseline, draftDrop, draftFlush, draftFor, draftHold, draftKeep, draftResume } from "./drafts";
 import { watchFiles } from "./fileWatch";
 
 export type DocLoad = { kind: "loading" } | { kind: "error"; reason: string } | { kind: "ok"; disk: string; truncated: boolean };
@@ -66,11 +66,20 @@ export function useFileDoc(project: string, scope: string | null, path: string, 
       });
     };
     const refresh = () => enqueue(async () => { observe(await readFile(project, path, scope ?? undefined)); });
+    // #14488: the first read also resumes the draft — the memory slot (a tab switch) or the copy
+    // the last exit persisted (a restart) — BEFORE the disk text publishes, and the queue is what
+    // guarantees the order: the seeded slot's baseline rides the same conflict check a tab switch
+    // gets, so a file that changed while the app was closed shows the notice, never a silent win.
+    const open = () => enqueue(async () => {
+      await draftResume(project, scope, path);
+      if (!alive) return;
+      observe(await readFile(project, path, scope ?? undefined));
+    });
     publish(current);
     const stopWatching = watchFiles(project, scope, paths => {
       if (paths.length === 0 || paths.includes(path)) refresh();
     }, message => publish({ saveError: `Cannot watch this file: ${message}` }));
-    refresh();
+    open();
 
     session.current = {
       edit(text) { publish({ draft: text }); cache(); },
@@ -83,6 +92,9 @@ export function useFileDoc(project: string, scope: string | null, path: string, 
             if (!alive) return;
             observe(disk);
             if (current.conflict || current.load.kind !== "ok" || current.load.truncated || current.draft === current.load.disk) return;
+            // #14488: the write commits this text, so the draft's write-behind is held first — a
+            // debounce still in flight would re-persist the very draft this save retires below.
+            draftHold(project, scope, path);
             const text = current.draft;
             try { await writePlain(project, path, scope ?? undefined, text, current.load.disk); }
             catch (error) {
@@ -108,7 +120,9 @@ export function useFileDoc(project: string, scope: string | null, path: string, 
         if (current.conflict && !current.saving) accept(current.conflict);
       },
     };
-    return () => { alive = false; session.current = null; stopWatching(); };
+    // #14488: leaving this file flushes its pending write-behind — a tab switch must not wait out
+    // the debounce window to put the last keystrokes on disk. A drop or save already cancelled it.
+    return () => { alive = false; session.current = null; draftFlush(project, scope, path); stopWatching(); };
   }, [project, scope, path]);
 
   const dirty = state.load.kind === "ok" && state.draft !== state.load.disk;

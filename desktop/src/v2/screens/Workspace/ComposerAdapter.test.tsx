@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import type { AgentCliCompatibility } from "../../../shared/api/client";
+import { draftSlots } from "../../../features/chat/composerDraft";
 import { ComposerAdapter } from "./ComposerAdapter";
 import { MODE_READ_RETRY_MS, MODE_READ_WINDOW_MS } from "./useAgentMode";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
@@ -19,7 +20,7 @@ type Reply = (cmd: string, args?: InvokeArgs) => Answer | undefined;
 let host: HTMLDivElement;
 let root: Root;
 let calls: Calls;
-beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); calls = []; });
+beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); calls = []; draftSlots.reset(); });
 afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); clearMocks(); vi.useRealTimers(); });
 
 function ipc(reply: Reply) {
@@ -193,6 +194,103 @@ describe("ComposerAdapter stop slot", () => {
     expect(host.querySelector('button[aria-label="Stop"]')).toBeNull();
     expect(host.querySelector('button[aria-label="Send"]')).not.toBeNull();
     expect(keys()).toEqual([]);
+  });
+});
+
+// #14488: words and chips persist per project through the classic composerDraft machinery —
+// memory slots for a project switch, composer_draft_get/set for a restart, debounced writes.
+describe("ComposerAdapter chat draft", () => {
+  const DRAFT_DELAY_MS = 400;
+  const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  const settle = () => act(async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); });
+
+  /** The draft commands over a caller-held disk map; pane_mode_get and pane_send answer too. */
+  function draftIpc(disk: Map<string, string>): void {
+    mockIPC((cmd, args) => {
+      calls.push({ cmd, args });
+      // SAFETY: mockIPC types args as unknown; the draft commands are invoked with an object of named args.
+      const named = (args ?? {}) as { project?: string; draft?: string };
+      if (cmd === "pane_mode_get") return { mode: "default", prompt_showing: false };
+      if (cmd === "pane_send") return { outcome: "delivered", error: null };
+      if (cmd === "composer_draft_get") return disk.get(named.project ?? "") ?? null;
+      if (cmd === "composer_draft_set") { disk.set(named.project ?? "", named.draft ?? ""); return null; }
+      return null;
+    });
+  }
+
+  const typeInto = (ta: HTMLTextAreaElement | null, text: string) => {
+    if (!ta) throw new Error("no textarea");
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    act(() => { setter?.call(ta, text); ta.dispatchEvent(new Event("input", { bubbles: true })); });
+  };
+  /** A fresh adapter root on the document — the mount/unmount pair a restart or a remount needs,
+   *  without touching the shared root this file's teardown owns. */
+  const mountHere = async () => {
+    const el = document.createElement("div");
+    document.body.append(el);
+    const here = createRoot(el);
+    await act(async () => { here.render(<ComposerAdapter {...props()} />); });
+    await settle();
+    return { el, root: here };
+  };
+
+  it("writes the words to the project's draft, debounced, and flushes what is pending on unmount", async () => {
+    vi.useFakeTimers();
+    const disk = new Map<string, string>();
+    draftIpc(disk);
+    const { el, root: localRoot } = await mountHere();
+    typeInto(el.querySelector("textarea"), "finish the ring");
+    await advance(DRAFT_DELAY_MS - 1);
+    expect(disk.get("trantor")).toBeUndefined();
+    await advance(1);
+    expect(disk.get("trantor")).toBe(JSON.stringify({ text: "finish the ring", chips: [] }));
+    typeInto(el.querySelector("textarea"), "finish the ring today");
+    await act(async () => { localRoot.unmount(); });
+    expect(disk.get("trantor")).toBe(JSON.stringify({ text: "finish the ring today", chips: [] }));
+    el.remove();
+  });
+
+  it("restores the draft the last exit persisted, words and chips together", async () => {
+    draftIpc(new Map([["trantor", JSON.stringify({ text: "finish the ring", chips: [{ path: "/tmp/one.png", size: 2048 }] })]]));
+    await mount();
+    await settle();
+    expect(host.querySelector("textarea")?.value).toBe("finish the ring");
+    expect(host.querySelectorAll("[data-chip]")).toHaveLength(1);
+    expect(calls.filter(c => c.cmd === "composer_draft_get").map(c => c.args)).toEqual([{ project: "trantor" }]);
+  });
+
+  it("a delivered send clears the draft, and a restart reads back nothing to resurrect", async () => {
+    vi.useFakeTimers();
+    const disk = new Map<string, string>();
+    draftIpc(disk);
+    const first = await mountHere();
+    typeInto(first.el.querySelector("textarea"), "off it goes");
+    await advance(DRAFT_DELAY_MS);
+    expect(disk.get("trantor")).toBe(JSON.stringify({ text: "off it goes", chips: [] }));
+    await act(async () => { first.el.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.click(); });
+    await advance(DRAFT_DELAY_MS);
+    expect(disk.get("trantor")).toBe("null");
+    await act(async () => { first.root.unmount(); });
+    first.el.remove();
+    // Restart: fresh slots, the disk holds the emptied draft — the box comes back empty.
+    draftSlots.reset();
+    const second = await mountHere();
+    expect(second.el.querySelector("textarea")?.value).toBe("");
+    await act(async () => { second.root.unmount(); });
+    second.el.remove();
+  });
+
+  it("swaps the draft with the project: each project's composer shows its own words", async () => {
+    draftIpc(new Map());
+    await mount();
+    typeInto(host.querySelector("textarea"), "for trantor");
+    await mount({ project: "other" });
+    expect(host.querySelector("textarea")?.value).toBe("");
+    typeInto(host.querySelector("textarea"), "for other");
+    await mount({ project: "trantor" });
+    expect(host.querySelector("textarea")?.value).toBe("for trantor");
+    await mount({ project: "other" });
+    expect(host.querySelector("textarea")?.value).toBe("for other");
   });
 });
 
