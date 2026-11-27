@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Card, HubClient } from "../../../shared/api/client";
 import { presenceMap, usePeers } from "../../../shared/presence";
 import type { ScreenProps } from "../../routes";
+import { takeBoardCard, watchBoardCard } from "../../shell/boardIntent";
 import { NotWired } from "../../shell/ClassicLenses";
 import { CardFace, type NextStep } from "./CardFace";
 import { DependenciesView, SeatView } from "./BoardViews";
@@ -52,6 +53,16 @@ export function BoardScreen({ client, project, onNavigate }: ScreenProps) {
   const presence = useMemo(() => presenceMap(peers), [peers]);
   const projectPeers = useMemo(() => (peers ?? []).filter(p => !p.project || p.project === project), [peers, project]);
   useEffect(() => { setOpen(null); setNewCard(false); setFilters(NO_FILTERS); }, [project]);
+  // #14495: a palette card opens with its drawer — taken on mount, or at once when the board is
+  // already showing this project.
+  const openFocused = useCallback(() => {
+    const id = takeBoardCard(project);
+    if (id !== null) setOpen(id);
+  }, [project]);
+  useEffect(() => {
+    openFocused();
+    return watchBoardCard(project, openFocused);
+  }, [openFocused]);
   const all = cards ?? [];
   const model = useMemo(() => buildBoard(all, filters, presence), [cards, filters, presence]); // eslint-disable-line react-hooks/exhaustive-deps
   const counts = useMemo(() => countBy(all, presence), [cards, presence]); // eslint-disable-line react-hooks/exhaustive-deps

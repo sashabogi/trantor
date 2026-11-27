@@ -8,6 +8,7 @@ import { useLocalHub } from "./shell/useLocalHub";
 import "./theme.css";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { backToClassic } from "./toggle";
+import { openBoardCard } from "./shell/boardIntent";
 import { isLensScreen, type FleetScreen, type LensScreen, type Navigate, type Screen, type ScreenProps } from "./routes";
 import { MODE_CONFIG, saveMode, useShellMode, type Mode } from "./shell/shellMode";
 import { fleetScreenOf, initialScreen, projectLensGet, rememberScreen, SCREEN_KEY } from "./shell/screenState";
@@ -199,7 +200,7 @@ export function ShellV2({ startDeps }: { startDeps?: StartProjectDeps } = {}) {
           searchProjects={palette.kind === "project" ? [palette.project] : data.projects}
           onClose={() => setPalette(null)}
           onJumpProject={p => { setPalette(null); onNavigate(landing, p); }}
-          onOpenCard={p => { setPalette(null); onNavigate("board", p); }} />
+          onOpenCard={(p, id) => { setPalette(null); openBoardCard(p, id); onNavigate("board", p); }} />
       )}
       {onboarding.show && (
         <OnboardingFlow me={data.me} project={data.active || data.projects[0] || ""} forced={onboarding.forced}
