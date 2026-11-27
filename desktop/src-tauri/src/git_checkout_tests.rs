@@ -282,3 +282,28 @@ async fn a_worktree_snapshot_sees_the_shared_remote_configuration() {
     assert_eq!(git_panel_at(&worktree, 1).await.unwrap().remote, None);
     let _ = std::fs::remove_dir_all(&f.tmp);
 }
+
+#[tokio::test]
+async fn a_fresh_repo_with_no_commits_reads_as_new_not_as_an_error() {
+    // `git init` and nothing else: the branch is unborn, so @{u}, `diff HEAD` and `log` all fail.
+    let tmp = std::env::temp_dir().join(format!("git-panel-unborn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    git(&tmp, &["init", "-q", "-b", "main"]);
+    assert!(!has_commits(&tmp).await);
+    let panel = git_panel_at(&tmp, 5).await.expect("an unborn branch is a state, not a failure");
+    assert_eq!(panel.branch, "main");
+    assert_eq!(panel.upstream, None);
+    assert!(panel.log.is_empty());
+    // a staged file shows up as a change with its line count
+    std::fs::write(tmp.join("a.txt"), "one\ntwo\n").unwrap();
+    git(&tmp, &["add", "a.txt"]);
+    let panel = git_panel_at(&tmp, 5).await.unwrap();
+    assert_eq!(panel.status.len(), 1);
+    assert_eq!(panel.counts.len(), 1);
+    // after the first commit the normal path takes over
+    git(&tmp, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "first"]);
+    assert!(has_commits(&tmp).await);
+    assert_eq!(git_panel_at(&tmp, 5).await.unwrap().log.len(), 1);
+    let _ = std::fs::remove_dir_all(&tmp);
+}

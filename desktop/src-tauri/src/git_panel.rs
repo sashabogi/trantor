@@ -435,12 +435,63 @@ pub(crate) async fn upstream_state(worktree: &Path) -> Result<(Option<String>, U
     Ok((None, UpstreamStatus { has_upstream: false, ahead, behind: None }))
 }
 
+/// git's well-known empty tree: what an unborn branch's staged files are compared against.
+pub(crate) const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// False on an unborn branch (a repo with no commits yet). Any other reason HEAD is unreadable
+/// still counts as "has commits", so the normal path runs and surfaces the real error.
+pub(crate) async fn has_commits(worktree: &Path) -> bool {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => true,
+        // --verify --quiet exits 1 with no stderr exactly when HEAD names no commit
+        Ok(o) => !(o.status.code() == Some(1) && o.stderr.is_empty() && is_repo(worktree)),
+        Err(_) => true,
+    }
+}
+
+fn is_repo(worktree: &Path) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["rev-parse", "--git-dir"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 /// The panel snapshot for one checkout (a seat worktree or, #13988 drill, the main checkout).
 pub(crate) async fn git_panel_at(worktree: &Path, limit: u32) -> Result<GitPanel, String> {
     let branch = run_git_text_io(worktree, &["branch", "--show-current"])
         .await?
         .trim()
         .to_string();
+
+    // A fresh `git init` has no commits: its branch is unborn, so @{u}, `diff HEAD` and `log` all
+    // fail. That is a normal new project, not a fault: no upstream, changes against the empty tree, no log.
+    if !has_commits(worktree).await {
+        let status = parse_porcelain_v1(
+            &run_git_text_io(worktree, &["status", "--porcelain=v1", "-z"]).await?,
+        );
+        let counts = parse_numstat(
+            &run_git_text_io(worktree, &["diff", "--numstat", "--cached", EMPTY_TREE]).await?,
+        );
+        return Ok(GitPanel {
+            branch,
+            upstream: None,
+            remote: sync_remote(worktree).await?,
+            ahead: None,
+            behind: None,
+            status,
+            counts,
+            log: Vec::new(),
+        });
+    }
 
     let (upstream, upstream_status) = upstream_state(worktree).await?;
 
