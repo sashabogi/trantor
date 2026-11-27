@@ -8,6 +8,7 @@ import { actionableCount, buildQueue, dashboardGroups, liveSeats } from "./model
 import { DutyDarkNote } from "./DutyDark";
 import { NeedsYou } from "./NeedsYou";
 import { Collisions, idleMoves, Machines, StatTiles, YourMove, type Move } from "./Panels";
+import { RecentPanels } from "./RecentPanels";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { useDashboardData } from "./useDashboardData";
 import { useDecisions } from "./useDecisions";
@@ -87,6 +88,7 @@ export function DashboardScreen({ client, onNavigate, onStartProject }: ScreenPr
               {group.seats.length > 0 && <WorkingNow seats={group.seats} queue={queue} autonomy={autonomy} d={d} onNavigate={onNavigate} />}
             </section>
           ))}
+          <RecentPanels client={client} projects={data.known} onNavigate={onNavigate} />
           <div className="grid grid-cols-2 gap-4">
             <YourMove moves={moves} />
             <Collisions holds={data.holds} d={d} />
