@@ -1,8 +1,11 @@
 // The source control sidebar (#14044): the one column the Workspace's left side and Code's sidebar share.
 // #14344: one header row, a Changes / Files switch, one scroller, what needs the operator first, history folded.
 // Every git mutation reuses the Code screen's scoped bridge.
-import { useEffect, useState, type ReactNode } from "react";
-import { Eye, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { LockKeyhole, RefreshCw } from "lucide-react";
+import { Avatar } from "../Avatar";
+import { Button } from "../Button";
+import { publishReview, type ReviewMessage } from "./reviewScope";
 import { ago } from "../../../shared/time";
 import { ExplorerTree } from "../ExplorerTree";
 import { IconButton } from "../IconButton";
@@ -22,6 +25,8 @@ import { StashesSection } from "./StashesSection";
 import { readScmView, writeScmView, type ScmView } from "./sectionState";
 
 export type ScmSidebarProps = {
+  onReviewMessage?: (message: ReviewMessage) => void;
+  canAskOrchestrator?: boolean;
   project: string;
   /** the seat whose worktree this reads, or null for the project checkout */
   scope: string | null;
@@ -91,10 +96,12 @@ export function ScmSidebar(p: ScmSidebarProps) {
   const [own, setOwn] = useState<string | null>(null);
   // The host's own scope changing (a seat picked in its strip) hands the sidebar back to it.
   useEffect(() => { setOwn(null); }, [p.scope, p.project]);
-  const onPickScope = (scope: string | null) => {
-    setOwn(scope !== null && isWorktreeScope(scope) && !p.hostPicksWorktree ? scope : null);
-    p.onPickScope(scope);
-  };
+  const pick = p.onPickScope;
+  const hostPicks = p.hostPicksWorktree;
+  const onPickScope = useCallback((scope: string | null) => {
+    setOwn(scope !== null && isWorktreeScope(scope) && !hostPicks ? scope : null);
+    pick(scope);
+  }, [pick, hostPicks]);
   const shown = own ?? p.scope;
   const report = p.onShownScope;
   useEffect(() => { report?.(shown); }, [report, shown]);
@@ -136,6 +143,15 @@ const arrows = (snap: ScopeSnapshot) => [snap.ahead ? `↑${snap.ahead}` : "", s
 
 function ScmSidebarView(p: ViewProps) {
   const snap = p.state.kind === "ok" ? p.state.snap : null;
+  const { state: checkout } = useScopeGit(p.project, null);
+  const branch = checkout.kind === "ok" ? checkout.snap.branch || "detached" : null;
+  const reviewing = p.scope !== null;
+  const pick = p.onPickScope;
+  const back = useCallback(() => pick(null), [pick]);
+  useEffect(() => publishReview(p.project, reviewing ? { name: p.scopeName, back } : null), [p.project, reviewing, p.scopeName, back]);
+  const worktree = p.worktrees.find(w => worktreeScope(w) === p.scope);
+  const folder = worktree?.path ?? p.scope ?? "";
+  const files = snap?.status.length ?? worktree?.changed;
   const fetch = useFetch(p.project, p.scope, p.onMutated);
   const [view, setViewState] = useState<ScmView>(readScmView);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
@@ -147,11 +163,25 @@ function ScmSidebarView(p: ViewProps) {
   const dotColor = { faint: "var(--v2-faint)", warn: "var(--v2-warn)", accent: "var(--v2-accent)", ok: "var(--v2-ok)" }[tone];
   const dotTitle = away ? aheadTitle : snap?.upstream ? `in sync with ${snap.upstream}` : "all landed";
   return (
-    <div data-testid="scm-sidebar" className="flex min-h-0 flex-1 flex-col">
+    <div data-testid="scm-sidebar" tabIndex={-1} onKeyDown={e => {
+      if (reviewing && e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); e.stopPropagation(); back(); }
+    }} className="flex min-h-0 flex-1 flex-col">
+      {reviewing && <div data-review-band title={folder.split("/").pop()} className="flex shrink-0 flex-col gap-2 border-b border-[var(--v2-accent-edge)] bg-[var(--v2-info-soft)] px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <Avatar name={p.scopeName} size={22} />
+          <div className="min-w-0 flex-1">
+            <div className="text-v2-body font-semibold">Reviewing {p.scopeName}'s work</div>
+            <div className="v2-mono text-v2-small text-[var(--v2-accent-hi)]">its own worktree · {files === undefined ? "reading files" : plural(files, "file", "files")} · read only</div>
+          </div>
+          <LockKeyhole size={14} aria-hidden className="shrink-0 text-[var(--v2-accent-hi)]" />
+        </div>
+        <Button onClick={back} className="w-full justify-center whitespace-normal">Back to my checkout{branch ? ` (${branch})` : ""}<kbd className="v2-mono text-v2-small text-[var(--v2-muted)]">Esc</kbd></Button>
+      </div>}
+
       <header className="flex shrink-0 flex-col px-3 pt-1">
         <div className="flex h-8 items-center gap-2">
           <span data-state-dot data-tone={tone} role="img" aria-label={dotTitle} title={dotTitle} className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: dotColor }} />
-          <span className="v2-mono min-w-0 truncate text-v2-body text-[var(--v2-text)]" title={snap?.branch ?? "reading…"}>{snap?.branch ?? "reading…"}</span>
+          <span hidden={reviewing} className="v2-mono min-w-0 truncate text-v2-body text-[var(--v2-text)]" title={snap?.branch ?? "reading…"}>{snap?.branch ?? "reading…"}</span>
           {away && <span data-ahead className="v2-mono shrink-0 text-v2-body text-[var(--v2-accent)]" title={aheadTitle}>{away}</span>}
           <span className="flex-1" />
           <IconButton label="Fetch from origin" title="Fetch origin with prune" size={24} disabled={fetch.busy} onClick={() => { void fetch.run(); }}>
@@ -159,14 +189,7 @@ function ScmSidebarView(p: ViewProps) {
           </IconButton>
           {p.actions && <span className="flex shrink-0 items-center gap-1">{p.actions}</span>}
         </div>
-        {p.scope !== null && (
-          <div className="flex flex-col items-start gap-1 pb-2">
-            <span data-scope-pill title={p.scopeName} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--v2-edge-2)] px-2 py-0.5 text-v2-small text-[var(--v2-text-2)]">
-              <Eye size={11} aria-hidden className="shrink-0" /><span className="truncate">{p.scopeName}’s worktree, read only</span>
-            </span>
-            <button type="button" onClick={() => p.onPickScope(null)} className="border-0 bg-transparent p-0 text-v2-small text-[var(--v2-link)]">Back to my checkout</button>
-          </div>
-        )}
+
       </header>
       {fetch.error && (
         <div role="alert" className="px-3 py-2 text-v2-body text-[var(--v2-bad)]">{fetch.error}</div>
@@ -190,6 +213,7 @@ function ScmSidebarView(p: ViewProps) {
 
 function ChangesView(p: ViewProps & { snap: ScopeSnapshot | null }) {
   const { snap } = p;
+  const files = snap?.status.length ?? p.worktrees.find(w => worktreeScope(w) === p.scope)?.changed;
   return (
     <>
       <NeedsYou snap={snap} worktrees={p.worktrees} scope={p.scope} onOpenConflict={p.onOpenConflict} onPickScope={p.onPickScope} />
@@ -197,6 +221,13 @@ function ChangesView(p: ViewProps & { snap: ScopeSnapshot | null }) {
         ? <ChangesSection project={p.project} snap={snap} selected={p.selectedPath ?? null} onOpen={p.onOpenChange}
           onMutated={p.onMutated} onOpenConflict={p.onOpenConflict} />
         : <Pending state={p.state} />}
+      {p.scope !== null && <div className="flex flex-wrap gap-1.5 px-3 py-2">
+        <Button disabledReason="Merging a worktree into main is not available in this sidebar">Merge into main</Button>
+        <Button disabledReason={!p.onReviewMessage ? "Open the Workspace to message this agent" : isWorktreeScope(p.scope) && !p.canAskOrchestrator ? "Sub-agents don't take messages; start the orchestrator to ask about this work." : files === undefined ? "Reading the worktree files" : null}
+          onClick={() => { if (p.scope && files !== undefined) p.onReviewMessage?.({ scope: p.scope, name: p.scopeName, files }); }}>
+          {isWorktreeScope(p.scope) ? "Ask the orchestrator" : `Message ${p.scopeName}`}
+        </Button>
+      </div>}
       {p.worktrees.length > 0 && (
         <CollapsibleSection section="agents" title="Agents working" count={p.worktrees.length}>
           <AgentsSection project={p.project} worktrees={p.worktrees} scope={p.scope} onPickScope={p.onPickScope} />

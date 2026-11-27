@@ -1,7 +1,8 @@
+import { useReviewScope } from "../../ui/ScmSidebar/reviewScope";
 // #14256: git remains visible even when GitHub CLI cannot report CI.
 import { CheckoutRecovery } from "../../ui/CheckoutRecovery";
 import type { Navigate } from "../../routes";
-import { Check, LoaderCircle } from "lucide-react";
+import { Check, LoaderCircle, LockKeyhole } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { ago } from "../../../shared/time";
 import { aheadLabel } from "../../../features/code/gitApi";
@@ -27,10 +28,14 @@ export function CiChip({ status }: { status: CiStatus | null }) {
 }
 
 export function MainHealth({ snap, status, project, onNavigate, gitFailed = false }: { project: string; onNavigate: Navigate; snap: ScopeSnapshot | null; status: CiStatus | null; gitFailed?: boolean }) {
+  const review = useReviewScope(project);
   const missingCheckout = status?.localCheckout === false;
   const tag = status?.hasRemote ? status.tag : null;
   const published = status?.tagPublishedAt ? Date.parse(status.tagPublishedAt) : NaN;
   const release = tag ? `released ${tag}${Number.isFinite(published) ? ` · ${ago(published)}` : ""}` : null;
+  if (review) return <div aria-label="Review scope" className="flex h-full min-w-0 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--v2-accent-edge)] bg-[var(--v2-info-soft)] px-2 text-v2-body">
+    <LockKeyhole size={12} aria-hidden /><span className="truncate">Reviewing {review.name}</span><span aria-hidden>·</span><Button variant="quiet" onClick={review.back}>Back</Button>
+  </div>;
   return (
     <div aria-label="Main checkout health" className="flex h-full min-w-0 max-w-64 shrink-0 flex-col justify-center rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-2">
       <div className="flex min-w-0 items-center gap-2 text-v2-small">

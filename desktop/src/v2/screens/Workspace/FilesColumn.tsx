@@ -1,3 +1,4 @@
+import type { ReviewMessage } from "../../ui/ScmSidebar/reviewScope";
 import { useActivePane } from "../../ui/useActivePane";
 // The source control sidebar on the left of the Workspace (#14044): Changes, Files and Recent
 // commits fed by useScopeGit, collapsible to a rail, resizable (#13987 drill). #14047: a Branches
@@ -14,6 +15,8 @@ import { FILES_COLUMN, FILES_MIN_WIDTH, FILES_RAIL_WIDTH, maxFor, workspaceWidth
 type Column = ReturnType<typeof useFilesColumn>;
 
 export type FilesColumnProps = {
+  onReviewMessage?: (message: ReviewMessage) => void;
+  canAskOrchestrator?: boolean;
   col: Column; workspace: RefObject<HTMLElement | null>; project: string;
   /** the seat whose worktree to show, or null for the project checkout. */
   scope: string | null; scopeName: string;
@@ -38,6 +41,7 @@ function ScmColumn(p: FilesColumnProps) {
   return (
     <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scopeName} state={state} seats={p.seats} onPickScope={p.onPickScope}
       onMutated={refresh} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onShownScope={p.onShownScope}
+      onReviewMessage={p.onReviewMessage} canAskOrchestrator={p.canAskOrchestrator}
       selectedPath={p.selectedPath} onOpenConflict={p.onOpenConflict}
       actions={<IconButton label="Collapse files" title="Collapse the source control sidebar to a rail" size={26} onClick={() => p.col.setOpen(false)}>
         <ChevronsLeft size={14} aria-hidden />

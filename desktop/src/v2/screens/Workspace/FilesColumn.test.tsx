@@ -2,21 +2,22 @@
 // #13987/#14044 drill: the left column is a source control sidebar that folds to a rail, resizes,
 // remembers itself, opens files, and opens Code on a clicked change or commit. Fakes sit at the
 // Tauri IPC and the hub transport only; the terminal is injected through panes.tsx like Workspace.test does.
-import { act } from "react";
+import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
 import { MODE_KEY } from "../../shell/shellMode";
+import { queueReviewMessage, takeReviewMessage } from "../../ui/ScmSidebar/reviewScope";
 import { takeOpenIntent } from "../../shell/openIntent";
 import { WorkspaceScreen } from "./index";
 import { DEFAULT_PANES, WorkspacePanesContext } from "./panes";
-import { FILES_OPEN_KEY, FILES_WIDTH_KEY } from "./chatColumnState";
+import { OPEN_KEY, FILES_OPEN_KEY, FILES_WIDTH_KEY } from "./chatColumnState";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const PANES = { ...DEFAULT_PANES, TerminalPane: () => <div data-testid="terminal" />, RightPanel: () => <section aria-label="Project panel" /> };
+const PANES = { ...DEFAULT_PANES, TerminalPane: () => <div data-testid="terminal" />, RightPanel: ({ reviewDraft }: ComponentProps<typeof DEFAULT_PANES.RightPanel>) => <section aria-label="Project panel">{reviewDraft?.text}</section> };
 const client = () => new HubClient("http://hub.test", async () => ({ status: 200, body: JSON.stringify({ peers: [], tasks: [], holds: [] }) }));
 const ROOTS = JSON.stringify([{ name: "README.md", path: "README.md", dir: false }]);
 const PANEL = {
@@ -31,16 +32,19 @@ let root: Root;
 let navigated: string[];
 let herdrSeatsReply = "[]";
 let conflicted = false;
+let worktreesReply = "[]";
 beforeEach(() => {
   navigated = [];
   herdrSeatsReply = "[]";
   conflicted = false;
+  worktreesReply = "[]";
   const mem = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
     removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
   });
   mockIPC((command, payload) => {
+    if (command === "git_worktrees") return worktreesReply;
     if (command === "herdr_seats") return herdrSeatsReply;
     if (command === "identity_name") return "sasha";
     if (command === "project_files") return ROOTS;
@@ -61,6 +65,7 @@ afterEach(async () => {
   await act(async () => { root.unmount(); });
   host.remove(); clearMocks(); vi.unstubAllGlobals();
   takeOpenIntent("trantor");
+  takeReviewMessage("trantor");
 });
 
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
@@ -321,5 +326,31 @@ describe("Branches and seats (#14047)", () => {
     await settle(); await settle();
     expect(column()?.querySelector("header")?.textContent).toContain("main");
     expect(column()?.querySelector('button[data-scope-row="main"]')?.getAttribute("aria-pressed")).toBe("true");
+  });
+});
+
+
+describe("worktree review messaging", () => {
+  it("takes a Code review message once the Workspace recipient is available", async () => {
+    herdrSeatsReply = JSON.stringify([{ project: "trantor", agent: "orchestrator", surface: "s1", kind: "orch" }]);
+    queueReviewMessage("trantor", { scope: "wt:/repo/agent-abc", name: "agent abc", files: 3 });
+    await mountScreen();
+    expect(host.querySelector('[aria-label="Project panel"]')?.textContent).toBe("About agent abc's worktree (3 files): ");
+    expect(takeReviewMessage("trantor")).toBeUndefined();
+  });
+  it("opens a collapsed orchestrator chat with the reviewed agent and file count", async () => {
+    localStorage.setItem(FILES_OPEN_KEY, "true");
+    localStorage.setItem(OPEN_KEY, "false");
+    herdrSeatsReply = JSON.stringify([{ project: "trantor", agent: "orchestrator", surface: "s1", kind: "orch" }]);
+    worktreesReply = JSON.stringify([{ path: "/repo/agent-abcdef123", branch: "wt", kind: "agent", head: "abc", locked: false, last_activity: 0, changed: 2, ahead: 1 }]);
+    await mountScreen();
+    expect(host.querySelector('[aria-label="Chat rail"]')).not.toBeNull();
+    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Review") ?? null);
+    await settle();
+    const ask = [...host.querySelectorAll("button")].find(b => b.textContent === "Ask the orchestrator");
+    expect(ask?.disabled).toBe(false);
+    await click(ask ?? null);
+    expect(host.querySelector('[aria-label="Chat column"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Project panel"]')?.textContent).toBe("About agent abcdef1's worktree (2 files): ");
   });
 });
