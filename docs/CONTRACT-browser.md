@@ -166,3 +166,20 @@ connects to `<bus>/browser.sock` with the calling session's id and display label
 `held_by_user` or `waiting_for_approval` the tool waits, re-checking `state` every second up to 120
 s, and says what it is waiting for; on `no_app` it says Trantor's desktop app is not open on this
 machine.
+
+### Settled by the B5 build
+
+- User agent presets are `Safari`, `Chrome`, `Firefox`, `iPhone`, `iPad`, `Android`
+  (case-insensitive; anything else is `bad_request`; `None` = Safari).
+- `browser://ask` carries an optional `kind: "evaluate"` when an agent asks to run a script; an
+  evaluate grant covers that visit only and is never persisted.
+- `browser_new_page` and the socket `open` / `new_page` results include the `page` id.
+- A blank `browser_open` creates no page; the first `browser_navigate` or `browser_new_page` does.
+- `evaluate` runs synchronously (promises are not awaited); a script error is `bad_request`.
+- Socket `resize` takes a preset name string or a `Device`, or top-level `w`, `h`, or nothing.
+- Zoom, user agent, emulation, rect and pop-out are per project (no `page`).
+- Release builds answer `browser_inspect` with `unsupported` and a message pointing at
+  right-click > Inspect Element; the page is inspectable either way.
+- Load completion and in-page URL changes are tracked by sampling each webview every 300 ms.
+- Not yet: emulation inside a pop-out window, a `window` handle for popups (`postMessage` to the
+  opener does not reach it), clearing find highlights.
