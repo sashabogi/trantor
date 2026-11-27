@@ -109,7 +109,19 @@ describe("the placeholder the native page covers", () => {
     expect(last("browser_set_rect")).toMatchObject({ project: "trantor", rect: { x: 8, y: 44, w: 700, h: 480 } });
     fireResize();
     expect(sent("browser_open")).toHaveLength(1);
-    expect(sent("browser_set_rect")).toHaveLength(3);
+    // an unchanged rect is not sent again
+    expect(sent("browser_set_rect")).toHaveLength(2);
+  });
+
+  it("follows the region when the layout moves it without resizing it", async () => {
+    await mount();
+    const region = host.querySelector('[data-testid="browser-region"]')!;
+    setRect(region, 8, 44, 700, 480);
+    fireResize();
+    // a banner above pushes the column down 30px; the region keeps its size, so no resize fires
+    setRect(region, 8, 74, 700, 480);
+    await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+    expect(last("browser_set_rect")).toMatchObject({ rect: { x: 8, y: 74, w: 700, h: 480 } });
   });
 
   it("shows the page only while one is open, and hides it when the tab goes away", async () => {

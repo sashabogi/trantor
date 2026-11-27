@@ -236,24 +236,28 @@ impl BrowserCore {
         let rect = rect.sane();
         let url = url.as_deref().map(normalize_url).transpose()?;
         if self.backend.exists(project) {
+            // a blank page stays hidden so the tab's "Nothing open" shows through
+            let show = url.is_some() || !self.state(project).url.is_empty();
             self.backend.set_rect(project, rect)?;
-            self.backend.set_visible(project, true)?;
+            self.backend.set_visible(project, show)?;
             self.update(project, |p| {
                 p.rect = rect;
-                p.visible = true;
+                p.visible = show;
             });
             if let Some(url) = url {
                 self.navigate(project, &url)?;
             }
         } else {
+            let blank = url.is_none();
             let first = url.unwrap_or_else(|| "about:blank".to_string());
             self.update(project, |p| {
                 p.rect = rect;
-                p.visible = true;
-                p.state.url = first.clone();
-                p.state.loading = first != "about:blank";
+                p.visible = !blank;
+                // "" is the contract's "no page"
+                p.state.url = if blank { String::new() } else { first.clone() };
+                p.state.loading = !blank;
             });
-            if let Err(e) = self.backend.open(project, &first, rect, true) {
+            if let Err(e) = self.backend.open(project, &first, rect, !blank) {
                 self.update(project, |p| p.state.loading = false);
                 return Err(e);
             }

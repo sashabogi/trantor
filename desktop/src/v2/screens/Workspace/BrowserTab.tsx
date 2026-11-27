@@ -44,11 +44,21 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
       openedRef.current = true;
       commands.open(rectOf(el));
     }
-    const send = () => commands.setRect(rectOf(el));
+    // The native page does not move with the DOM: a banner or the seat strip shifting the region
+    // without resizing it left the page covering the address bar. Check every frame, send on change.
+    let last = "";
+    const send = () => {
+      const r = rectOf(el);
+      const key = `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.w)},${Math.round(r.h)}`;
+      if (key === last) return;
+      last = key;
+      commands.setRect(r);
+    };
     send();
     const ro = new ResizeObserver(send);
     ro.observe(el);
-    return () => ro.disconnect();
+    let frame = requestAnimationFrame(function tick() { send(); frame = requestAnimationFrame(tick); });
+    return () => { ro.disconnect(); cancelAnimationFrame(frame); };
   }, [commands, read, state.popped_out, maximized]);
 
   // The native page is an OS view above this markup, so it shows only while a page is open in the

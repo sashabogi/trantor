@@ -48,7 +48,7 @@ impl MacBackend {
     }
 }
 
-fn slug(project: &str) -> String {
+pub(crate) fn slug(project: &str) -> String {
     project.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
 }
 
@@ -277,4 +277,18 @@ fn png_of(img: &NSImage) -> Option<Vec<u8>> {
     let props = NSDictionary::new();
     let png: Retained<_> = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &props) }?;
     Some(png.to_vec())
+}
+
+/// Debug builds only: where AppKit really placed a webview, in window coordinates (origin bottom-left).
+#[cfg(debug_assertions)]
+pub fn frame_in_window(wv: &Webview) -> String {
+    let (tx, rx) = channel();
+    let _ = wv.with_webview(move |pw| {
+        // SAFETY: as in `history`; these closures run on the main thread.
+        let web: &WKWebView = unsafe { &*pw.inner().cast() };
+        let f = unsafe { web.convertRect_toView(web.bounds(), None) };
+        let content_h = web.window().and_then(|w| w.contentView()).map(|v| v.frame().size.height).unwrap_or(-1.0);
+        let _ = tx.send(format!("x={} y={} w={} h={} content_h={}", f.origin.x, f.origin.y, f.size.width, f.size.height, content_h));
+    });
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_or_else(|_| "no frame".into())
 }

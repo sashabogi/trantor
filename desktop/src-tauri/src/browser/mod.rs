@@ -89,6 +89,7 @@ fn drill(app: &AppHandle<Wry>, core: Arc<BrowserCore>) {
     let url = std::env::var("TRANTOR_BROWSER_DRILL_URL").unwrap_or_else(|_| "https://example.com".into());
     use tauri::Listener;
     let answerer = core.clone();
+    let probe_app = app.clone();
     app.listen("browser://ask", move |ev| {
         if let Ok(ask) = serde_json::from_str::<Ask>(ev.payload()) {
             let _ = answerer.answer(&ask.id, "once");
@@ -98,6 +99,15 @@ fn drill(app: &AppHandle<Wry>, core: Arc<BrowserCore>) {
         std::thread::sleep(std::time::Duration::from_secs(3));
         let r = core.open(&project, Some(url), Rect { x: 40.0, y: 80.0, w: 900.0, h: 600.0 });
         let _ = crate::changes::app_log(format!("browser drill: open -> {:?}", r.map(|s| s.url)));
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        #[cfg(target_os = "macos")]
+        {
+            let labels: Vec<String> = probe_app.webviews().keys().cloned().collect();
+            let _ = crate::changes::app_log(format!("browser drill: webviews {labels:?}"));
+            for (label, wv) in probe_app.webviews() {
+                let _ = crate::changes::app_log(format!("browser drill: frame {label}: {}", backend_macos::frame_in_window(&wv)));
+            }
+        }
         if std::env::var_os("TRANTOR_BROWSER_DRILL_POP").is_some() {
             let step = |what: &str, r: BrowserResult<()>| {
                 let st = core.state(&project);

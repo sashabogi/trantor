@@ -27,8 +27,8 @@ export type BrowserCommands = {
 /** What the tab renders from: the live state, the open ask, whether the mount read settled, the commands. */
 export type BrowserView = { state: BrowserState; ask: BrowserAsk | null; read: boolean; steps: BrowserStep[]; commands: BrowserCommands };
 
-// Rust sends "" for "no page"; the tab's empty state keys on null.
-const normalize = (s: BrowserState): BrowserState => (s.url ? s : { ...s, url: null });
+// Rust sends "" for "no page" (and a blank page may report about:blank); the empty state keys on null.
+const normalize = (s: BrowserState): BrowserState => (s.url && s.url !== "about:blank" ? s : { ...s, url: null });
 
 export function useBrowser(project: string): BrowserView {
   const [state, setState] = useState<BrowserState>(EMPTY_BROWSER_STATE);
