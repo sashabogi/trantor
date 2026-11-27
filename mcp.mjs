@@ -520,7 +520,7 @@ server.tool("relay_peers", "Find who you can talk to: the live agent sessions on
 
 server.tool("relay_send", "Send a live message to another agent session (or 'all'). Message the agent yourself; never ask the human to relay. Ids: relay_peers. Cross-project sends are a breach unless the operator linked the projects (`trantor policy link <a> <b> --reason \"<why>\"`); the hub answers 403 for an unlinked project.",
   { to: z.string(), text: z.string(),
-    wake: z.boolean().optional().describe("false = context, not a contract: batches into the target's next turn. Unthreaded directs earn a turn; threaded replies earn a new turn when they contain Contract #<id> or contract:. Set false on every ack, FYI and queue note."),
+    wake: z.boolean().optional().describe("false = context, not a contract: batches into the target's next turn. Unset or true, a direct message earns a turn; a reply that only acknowledges the seat's own report does not, unless its text carries Contract #<id> or contract:. Set false on every ack, FYI and queue note."),
     re: z.number().optional().describe("message id you are answering; set it on every reply. Without it the hub matches your reply to the peer's OLDEST outstanding contract, closing the wrong one.") },
   async ({ to, text, wake, re }) => {
     // The event log is append-only — a secret in it is unrecoverable, so refuse BEFORE
@@ -544,7 +544,7 @@ server.tool("relay_send", "Send a live message to another agent session (or 'all
     const { id } = sent;
     const delivery = wake === false ? " (batched — no turn)"
       : Number(re) > 0 && to !== "all"
-        ? hasContractText(text) ? " (contract reply — will wake the seat)" : " (batched as a reply, will not start a turn; may resume a pending question)"
+        ? hasContractText(text) ? " (contract reply — will wake the seat)" : " (reply — wakes the seat unless it only acknowledges the seat's own report)"
         : "";
     return { content: [{ type: "text", text: `sent #${id} to ${to}${delivery}` }] };
   });

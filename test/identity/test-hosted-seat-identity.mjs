@@ -146,7 +146,7 @@ try {
   for (const [text, wake, expected] of [
     ["Contract #14520: fix threaded replies", undefined, "will wake the seat"],
     ["Yes. contract: fix threaded replies", undefined, "will wake the seat"],
-    ["thanks, accepted", undefined, "batched as a reply, will not start a turn"],
+    ["thanks, accepted", undefined, "wakes the seat unless it only acknowledges the seat's own report"],
     ["Contract #14520: context only", false, "batched — no turn"],
   ]) {
     const args = { to: "host:identity-drill", text, re: 35695 };
