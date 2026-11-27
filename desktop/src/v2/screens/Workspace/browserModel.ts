@@ -20,6 +20,9 @@ export type BrowserAsk = { project: string; id: string; session: string; label: 
 
 export type BrowserAskChoice = "once" | "site" | "deny";
 
+/** One thing an agent did with the browser, newest last (browser_steps). */
+export type BrowserStep = { session: string; label: string; action: string; at: number; ok: boolean };
+
 /** What a browser command carries besides its project: exactly the fields the command names. */
 export type BrowserArgs = {
   url?: string | null;
@@ -31,6 +34,7 @@ export type BrowserArgs = {
 
 export const BROWSER_STATE_EVENT = "browser://state";
 export const BROWSER_ASK_EVENT = "browser://ask";
+export const BROWSER_REVEAL_EVENT = "browser://reveal";
 
 /** Every project starts here; the first browser://state event or browser_state read replaces it. */
 export const EMPTY_BROWSER_STATE: BrowserState = {

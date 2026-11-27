@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   BROWSER_ASK_EVENT, BROWSER_STATE_EVENT, EMPTY_BROWSER_STATE,
-  type BrowserArgs, type BrowserAsk, type BrowserAskChoice, type BrowserRect, type BrowserState,
+  type BrowserArgs, type BrowserAsk, type BrowserAskChoice, type BrowserRect, type BrowserState, type BrowserStep,
 } from "./browserModel";
 
 export type BrowserCommands = {
@@ -25,11 +25,15 @@ export type BrowserCommands = {
 };
 
 /** What the tab renders from: the live state, the open ask, whether the mount read settled, the commands. */
-export type BrowserView = { state: BrowserState; ask: BrowserAsk | null; read: boolean; commands: BrowserCommands };
+export type BrowserView = { state: BrowserState; ask: BrowserAsk | null; read: boolean; steps: BrowserStep[]; commands: BrowserCommands };
+
+// Rust sends "" for "no page"; the tab's empty state keys on null.
+const normalize = (s: BrowserState): BrowserState => (s.url ? s : { ...s, url: null });
 
 export function useBrowser(project: string): BrowserView {
   const [state, setState] = useState<BrowserState>(EMPTY_BROWSER_STATE);
   const [ask, setAsk] = useState<BrowserAsk | null>(null);
+  const [steps, setSteps] = useState<BrowserStep[]>([]);
   // Settles once the mount read answered, either way: until then the tab holds off placing the page,
   // so it never opens or positions a browser that turns out to be popped out.
   const [read, setRead] = useState(false);
@@ -37,11 +41,15 @@ export function useBrowser(project: string): BrowserView {
   useEffect(() => {
     let alive = true;
     const subs = [
-      listen<BrowserState>(BROWSER_STATE_EVENT, e => { if (e.payload.project === project) setState(e.payload); }),
+      listen<BrowserState>(BROWSER_STATE_EVENT, e => {
+        if (e.payload.project !== project) return;
+        setState(normalize(e.payload));
+        void invoke<BrowserStep[]>("browser_steps", { project }).then(s => { if (alive && Array.isArray(s)) setSteps(s); }).catch(() => {});
+      }),
       listen<BrowserAsk>(BROWSER_ASK_EVENT, e => { if (e.payload.project === project) setAsk(e.payload); }),
     ];
     invoke<BrowserState>("browser_state", { project })
-      .then(known => { if (alive) { setRead(true); if (known) setState(known); } })
+      .then(known => { if (alive) { setRead(true); if (known) setState(normalize(known)); } })
       .catch(() => { if (alive) setRead(true); });
     return () => {
       alive = false;
@@ -67,5 +75,5 @@ export function useBrowser(project: string): BrowserView {
     answer: (id, choice) => { setAsk(null); send("browser_answer", { id, choice }); },
   }), [send]);
 
-  return { state, ask, read, commands };
+  return { state, ask, read, steps, commands };
 }

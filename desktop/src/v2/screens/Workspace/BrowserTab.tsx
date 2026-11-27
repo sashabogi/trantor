@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  ArrowLeft, ArrowRight, Camera, ExternalLink, Lock, Maximize2, Minimize2, MousePointer2, PictureInPicture2, RotateCw,
+  ArrowLeft, ArrowRight, Camera, ChevronDown, ChevronRight, ExternalLink, Lock, Maximize2, Minimize2, MousePointer2, PictureInPicture2, RotateCw,
 } from "lucide-react";
 import { IconButton } from "../../ui/IconButton";
 import { useEscape } from "../../ui/useEscape";
@@ -25,7 +25,8 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
   onScreenshot?: () => void;
   onPickElement?: () => void;
 }) {
-  const { state, ask, read, commands } = useBrowser(project);
+  const { state, ask, read, steps, commands } = useBrowser(project);
+  const [stepsOpen, setStepsOpen] = useState(false);
   useEscape(() => onMaximize(false), maximized);
   const regionRef = useRef<HTMLDivElement | null>(null);
   const openedRef = useRef(false);
@@ -144,6 +145,25 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
           <div aria-label="The page" className="min-h-0 flex-1" />
         )}
       </div>
+
+      {steps.length > 0 && !state.popped_out && (
+        <div className="flex shrink-0 flex-col border-t border-[var(--v2-edge)]">
+          <button type="button" aria-expanded={stepsOpen} onClick={() => setStepsOpen(o => !o)}
+            className="v2-hover flex h-[30px] items-center gap-2 border-0 bg-transparent px-2.5 text-left text-v2-small text-[var(--v2-muted)]">
+            {stepsOpen ? <ChevronDown size={12} aria-hidden /> : <ChevronRight size={12} aria-hidden />}
+            Steps · {steps.length}
+          </button>
+          {stepsOpen && (
+            <ol className="v2-mono m-0 flex max-h-40 list-none flex-col gap-0.5 overflow-y-auto px-2.5 pb-2.5 pl-7 text-v2-small text-[var(--v2-muted)]">
+              {steps.slice(-20).map((step, i) => (
+                <li key={`${step.at}-${i}`}>
+                  <span className="text-[var(--v2-text-2)]">{step.label}</span> {step.action}{step.ok ? "" : " · failed"}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
     </div>
   );
 }

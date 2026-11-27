@@ -3,6 +3,8 @@ import { useActivePane } from "../../ui/useActivePane";
 // The shell already renders the project header and lens tabs; this is everything under them.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { BROWSER_REVEAL_EVENT } from "./browserModel";
 import { DrillMode } from "../../../features/drill/DrillMode";
 import type { ScreenProps } from "../../routes";
 import { ChatLinks } from "../../chat/LinkContext";
@@ -90,6 +92,15 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
     try { localStorage.setItem(LAYOUT_KEY, l); } catch { /* storage blocked: the layout lasts the session */ }
   }, []);
   const focusSeat = (key: string) => { setSelKey(key); pickLayout("focus"); };
+  // An agent that opens a page brings the Browser tab forward, so you can watch it drive.
+  useEffect(() => {
+    const off = listen<{ project: string }>(BROWSER_REVEAL_EVENT, e => {
+      if (e.payload.project !== project) return;
+      pickLayout("focus");
+      setTab("browser");
+    });
+    return () => { void off.then(stop => stop()).catch(() => {}); };
+  }, [project, pickLayout]);
   const message = () => {
     pickLayout("focus");
     setTab("terminal");

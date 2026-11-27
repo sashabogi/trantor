@@ -49,13 +49,16 @@ let host: HTMLDivElement;
 let root: Root;
 let ipc: { command: string; args: BrowserArgs | null }[];
 let cur: BrowserState;
+let steps: unknown[];
 beforeEach(() => {
   ipc = [];
+  steps = [];
   cur = state({});
   mockIPC(async (command, args) => {
     // SAFETY: mockIPC hands its payload as unknown; every call this tab makes is flat browser args.
     ipc.push({ command, args: args as BrowserArgs | null });
     if (command === "browser_state" || command === "browser_open") return cur;
+    if (command === "browser_steps") return steps;
     return null;
   }, { shouldMockEvents: true });
   host = document.createElement("div");
@@ -276,4 +279,30 @@ it("keeps the tab scoped to its own project", async () => {
   await act(async () => { await emit("browser://state", state({ project: "other", url: "http://elsewhere" })); });
   expect(host.querySelector<HTMLInputElement>('input[aria-label="Address"]')?.value).toBe("");
   expect(last("browser_set_visible")).toEqual({ project: "trantor", visible: false });
+});
+
+describe("the Browser tab against the Rust core's real shapes", () => {
+  it("shows Nothing open when Rust reports no page as an empty url", async () => {
+    // BrowserState.url is a String in Rust, so "no page" arrives as "", never null
+    cur = state({ url: "" as unknown as null, title: "" });
+    await mount();
+    expect(host.textContent).toContain("Nothing open");
+    expect(ipc.some(c => c.command === "browser_set_visible" && c.args?.visible === true)).toBe(false);
+  });
+
+  it("lists the agent's steps under the page after a state change", async () => {
+    cur = state({ url: "https://example.com/", title: "Example Domain" });
+    await mount();
+    steps = [
+      { session: "s", label: "orchestrator", action: "read the page", at: 1, ok: true },
+      { session: "s", label: "orchestrator", action: "clicked e1", at: 2, ok: false },
+    ];
+    await act(async () => { await emit("browser://state", state({ url: "https://example.com/", title: "Example Domain", driver: { session: "s", label: "orchestrator", action: "clicking", since: 1 } })); });
+    await act(async () => { await Promise.resolve(); });
+    const toggle = [...host.querySelectorAll("button")].find(b => b.textContent?.startsWith("Steps"));
+    expect(toggle?.textContent).toContain("Steps · 2");
+    await click(toggle ?? null);
+    expect(host.textContent).toContain("read the page");
+    expect(host.textContent).toContain("clicked e1 · failed");
+  });
 });
