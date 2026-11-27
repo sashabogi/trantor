@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Panel toggles</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0F12}
+:root{--v2-ease:cubic-bezier(.2,.7,.3,1)}
+.pt button{font-family:inherit;cursor:pointer}
+.pt button:focus-visible{outline:1px solid #8AA8FF;outline-offset:1px;border-radius:4px}
+.pt .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+.pt .tg{transition:background-color 120ms var(--v2-ease),color 120ms var(--v2-ease)}
+.pt .tg:hover{background:rgba(231,233,236,.06);color:#E7E9EC}
+.pt .tg .shade{transition:opacity 160ms var(--v2-ease)}
+.pt .tg.open:hover .shade{opacity:.35}
+.pt .tg.closed .shade{opacity:0}
+.pt .tg.closed:hover .shade{opacity:.45}
+@media (prefers-reduced-motion: reduce){.pt *{transition:none !important}}
+</style>
+</helmet>
+<div class="pt" style="width:1440px;background:#0E0F12;color:#E7E9EC;font-family:Inter,system-ui,sans-serif;font-size:13px;padding:40px 48px 56px;box-sizing:border-box;display:flex;flex-direction:column;gap:40px;">
+
+  <div style="max-width:1080px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#9AA0A8;">PROPOSAL · CARD #14512 · PANEL TOGGLES · NOTHING HERE IS BUILT YET</div>
+    <h1 style="margin:8px 0 0;font-size:26px;font-weight:650;letter-spacing:-.01em;">One set of panel toggles: the icon shows the layout, hover shows what a click will do</h1>
+    <p style="margin:8px 0 0;color:#9AA0A8;font-size:13px;line-height:1.55;">Today the same job is drawn four ways: double chevrons on the rail and the source control column, panel icons in Code, an X on the chat column, arrows on the browser. The proposal is one primitive: a small window outline whose shaded part is the panel. Shaded means open. It lives in one place, and every panel answers to it.</p>
+  </div>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">A · TODAY: SEVEN CONTROLS, FOUR LANGUAGES</div>
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;max-width:1340px;">
+      <div style="background:#121317;border:1px solid #22252B;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;gap:10px;color:#9AA0A8;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m11 17-5-5 5-5M18 17l-5-5 5-5"></path></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m13 17 5-5-5-5M6 17l5-5-5-5"></path></svg>
+        </div>
+        <div style="font-size:12px;color:#C4C8CE;">Double chevrons</div>
+        <div style="font-size:11.5px;color:#9AA0A8;line-height:1.5;">App rail, source control column (the small « at its top right)</div>
+      </div>
+      <div style="background:#121317;border:1px solid #22252B;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;gap:10px;color:#9AA0A8;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M15 3v18M9 10l-3 2 3 2"></path></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M9 3v18M14 10l3 2-3 2"></path></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 15h18M10 9l2-3 2 3"></path></svg>
+        </div>
+        <div style="font-size:12px;color:#C4C8CE;">Panel icons with arrows</div>
+        <div style="font-size:11.5px;color:#9AA0A8;line-height:1.5;">Code: chat rail fold, file list open, bottom panel</div>
+      </div>
+      <div style="background:#121317;border:1px solid #22252B;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;gap:10px;color:#9AA0A8;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </div>
+        <div style="font-size:12px;color:#C4C8CE;">An X</div>
+        <div style="font-size:11.5px;color:#9AA0A8;line-height:1.5;">Workspace chat column: reads as "close forever", not "hide"</div>
+      </div>
+      <div style="background:#121317;border:1px solid #22252B;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;gap:10px;color:#9AA0A8;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"></path></svg>
+        </div>
+        <div style="font-size:12px;color:#C4C8CE;">Maximize arrows</div>
+        <div style="font-size:11.5px;color:#9AA0A8;line-height:1.5;">Browser tab, bottom panel</div>
+      </div>
+    </div>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">B · THE PRIMITIVE: SHADED MEANS OPEN, HOVER PREVIEWS THE CLICK</div>
+    <div style="display:flex;gap:48px;flex-wrap:wrap;align-items:flex-start;">
+      <div style="display:grid;grid-template-columns:120px repeat(4,minmax(0,1fr));gap:14px 22px;align-items:center;">
+        <div></div>
+        <div style="font-size:11px;color:#9AA0A8;">Open</div>
+        <div style="font-size:11px;color:#9AA0A8;">Open, hovered</div>
+        <div style="font-size:11px;color:#9AA0A8;">Closed</div>
+        <div style="font-size:11px;color:#9AA0A8;">Closed, hovered</div>
+
+        <div style="font-size:12px;color:#C4C8CE;">Left · source control</div>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="3.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="#E7E9EC"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="3.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="#E7E9EC" opacity=".35"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#9AA0A8" stroke-width="1.3"></rect><path d="M8 4v12" stroke="#9AA0A8" stroke-width="1.1"></path></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#C4C8CE" stroke-width="1.3"></rect><rect x="3.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="#C4C8CE" opacity=".45"></rect></svg>
+
+        <div style="font-size:12px;color:#C4C8CE;">Bottom · Code panel</div>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="3.2" y="11.2" width="13.6" height="4.6" rx="1.2" fill="#E7E9EC"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="3.2" y="11.2" width="13.6" height="4.6" rx="1.2" fill="#E7E9EC" opacity=".35"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#9AA0A8" stroke-width="1.3"></rect><path d="M3 11h14" stroke="#9AA0A8" stroke-width="1.1"></path></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#C4C8CE" stroke-width="1.3"></rect><rect x="3.2" y="11.2" width="13.6" height="4.6" rx="1.2" fill="#C4C8CE" opacity=".45"></rect></svg>
+
+        <div style="font-size:12px;color:#C4C8CE;">Right · chat</div>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="12.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="#E7E9EC"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="12.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="#E7E9EC" opacity=".35"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#9AA0A8" stroke-width="1.3"></rect><path d="M12 4v12" stroke="#9AA0A8" stroke-width="1.1"></path></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#C4C8CE" stroke-width="1.3"></rect><rect x="12.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="#C4C8CE" opacity=".45"></rect></svg>
+
+        <div style="font-size:12px;color:#C4C8CE;">Focus · maximize</div>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#9AA0A8" stroke-width="1.3"></rect><rect x="6.5" y="6.5" width="7" height="7" rx="1" fill="none" stroke="#9AA0A8" stroke-width="1.1"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#C4C8CE" stroke-width="1.3"></rect><rect x="4" y="5" width="12" height="10" rx="1" fill="#C4C8CE" opacity=".3"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="3.4" y="4.4" width="13.2" height="11.2" rx="1.2" fill="#E7E9EC"></rect></svg>
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="#E7E9EC" stroke-width="1.3"></rect><rect x="6.5" y="6.5" width="7" height="7" rx="1" fill="#E7E9EC" opacity=".5"></rect></svg>
+      </div>
+
+      <div style="flex:1;min-width:380px;max-width:620px;display:flex;flex-direction:column;gap:14px;">
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">Read the layout from the icon</div>
+          <div style="color:#9AA0A8;line-height:1.55;">The outline is the window; the filled part is where the panel sits. Filled in text colour: that panel is on screen. Outline only, muted, with a divider where it would be: hidden.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">Hover says what a click does</div>
+          <div style="color:#9AA0A8;line-height:1.55;">Hovering an open toggle fades its fill to a third (it is about to go). Hovering a closed one fades a fill in at half (it is about to come). The tooltip names the action and its key: "Hide source control ⌘B", "Show chat ⌥⌘B", "Show the bottom panel ⌘J".</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">Motion and access</div>
+          <div style="color:#9AA0A8;line-height:1.55;">160ms fade on the fill only; off under reduced motion. Each is a real button with aria-pressed and the same label as its tooltip, 28px hit target around a 20px drawing.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">C · WHERE THEY LIVE: ONE CLUSTER IN THE TOP BAR, LIKE THE REFERENCE</div>
+    <div style="width:1100px;background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:10px;height:44px;padding:0 12px;border-bottom:1px solid #1D2025;">
+        <div style="font-size:13px;font-weight:600;">trantor</div>
+        <div style="display:flex;gap:2px;padding:2px;background:#0F1013;border:1px solid #22252B;border-radius:7px;">
+          <span style="font-size:12px;padding:3px 10px;border-radius:5px;background:#1A1C21;">Orchestrator</span>
+          <span style="font-size:12px;padding:3px 10px;color:#9AA0A8;">Mixed</span>
+          <span style="font-size:12px;padding:3px 10px;color:#9AA0A8;">Developer</span>
+        </div>
+        <div style="flex:1;height:28px;border:1px solid #22252B;border-radius:6px;background:#0F1013;display:flex;align-items:center;padding:0 10px;color:#9AA0A8;font-size:12px;">Search trantor</div>
+        <div style="display:flex;gap:2px;padding:2px;border:1px solid #22252B;border-radius:7px;">
+          <button class="tg open" aria-label="Hide source control" aria-pressed="true" title="Hide source control ⌘B" style="width:28px;height:26px;border:0;border-radius:5px;background:transparent;color:#E7E9EC;display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"></rect><rect class="shade" x="3.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="currentColor"></rect></svg></button>
+          <button class="tg closed" aria-label="Show the bottom panel" aria-pressed="false" title="Show the bottom panel ⌘J" style="width:28px;height:26px;border:0;border-radius:5px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"></rect><path d="M3 11h14" stroke="currentColor" stroke-width="1.1"></path><rect class="shade" x="3.2" y="11.2" width="13.6" height="4.6" rx="1.2" fill="currentColor"></rect></svg></button>
+          <button class="tg open" aria-label="Hide chat" aria-pressed="true" title="Hide chat ⌥⌘B" style="width:28px;height:26px;border:0;border-radius:5px;background:transparent;color:#E7E9EC;display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"></rect><rect class="shade" x="12.2" y="4.2" width="4.6" height="11.6" rx="1.2" fill="currentColor"></rect></svg></button>
+        </div>
+        <span style="width:28px;height:28px;border-radius:999px;background:#1A1C21;display:flex;align-items:center;justify-content:center;font-size:11px;">SA</span>
+      </div>
+      <div style="height:180px;display:flex;gap:6px;padding:6px;background:#0B0C0E;">
+        <div style="width:200px;background:#121317;border:1px solid #1D2025;border-radius:8px;"></div>
+        <div style="flex:1;background:#121317;border:1px solid #1D2025;border-radius:8px;"></div>
+        <div style="width:260px;background:#121317;border:1px solid #1D2025;border-radius:8px;"></div>
+      </div>
+    </div>
+    <div style="max-width:1100px;color:#9AA0A8;line-height:1.55;">The three toggles sit together at the right of the top bar, in the order the panels sit (left, bottom, right). They are live on hover in this drawing. The bottom toggle shows on screens that have a bottom panel (Code) and is disabled with a tooltip elsewhere. The chevrons on the rail and the source control column, and the X on the chat column, go away; the rail keeps its own expand control because it is navigation, not a panel. The browser's maximize uses the Focus icon from B.</div>
+  </section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1620}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

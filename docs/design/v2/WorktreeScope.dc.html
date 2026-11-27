@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Worktree scope</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0F12}
+:root{--v2-ease:cubic-bezier(.2,.7,.3,1)}
+.ws button{font-family:inherit;cursor:pointer}
+.ws button:focus-visible{outline:1px solid #8AA8FF;outline-offset:1px;border-radius:4px}
+.ws .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+.ws .ib{transition:background-color 120ms var(--v2-ease)}
+.ws .ib:hover{background:rgba(231,233,236,.08)}
+@media (prefers-reduced-motion: reduce){.ws *{transition:none !important}}
+</style>
+</helmet>
+<div class="ws" style="width:1440px;background:#0E0F12;color:#E7E9EC;font-family:Inter,system-ui,sans-serif;font-size:13px;padding:40px 48px 56px;box-sizing:border-box;display:flex;flex-direction:column;gap:40px;">
+
+  <div style="max-width:1080px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#9AA0A8;">PROPOSAL · CARD #14511 · WHOSE FILES ARE THESE · NOTHING HERE IS BUILT YET</div>
+    <h1 style="margin:8px 0 0;font-size:26px;font-weight:650;letter-spacing:-.01em;">When you review an agent's work, the sidebar says so in a band you cannot miss, with the way back in it</h1>
+    <p style="margin:8px 0 0;color:#9AA0A8;font-size:13px;line-height:1.55;">Pressing Review on "agent has 5 files ready" switches the source control column into that agent's worktree. Today the only signals are a small read-only chip and a small "Back to my checkout" link under it. The proposal puts the scope in a coloured band at the top of the column, and the way back in a real button inside it.</p>
+  </div>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">A · TODAY AND PROPOSED, THE TOP OF THE SOURCE CONTROL COLUMN (REAL SIZE, 320PX)</div>
+    <div style="display:flex;gap:48px;flex-wrap:wrap;align-items:flex-start;">
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">Today</div>
+        <div style="width:320px;background:#121317;border:1px solid #22252B;border-radius:10px;padding:10px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#7CC49A;"></span>
+            <span class="mono" style="font-size:12px;color:#E7E9EC;">worktree-agent-a07fb50f89a5…</span>
+          </div>
+          <span style="align-self:flex-start;font-size:11px;padding:2px 8px;border:1px solid #2A2E36;border-radius:999px;color:#9AA0A8;">agent a07fb50's worktree, read only</span>
+          <span style="font-size:11px;color:#8AA8FF;">Back to my checkout</span>
+          <div style="display:flex;gap:2px;padding:2px;background:#0F1013;border:1px solid #22252B;border-radius:7px;">
+            <span style="flex:1;text-align:center;font-size:12px;padding:4px;border-radius:5px;background:#1A1C21;">Changes</span>
+            <span style="flex:1;text-align:center;font-size:12px;padding:4px;color:#9AA0A8;">Files</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">Proposed</div>
+        <div style="width:320px;background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+          <div style="background:#1E2338;border-bottom:1px solid #2E3A5A;padding:10px 12px;display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="width:22px;height:22px;border-radius:6px;background:#2A2238;display:flex;align-items:center;justify-content:center;font-size:10px;color:#CDB1FF;">A</span>
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:12.5px;font-weight:600;color:#E7E9EC;">Reviewing agent a07fb50's work</div>
+                <div class="mono" style="font-size:11px;color:#A9B8FF;">its own worktree · 5 files · read only</div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#A9B8FF" stroke-width="1.4" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>
+            </div>
+            <button class="ib" style="height:28px;border:1px solid #3A4A78;border-radius:6px;background:#141826;color:#E7E9EC;font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px;">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M10 3 5 8l5 5"></path></svg>
+              Back to my checkout (main)
+              <span class="mono" style="font-size:10.5px;color:#9AA0A8;margin-left:4px;">Esc</span>
+            </button>
+          </div>
+          <div style="padding:10px;display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;gap:2px;padding:2px;background:#0F1013;border:1px solid #22252B;border-radius:7px;">
+              <span style="flex:1;text-align:center;font-size:12px;padding:4px;border-radius:5px;background:#1A1C21;">Changes 5</span>
+              <span style="flex:1;text-align:center;font-size:12px;padding:4px;color:#9AA0A8;">Files</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:2px;">
+              <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 4px;"><span>Cargo.toml</span><span class="mono" style="color:#F2B544;">M</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 4px;"><span>browser_spike.rs</span><span class="mono" style="color:#7CC49A;">U</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 4px;"><span>app.rs</span><span class="mono" style="color:#F2B544;">M</span></div>
+            </div>
+            <div style="display:flex;gap:6px;margin-top:4px;">
+              <button class="ib" style="flex:1;height:26px;border:1px solid #2A2E36;border-radius:6px;background:transparent;color:#E7E9EC;font-size:11.5px;">Merge into main</button>
+              <button class="ib" style="flex:1;height:26px;border:1px solid #2A2E36;border-radius:6px;background:transparent;color:#9AA0A8;font-size:11.5px;">Message the agent</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:360px;max-width:560px;display:flex;flex-direction:column;gap:14px;padding-top:24px;">
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">A band, not a chip</div>
+          <div style="color:#9AA0A8;line-height:1.55;">The whole top of the column turns the working-blue panel colour while you are in someone else's worktree, so the scope reads from across the screen. Your own checkout has no band at all.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">Says whose, what, and that you cannot break it</div>
+          <div style="color:#9AA0A8;line-height:1.55;">The agent's mark and name, "its own worktree", the file count, and a lock for read only. The raw worktree folder name moves into the tooltip.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">The way back is a button, and Esc</div>
+          <div style="color:#9AA0A8;line-height:1.55;">Full width, inside the band, naming where it goes ("my checkout (main)"). Esc does the same while the column has focus.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">What reviewing is for</div>
+          <div style="color:#9AA0A8;line-height:1.55;">The two things you came to do sit under the list: merge the agent's work into main, or message the agent about it.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">B · THE SAME SCOPE IN THE HEADER, SO IT IS TRUE EVERYWHERE</div>
+    <div style="width:900px;background:#121317;border:1px solid #22252B;border-radius:10px;padding:10px 12px;display:flex;align-items:center;gap:10px;box-sizing:border-box;">
+      <div style="font-size:13px;font-weight:600;">trantor</div>
+      <span style="flex:1;"></span>
+      <span style="display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:999px;background:#1E2338;border:1px solid #2E3A5A;color:#E7E9EC;">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#A9B8FF" stroke-width="1.4" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>
+        Reviewing agent a07fb50
+        <button class="ib" style="height:20px;padding:0 6px;border:0;border-radius:4px;background:transparent;color:#A9B8FF;font-size:11.5px;">Back</button>
+      </span>
+      <span class="mono" style="font-size:11.5px;color:#9AA0A8;">main · in sync</span>
+    </div>
+    <div style="max-width:900px;color:#9AA0A8;line-height:1.55;">The header's git chip, which today says the branch of whatever the column shows, carries the same band colour and its own Back while you review, so Code and the Workspace agree about where you are.</div>
+  </section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
