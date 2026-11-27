@@ -17,6 +17,8 @@ import { formatInboxPage, fmtMessage } from "./hooks/lib/inbox-page.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
 import { isMessageCardTitle, OPEN_CARD_STATUSES, ownCardForInstance, contractedCardIds } from "./lib/turn-policy.mjs";
 import { markDoing, hollowVerdict, blastRadius, blastLine } from "./hooks/lib/hollow-move.mjs";
+import { createBrowserClient, BrowserError } from "./lib/browser-client.mjs";
+import { readFile } from "node:fs/promises";
 
 import { dep } from "./lib/dep.mjs";
 
@@ -92,6 +94,81 @@ async function api(method, path, payload, { timeoutMs } = {}) {
 const fmt = fmtMessage;
 
 const server = new McpServer({ name: "trantor", version: "0.1.0" });
+
+const browser = createBrowserClient({ session: SESSION, project: PROJECT,
+  label: process.env.TRANTOR_ORCH === PROJECT ? "orchestrator" : SESSION.split(":")[0] });
+const browserPage = { page: z.string().optional().describe("Page id; omit for the active page") };
+async function browserCall(op, args, extra) {
+  try {
+    let progress = 0;
+    const result = await browser(op, args, async message => {
+      const progressToken = extra?._meta?.progressToken;
+      if (progressToken !== undefined) await extra.sendNotification({ method: "notifications/progress",
+        params: { progressToken, progress: ++progress, message } });
+    });
+    const content = [{ type: "text", text: JSON.stringify(result) }];
+    if (op === "screenshot") {
+      const png = await readFile(result.path);
+      content.push({ type: "image", mimeType: "image/png", data: png.toString("base64") });
+    }
+    return { content };
+  } catch (error) {
+    return { isError: true, content: [{ type: "text", text: error.message }],
+      structuredContent: { error: error.code || "browser_error", message: error.message } };
+  }
+}
+function browserTarget(args, coordinates = false) {
+  const count = Number(args.ref !== undefined) + Number(args.selector !== undefined)
+    + Number(coordinates && (args.x !== undefined || args.y !== undefined));
+  if (count !== 1 || (coordinates && ((args.x === undefined) !== (args.y === undefined)))) {
+    throw new BrowserError("bad_request", coordinates
+      ? "Choose exactly one target: ref, selector, or both x and y"
+      : "Choose exactly one target: ref or selector");
+  }
+}
+function invalidBrowserArgs(error) {
+  return { isError: true, content: [{ type: "text", text: error.message }],
+    structuredContent: { error: error.code, message: error.message } };
+}
+
+server.tool("browser_open", "Open a URL in the project's browser. Waits for operator approval or control when needed.",
+  { ...browserPage, url: z.string().min(1), new_page: z.boolean().optional() },
+  ({ new_page, ...args }, extra) => browserCall(new_page ? "new_page" : "open", args, extra));
+server.tool("browser_read", "Read the page text and interactive element refs. Refs last until navigation.",
+  { ...browserPage, max_chars: z.number().int().positive().optional() },
+  (args, extra) => browserCall("read", args, extra));
+server.tool("browser_click", "Click one element ref, CSS selector, or point (x, y).",
+  { ...browserPage, ref: z.string().min(1).optional(), selector: z.string().min(1).optional(), x: z.number().optional(), y: z.number().optional() },
+  (args, extra) => {
+    try { browserTarget(args, true); } catch (error) { return invalidBrowserArgs(error); }
+    return browserCall("click", args, extra);
+  });
+server.tool("browser_type", "Type text into an element ref or CSS selector, optionally submitting it.",
+  { ...browserPage, ref: z.string().min(1).optional(), selector: z.string().min(1).optional(), text: z.string(), submit: z.boolean().optional() },
+  (args, extra) => {
+    try { browserTarget(args); } catch (error) { return invalidBrowserArgs(error); }
+    return browserCall("type", args, extra);
+  });
+server.tool("browser_scroll", "Scroll the page vertically by dy pixels.",
+  { ...browserPage, dy: z.number() }, (args, extra) => browserCall("scroll", args, extra));
+server.tool("browser_screenshot", "Capture a PNG of the page or element ref; returns the image and its saved path.",
+  { ...browserPage, ref: z.string().min(1).optional() },
+  ({ ref, ...args }, extra) => browserCall("screenshot", { ...args, element: ref }, extra));
+server.tool("browser_resize", "Emulate a device or set width and height in pixels. Omit both to reset.",
+  { ...browserPage, device: z.enum(["iPhone 15", "iPhone SE", "Pixel 8", "iPad", "Laptop", "Desktop"]).optional(),
+    w: z.number().positive().optional(), h: z.number().positive().optional() },
+  (args, extra) => {
+    if ((args.w === undefined) !== (args.h === undefined) || (args.device !== undefined && args.w !== undefined)) {
+      return invalidBrowserArgs(new BrowserError("bad_request", "Choose device, both w and h, or no size to reset"));
+    }
+    return browserCall("resize", args, extra);
+  });
+server.tool("browser_pages", "List the project's browser pages.", browserPage,
+  (args, extra) => browserCall("pages", args, extra));
+server.tool("browser_back", "Go back in the browser page's history.", browserPage,
+  (args, extra) => browserCall("back", args, extra));
+server.tool("browser_forward", "Go forward in the browser page's history.", browserPage,
+  (args, extra) => browserCall("forward", args, extra));
 
 server.tool("relay_whoami", "Show this session's relay identity, project, hub URL, HOW that hub was chosen, and whether this session is actually a registered seat.", {}, async () => {
   // A diagnostic must observe, never mutate: this tool used to POST /register before answering, so
