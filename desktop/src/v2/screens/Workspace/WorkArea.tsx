@@ -5,6 +5,7 @@ import { PaneBoundary } from "../../../features/workspace/PaneBoundary";
 import { NotWired } from "../../shell/ClassicLenses";
 import type { Navigate } from "../../routes";
 import { Approval } from "./Approval";
+import type { BrowserPreview } from "./browserModel";
 import { BrowserTab } from "./BrowserTab";
 import { SeatBar, type WorkTab } from "./SeatBar";
 import { usePanes } from "./panes";
@@ -44,14 +45,15 @@ function TabBody({ tab, project, seat, diff }: { tab: WorkTab; project: string; 
   return <Suspense fallback={<div className="p-4 text-v2-base text-[var(--v2-muted)]">Loading the diff view</div>}><ChangesTab state={diff} seatName={seat.label} /></Suspense>;
 }
 
-export function WorkArea({ client, project, seat, card, crew, holds, diff, tab, onTab, messageRef, onDecided, onNavigate, onMessage, browserMax, onBrowserMax }: {
+export function WorkArea({ client, project, seat, card, crew, holds, diff, tab, onTab, messageRef, onDecided, onNavigate, onMessage, browserMax, onBrowserMax, previews = [] }: {
+  previews?: BrowserPreview[];
   client: HubClient; project: string; seat: SeatView; card: Card | undefined; crew: Crew; holds: FileHold[]; diff: DiffState;
   tab: WorkTab; onTab: (t: WorkTab) => void; messageRef: RefObject<HTMLInputElement | null>; onDecided: () => void;
   onNavigate: Navigate; onMessage: () => void; browserMax: boolean; onBrowserMax: (m: boolean) => void;
 }) {
   const changed = diff.diff?.files.length ?? 0;
   // #14265: a sub-agent is read-only, so its pane has no Terminal and Changes tabs, no approval and no message box.
-  if (seat.agentInfo) return <div className="flex min-h-0 flex-1 flex-col"><SubagentPane key={seat.key} project={project} seat={seat} /></div>;
+  if (seat.agentInfo && tab !== "browser") return <div className="flex min-h-0 flex-1 flex-col"><SubagentPane key={seat.key} project={project} seat={seat} /></div>;
   // #14505: maximized, the browser is the whole column — no seat bar, no approval, no message line.
   const browserOnly = browserMax && tab === "browser";
   return (
@@ -59,7 +61,7 @@ export function WorkArea({ client, project, seat, card, crew, holds, diff, tab, 
     <div className="flex min-h-0 flex-1 flex-col">
       {!browserOnly && <SeatBar project={project} seat={seat} card={card} crew={crew} tab={tab} onTab={onTab} changed={changed} onNavigate={onNavigate} onMessage={onMessage} />}
       {tab === "browser"
-        ? <BrowserTab project={project} maximized={browserMax} onMaximize={onBrowserMax} />
+        ? <BrowserTab previews={previews} project={project} maximized={browserMax} onMaximize={onBrowserMax} />
         : <TabBody tab={tab} project={project} seat={seat} diff={diff} />}
       {!browserOnly && <Approval client={client} holds={holds} seatName={seat.label} onDecided={onDecided} />}
       {/* #14254: the orchestrator is spoken to in the chat panel, so its pane carries no message box. */}

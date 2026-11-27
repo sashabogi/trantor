@@ -8,6 +8,8 @@ import { ago } from "../../../shared/time";
 import { activityLine, seatState, type SeatState } from "../../ui/identity";
 import { SeatAstronaut, seatBrandColor } from "../../ui/SeatAstronaut";
 import { Tabs, type TabSpec } from "../../ui/Tabs";
+import { PreviewChip } from "./PreviewChip";
+import type { SeatPreview } from "./previewStore";
 import { ActionMenu } from "./ActionMenu";
 import { PopMenu } from "./PopMenu";
 import { SeatHoverCard } from "./SeatHoverCard";
@@ -63,7 +65,8 @@ function usePreview(): StatePreview {
 /** A sub-agent has no presence of its own: running reads as working, finished as ready. */
 const agentState = (s: SeatView): SeatState => (s.agentInfo?.state === "running" ? "working" : "ready");
 
-export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLayout, crew, onDrill, cards, mayDo, needs }: {
+export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLayout, crew, onDrill, cards, mayDo, needs, previews = [] }: {
+  previews?: SeatPreview[];
   project: string; seats: SeatView[]; selectedKey: string | undefined; onSelect: (key: string) => void;
   layout: Layout; onLayout: (l: Layout) => void; crew: Crew; onDrill: () => void;
   cards: Card[]; mayDo: MayDo;
@@ -86,6 +89,7 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
     const kind = s.agentInfo ? "sub-agent" : s.isHelper ? "helper" : null;
     const line = s.agentInfo ? (live === "working" ? "running" : "finished") : activityLine(s, { needs: needs[s.key] });
     const hover = s.agentInfo ? undefined : <SeatHoverCard project={project} seat={s} card={cardOf(cards, s)} mayDo={mayDo} />;
+    const offers = previews.filter(p => p.seat === s.agent && p.running && p.offered);
     return {
       id: s.key, label: shortLabel(s), title: s.agentInfo ? s.label : s.session, iconOnly: true,
       ariaLabel: `${s.label}${kind ? ` (${kind})` : ""}, ${line}`,
@@ -94,6 +98,7 @@ export function SeatStrip({ project, seats, selectedKey, onSelect, layout, onLay
       closeLabel: s.isHelper ? `Stop ${s.label}` : undefined,
       leading: <SeatAstronaut vendor={vendor} name={s.label} state={state} size={64} variant="full" surface={s.key === selectedKey ? "var(--v2-bg)" : "var(--v2-chrome)"} />,
       hoverCard: hover,
+      beside: offers.length ? offers.map(p => <PreviewChip key={p.url} project={project} preview={p} />) : undefined,
     };
   });
   return (

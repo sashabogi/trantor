@@ -25,7 +25,7 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
   /** Esc restores a maximized browser from anywhere in the tab. */
   maximized?: boolean;
   onMaximize: (maximized: boolean) => void;
-  /** Dev servers and build previews the empty state offers; B2 has no source for them yet. */
+  /** Dev servers detected in this project’s seat terminals. */
   previews?: BrowserPreview[];
   // #14505: the chat actions land with B3; until then the buttons are inert on purpose.
   onScreenshot?: () => void;
@@ -209,8 +209,8 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
             {previews.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <div className="text-v2-micro font-semibold uppercase tracking-wider text-[var(--v2-muted)]">Previews in this project</div>
-                {previews.map(p => (
-                  <button key={p.url} type="button" title={`Open ${p.url}`} onClick={() => commands.navigate(addressToUrl(p.url))}
+                {previews.map((p, i) => (
+                  <button key={`${p.url}:${i}`} type="button" title={`Open ${p.url}`} onClick={() => commands.navigate(addressToUrl(p.url))}
                     className="v2-hover flex h-[34px] items-center gap-2.5 rounded-lg border border-dashed border-[var(--v2-edge-2)] bg-transparent px-2.5 text-left text-v2-body text-[var(--v2-text-2)]">
                     <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${p.running ? "bg-[var(--v2-ok)]" : "bg-[var(--v2-faint)]"}`} />
                     <span className="v2-mono shrink-0">{p.url}</span>

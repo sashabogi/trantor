@@ -17,7 +17,7 @@ export function LinkAnchor({ link, children, className = "" }: { link: Link; chi
   const { open } = useLinks();
   return (
     <a href={link.kind === "url" ? link.href : "#"} title={linkTitle(link)} data-link-kind={link.kind}
-      onClick={e => { e.preventDefault(); open(link); }}
+      onClick={e => { e.preventDefault(); open(link, { metaKey: e.metaKey }); }}
       className={`text-[var(--v2-link)] underline-offset-2 hover:underline ${className}`}>
       {children ?? link.label}
     </a>

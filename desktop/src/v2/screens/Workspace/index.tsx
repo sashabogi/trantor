@@ -7,6 +7,9 @@ import { listen } from "@tauri-apps/api/event";
 import { BROWSER_REVEAL_EVENT, type BrowserState } from "./browserModel";
 import { DrillMode } from "../../../features/drill/DrillMode";
 import type { ScreenProps } from "../../routes";
+import { usePreviews } from "./usePreviews";
+import { previewStore } from "./previewStore";
+import { BrowserTab } from "./BrowserTab";
 import { ChatLinks } from "../../chat/LinkContext";
 import { ChatColumn } from "./ChatColumn";
 import { useChatColumn, useFilesColumn } from "./chatColumnState";
@@ -89,7 +92,14 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   const mayDo = useMayDo(project);
   const crew = useCrew(project, data.refresh);
 
+  const previews = usePreviews(project);
   const seats = useMemo(() => data.seats ?? [], [data.seats]);
+  useEffect(() => {
+    if (data.seats === null) return;
+    for (const p of previewStore.read(project)) {
+      if (!seats.some(s => s.agent === p.seat && s.presence !== "offline")) previewStore.end(project, p.seat);
+    }
+  }, [project, seats, data.seats]);
   const selected = pickSeat(seats, selKey);
   const pane = useActivePane(layout === "focus" && selected?.presence === "working");
   const diff = useSeatDiff(project, selected, tab === "changes");
@@ -162,11 +172,12 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   let body;
   if (data.error && data.seats === null) body = <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>;
   else if (data.seats === null) body = <div className="m-5 text-v2-base text-[var(--v2-muted)]">Reading seats</div>;
+  else if (!selected && tab === "browser") body = <BrowserTab project={project} previews={previews} maximized={browserMax} onMaximize={setBrowserMax} />;
   else if (!selected) body = <EmptyCrew />;
   else if (layout === "focus") {
     body = <WorkArea client={client} project={project} seat={selected} card={cardOf(data.cards, selected)} crew={crew} holds={data.holds.filter(h => h.session === selected.session)}
       diff={diff} tab={tab} onTab={pickTab} messageRef={messageRef} onDecided={data.refresh} onNavigate={onNavigate} onMessage={message}
-      browserMax={browserMax} onBrowserMax={setBrowserMax} />;
+      previews={previews} browserMax={browserMax} onBrowserMax={setBrowserMax} />;
   } else {
     body = <SeatGrid project={project} seats={visibleSeats(layout, tileSeats(seats), selected)} layout={layout}
       selectedKey={selected.key} onFocus={focusSeat} needs={needs} />;
@@ -185,7 +196,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
         selectedPath={openedPath} onOpenConflict={openConflict} />}
       <div {...pane} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-bg)]">
         {data.error && data.seats !== null && <div role="alert" className="m-5 text-v2-base text-[var(--v2-muted)]">Can't reach the hub. {data.error}</div>}
-        {!browserFull && <SeatStrip project={project} seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
+        {!browserFull && <SeatStrip previews={previews} project={project} seats={seats} selectedKey={selected?.key} onSelect={setSelKey} layout={layout} onLayout={pickLayout}
           crew={crew} onDrill={() => setRecording(r => !r)} cards={data.cards} mayDo={mayDo} needs={needs} />}
         {body}
       </div>
