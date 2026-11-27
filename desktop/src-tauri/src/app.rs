@@ -135,6 +135,7 @@ pub fn run() {
             // event through AppKit once the webview is live (src/key_drill.rs). Inert otherwise.
             key_drill::arm(app.handle());
             native_notify::install_delegate();
+            browser::init(app.handle());
             remote::start(app.handle().clone());
             // #6668 acceptance drill: TRANTOR_HANDOFF_DRILL=<project> opens that project's Chat
             // on a pane holding a bare shell and proves no chain starts (src/handoff_drill.rs).
@@ -341,6 +342,21 @@ pub fn run() {
             terminal::term_resize,
             terminal::term_detach,
             shell_terminal::term_shell_open,
+            browser::commands::browser_open,
+            browser::commands::browser_set_rect,
+            browser::commands::browser_set_visible,
+            browser::commands::browser_navigate,
+            browser::commands::browser_back,
+            browser::commands::browser_forward,
+            browser::commands::browser_reload,
+            browser::commands::browser_pop_out,
+            browser::commands::browser_put_back,
+            browser::commands::browser_close,
+            browser::commands::browser_state,
+            browser::commands::browser_take_over,
+            browser::commands::browser_give_back,
+            browser::commands::browser_answer,
+            browser::commands::browser_steps,
             native_notify::notify_permission,
             native_notify::notify_send
             ];
@@ -376,6 +392,7 @@ pub fn run() {
                 // orphaned client holds the pane until someone kills it by hand ("already has an
                 // attached client" on the next launch). Every registered child dies here.
                 if matches!(event, tauri::RunEvent::Exit) {
+                    browser::shutdown(app_handle);
                     use tauri::Manager;
                     let report = app_handle
                         .state::<terminal::TerminalManager>()

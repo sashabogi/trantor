@@ -29,7 +29,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros"] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# #14504: "unstable" is what lets the in-app browser add a child webview (Window::add_child) and reparent it.
+tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "~2.6"
 tauri-plugin-notification = "2"
@@ -55,8 +56,11 @@ regex = "1"
 # #6317: the vendored tao's Objective-C exception reporter (src/key_drill.rs routes it into
 # app-panics.log) and the AppKit types the key-injection drill needs to post a real NSEvent.
 tao = "0.35"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSResponder", "NSWindow"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSError", "NSGeometry", "NSObject", "NSProcessInfo", "NSString", "NSThread"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSResponder", "NSWindow", "NSImage", "NSImageRep", "NSBitmapImageRep"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSError", "NSGeometry", "NSObject", "NSProcessInfo", "NSString", "NSThread", "NSData", "NSDictionary"] }
+# #14504: the in-app browser reads WKWebView history flags and takes snapshots.
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKSnapshotConfiguration"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std"] }
 # #14177: native notifications through UNUserNotificationCenter (the plugin's NSUserNotificationCenter shows nothing on current macOS).
 objc2 = { version = "=0.6.4", default-features = false, features = ["std", "exception"] }
 block2 = { version = "=0.6.2", default-features = false, features = ["std"] }

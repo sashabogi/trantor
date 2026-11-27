@@ -2,6 +2,7 @@
 // test builds, where an expect IS the assertion and a panic IS the failure report.
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+mod browser;
 mod code_attribution;
 mod herdr;
 mod shell_terminal;
