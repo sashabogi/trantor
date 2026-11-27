@@ -415,6 +415,7 @@ rate, not work rate.
 | `relay_scrooge(prompt, task?, difficulty?)` | Fractal cheap-model delegation, with the ledger receipt |
 | `relay_lesson(text, scope?)` | Record a failure lesson — auto-injected into all future crews |
 | `relay_handoff(summary)` | Full-window session succession |
+| `browser_open` / `browser_read` / `browser_click` / `browser_type` / `browser_scroll` / `browser_screenshot` / `browser_resize` / `browser_pages` / `browser_back` / `browser_forward` | Drive the project's browser tab in the Trantor desktop app on the same Mac: open a page, read its text and element refs, act on refs, screenshot, emulate a device. Waits while the operator holds the browser or approves a new site; says so when the desktop app is not open |
 
 ## The CLI
 
