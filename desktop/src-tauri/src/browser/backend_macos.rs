@@ -170,16 +170,6 @@ impl Backend for MacBackend {
                 parent.setClipsToBounds(true);
             }
         });
-        #[cfg(debug_assertions)]
-        {
-            let wv = webview.clone();
-            std::thread::spawn(move || {
-                for _ in 0..20 {
-                    std::thread::sleep(Duration::from_secs(2));
-                    let _ = crate::changes::app_log(format!("browser frame tick: {}", frame_in_window(&wv)));
-                }
-            });
-        }
         lock(&self.pages).insert(project.to_string(), Page { webview, popout: None });
         Ok(())
     }
@@ -188,14 +178,6 @@ impl Backend for MacBackend {
         let wv = self.webview(project)?;
         let main = self.app.get_window("main").ok_or_else(|| BrowserError::new("not_found", "the main window is not open"))?;
         wv.set_bounds(bounds(below_title(rect, title_inset(&main)))).map_err(tauri_err)?;
-        #[cfg(debug_assertions)]
-        {
-            let wv = wv.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(150));
-                let _ = crate::changes::app_log(format!("browser rect: asked x={} y={} w={} h={} -> placed {}", rect.x, rect.y, rect.w, rect.h, frame_in_window(&wv)));
-            });
-        }
         Ok(())
     }
 
