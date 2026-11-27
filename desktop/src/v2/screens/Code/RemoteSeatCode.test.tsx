@@ -52,7 +52,13 @@ beforeEach(() => {
     counts: [{ path: "src/a.ts", plus: 1, minus: 1 }],
     committed: [{ path: "src/a.ts", plus: 1, minus: 1 }, { path: "deleted.txt", plus: 0, minus: 1 }], log: [],
   };
-  localStorage.clear(); takeOpenIntent("trantor");
+  // Node 26 ships an inert global localStorage that shadows happy-dom's: stub a real one
+  const mem = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => { mem.set(k, v); },
+    removeItem: (k: string) => { mem.delete(k); }, clear: () => mem.clear(), key: () => null, length: 0,
+  });
+  takeOpenIntent("trantor");
   mockIPC((command, args) => {
     // SAFETY: Tauri command arguments are the named object supplied by the wrappers under test.
     const named = (args ?? {}) as { path?: string; machine?: string; agent?: string; scope?: string };
