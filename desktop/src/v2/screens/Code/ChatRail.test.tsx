@@ -87,6 +87,8 @@ describe("ChatRail conversation", () => {
     expect(host.querySelector("[data-prompt-id]")?.textContent).toBe("why is the diff blank?");
     expect(host.textContent).toContain("The webview lost focus; here is the fix.");
     expect(reads[0]).toBe(0);
+    // #14512: folding is the top bar's right toggle; no PanelRightClose rides the header.
+    expect(host.querySelector('button[aria-label="Fold the chat"]')).toBeNull();
   });
 
   it("caps the tail at the last turns and says how much sits above", async () => {

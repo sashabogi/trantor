@@ -1,9 +1,11 @@
 import { useActivePane } from "../useActivePane";
 // Developer mode's bottom panel frame; terminal, output and problems bodies arrive as props (#14071).
 // #14241: the top-edge handle is the shared Splitter, and the header tabs ride the shared Tabs bar.
+// #14512: closed renders nothing — the top bar's bottom toggle (and Ctrl+`) brings it back.
 import { useEffect, useRef, type ReactNode } from "react";
-import { Maximize2, Minimize2, PanelBottomOpen, X } from "lucide-react";
+import { Maximize2, Minimize2, X } from "lucide-react";
 import { useShellMode } from "../../shell/shellMode";
+import { usePanelSlot } from "../../shell/panelSlots";
 import { BOTTOM_PANEL_EVENT, MIN_HEIGHT, clampHeight, maxHeight, useBottomPanelState, type BottomPanelTab } from "./state";
 import { Splitter } from "../Splitter";
 import { Tabs } from "../Tabs";
@@ -20,6 +22,8 @@ export function BottomPanel({ terminal, output, problems }: { terminal?: ReactNo
     { id: "output", label: "Output", body: output },
     { id: "problems", label: "Problems", body: problems },
   ] satisfies PanelTab[]).filter(tab => tab.body !== undefined && tab.body !== null);
+  // #14512: the shell's bottom toggle and ⌘J drive this panel through its slot.
+  usePanelSlot("bottom", tabs.length ? { open: state.open, toggle: state.toggleOpen } : null);
   const selected = tabs.find(tab => tab.id === state.activeTab) ?? tabs[0];
   const columnHeight = () => panel.current?.parentElement?.getBoundingClientRect().height || window.innerHeight;
   const height = clampHeight(state.height, columnHeight());
@@ -47,7 +51,7 @@ export function BottomPanel({ terminal, output, problems }: { terminal?: ReactNo
   }, [tabs.length, state.toggleOpen, state.setOpen, state.setActiveTab]);
 
   if (!tabs.length) return null;
-  if (!state.open) return <OpenToggle onOpen={() => state.setOpen(true)} />;
+  if (!state.open) return null;
   return (
     // #14250: the panel is a pane in the column's 6px gap; the wrapper stays unclipped so the splitter strip lives in the gap.
     <div ref={panel} className={state.maximised ? "shrink-0" : "relative flex shrink-0 flex-col"}
@@ -66,19 +70,6 @@ export function BottomPanel({ terminal, output, problems }: { terminal?: ReactNo
           {selected.body}
         </div>
       </section>
-    </div>
-  );
-}
-
-function OpenToggle({ onOpen }: { onOpen: () => void }) {
-  const pane = useActivePane();
-  return (
-    // #14250: the closed panel is a slim panel of its own, not a border-t strip on the ground.
-    <div {...pane} className="flex shrink-0 justify-end overflow-hidden rounded-lg border border-[var(--v2-edge)] bg-[var(--v2-panel)] px-2 py-1">
-      <button type="button" aria-label="Open bottom panel" title="Open bottom panel (Ctrl+`)" onClick={onOpen}
-        className="v2-hover inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--v2-muted)]">
-        <PanelBottomOpen size={14} aria-hidden />
-      </button>
     </div>
   );
 }

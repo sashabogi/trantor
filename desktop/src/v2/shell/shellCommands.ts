@@ -1,7 +1,7 @@
-// The commands the shell itself owns: modes, going to a screen, search, the openers and the panel toggle.
+// The commands the shell itself owns: modes, going to a screen, search, the openers and the panel toggles.
 import { FLEET_SCREENS, LENS_LABEL, LENS_SCREENS, type FleetScreen, type Navigate, type Screen } from "../routes";
-import { sendBottomPanel } from "../ui/BottomPanel/state";
 import type { Command } from "./commands";
+import { togglePanel } from "./panelSlots";
 import type { Mode } from "./shellMode";
 
 export type ShellCommandContext = {
@@ -40,15 +40,30 @@ function screenCommands(c: ShellCommandContext): Command[] {
   return [...lenses, ...fleet];
 }
 
+// #14512: the side columns live on the project screens; the bottom panel is Code-only.
+const onProjectScreen = (c: ShellCommandContext): boolean =>
+  !!c.project && (c.screen === "workspace" || c.screen === "code");
+
+function panelCommands(c: ShellCommandContext): Command[] {
+  return [
+    // The chords run the top-bar cluster's panels through the slot each screen registered.
+    { id: "view.panelLeft", title: "Toggle source control column", group: "View", shortcut: "Mod+B",
+      when: () => onProjectScreen(c), run: () => { togglePanel("left"); } },
+    // ⌘J joins the panel's own Ctrl+`, which the mounted bottom panel keeps handling itself.
+    { id: "view.panelBottom", title: "Toggle bottom panel", group: "View", shortcut: "Mod+J",
+      when: () => c.screen === "code" && !!c.project, run: () => { togglePanel("bottom"); } },
+    { id: "view.panelRight", title: "Toggle chat column", group: "View", shortcut: "Mod+Alt+B",
+      when: () => onProjectScreen(c), run: () => { togglePanel("right"); } },
+  ];
+}
+
 function toolCommands(c: ShellCommandContext): Command[] {
   return [
     { id: "search.everywhere", title: "Search cards, messages and files", group: "Search", shortcut: "Mod+K", listOnly: true, run: c.onSearch },
     { id: "go.file", title: "Go to file", group: "Go to", shortcut: "Mod+P", run: c.onQuickOpen },
     { id: "commands.palette", title: "Show all commands", group: "Commands", shortcut: "Mod+Shift+P", run: c.onPalette },
-    // The panel lives on the Code screen, so the toggle only applies there.
-    { id: "view.bottomPanel", title: "Toggle bottom panel", group: "View", shortcut: "Ctrl+`", listOnly: true,
-      when: () => c.screen === "code" && !!c.project, run: () => sendBottomPanel("toggle") },
   ];
 }
 
-export const shellCommands = (c: ShellCommandContext): Command[] => [...modeCommands(c), ...screenCommands(c), ...toolCommands(c)];
+export const shellCommands = (c: ShellCommandContext): Command[] =>
+  [...modeCommands(c), ...screenCommands(c), ...panelCommands(c), ...toolCommands(c)];

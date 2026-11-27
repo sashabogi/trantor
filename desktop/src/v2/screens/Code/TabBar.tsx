@@ -1,8 +1,8 @@
 // The editor tab strip (#13988): the Source control tab, file tabs, PR and merge tabs, and +.
 // #14072: a dirty tab carries a dot; closing a dirty tab asks first in an inline row under the
-// strip, never window.confirm.
-// #14241: the strip is the shared Tabs bar, joined to the editor pane below.
-import { AlertTriangle, GitBranch, PanelLeftOpen, Plus } from "lucide-react";
+// strip, never window.confirm. #14241: the strip is the shared Tabs bar, joined to the editor
+// pane below. #14512: a folded sidebar returns from the top bar's left toggle, not a lead button.
+import { AlertTriangle, GitBranch, Plus } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
@@ -25,10 +25,9 @@ function fileBadge(path: string): string {
   return ext.slice(0, 2).toUpperCase() || "··";
 }
 
-export function TabBar({ tabs, activeId, sidebarFolded, dirty, confirmId, onActivate, onRequestClose, onConfirmClose, onCancelClose, onShowSidebar, onNew }: {
-  tabs: CodeTab[]; activeId: string; sidebarFolded: boolean; dirty: ReadonlySet<string>; confirmId: string | null;
-  onActivate: (id: string) => void; onRequestClose: (id: string) => void; onConfirmClose: () => void; onCancelClose: () => void;
-  onShowSidebar: () => void; onNew: () => void;
+export function TabBar({ tabs, activeId, dirty, confirmId, onActivate, onRequestClose, onConfirmClose, onCancelClose, onNew }: {
+  tabs: CodeTab[]; activeId: string; dirty: ReadonlySet<string>; confirmId: string | null;
+  onActivate: (id: string) => void; onRequestClose: (id: string) => void; onConfirmClose: () => void; onCancelClose: () => void; onNew: () => void;
 }) {
   const confirming = tabs.find(t => t.id === confirmId && t.kind !== "source") ?? null;
   useEscape(onCancelClose, !!confirming);
@@ -44,11 +43,6 @@ export function TabBar({ tabs, activeId, sidebarFolded, dirty, confirmId, onActi
     <div className="shrink-0 bg-[var(--v2-chrome)]">
       <Tabs label="Open tabs" pane="var(--v2-bg)" tabs={spec} activeId={activeId} onSelect={onActivate} onClose={onRequestClose}
         barClassName="h-[38px] px-1.5"
-        lead={sidebarFolded ? (
-          <IconButton label="Show the source control sidebar" title="Sidebar folded: this tab is the full source control view. Click to show the summary sidebar beside it." size={28} onClick={onShowSidebar}>
-            <PanelLeftOpen size={15} aria-hidden />
-          </IconButton>
-        ) : undefined}
         actions={<IconButton label="New tab" title="New tab: search for a file to open" size={28} onClick={onNew}><Plus size={14} aria-hidden /></IconButton>} />
       {confirming && (
         <div role="alert" className="flex items-center gap-3 border-b border-[var(--v2-edge)] px-3 py-1.5 text-v2-body text-[var(--v2-text)]">

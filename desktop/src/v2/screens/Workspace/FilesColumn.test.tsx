@@ -9,6 +9,7 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
 import { MODE_KEY } from "../../shell/shellMode";
 import { takeOpenIntent } from "../../shell/openIntent";
+import { getPanelSlot, togglePanel } from "../../shell/panelSlots";
 import { WorkspaceScreen } from "./index";
 import { DEFAULT_PANES, WorkspacePanesContext } from "./panes";
 import { FILES_OPEN_KEY, FILES_WIDTH_KEY } from "./chatColumnState";
@@ -109,14 +110,18 @@ describe("defaults by mode", () => {
 });
 
 describe("collapse and persistence", () => {
-  it("opens from the rail, collapses back, and remembers both", async () => {
+  it("opens from the rail, collapses from the top bar's left toggle, and remembers both", async () => {
     await mountScreen();
     await click(byLabel("Open files"));
     expect(column()).not.toBeNull();
     expect(localStorage.getItem(FILES_OPEN_KEY)).toBe("true");
-    await click(byLabel("Collapse files"));
+    expect(getPanelSlot("left")?.open).toBe(true);
+    // #14512: the double-chevron collapse button is gone; the slot the screen registered is the way.
+    expect(byLabel("Collapse files")).toBeNull();
+    await act(async () => { togglePanel("left"); });
     expect(rail()).not.toBeNull();
     expect(localStorage.getItem(FILES_OPEN_KEY)).toBe("false");
+    expect(getPanelSlot("left")?.open).toBe(false);
   });
 });
 
