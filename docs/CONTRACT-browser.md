@@ -181,8 +181,11 @@ machine.
 - Release builds answer `browser_inspect` with `unsupported` and a message pointing at
   right-click > Inspect Element; the page is inspectable either way.
 - Load completion and in-page URL changes are tracked by sampling each webview every 300 ms.
-- Not yet: emulation inside a pop-out window, a `window` handle for popups (`postMessage` to the
-  opener does not reach it), clearing find highlights.
+- Not yet: emulation inside a pop-out window, clearing find highlights.
+- Popups are real (#14517): `window.open` / `target=_blank` create the popup from the opener's
+  WKWebViewConfiguration (tauri `NewWindowResponse::Create`), so `window.opener`, `postMessage` and
+  `window.close()` work. The popup is a page (`popup`, never saved) shown and active while open;
+  closing it activates its opener page.
 - A page whose load never finishes (streaming media keeps WebKit's `isLoading` up) is not an
   error: after the wait the core asks the document; `interactive` or `complete` settles it, and
   `open` / `new_page` return the page with `loading: true` when it is still not ready.

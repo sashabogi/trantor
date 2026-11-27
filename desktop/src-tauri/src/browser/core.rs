@@ -99,6 +99,8 @@ struct PageRec {
     can_back: bool,
     can_forward: bool,
     popup: bool,
+    /// The page that opened this popup; closing the popup activates it again.
+    opener: Option<String>,
     shown: bool,
     /// Set when a navigation was issued; a "not loading" sample inside the settle window is stale.
     awaiting: Option<Instant>,
@@ -211,6 +213,7 @@ impl PageRec {
             can_back: false,
             can_forward: false,
             popup: false,
+            opener: None,
             shown: false,
             awaiting: None,
             settled_url: None,
@@ -535,9 +538,12 @@ impl BrowserCore {
                 }
             }
             BackendEvent::NewWindow(url) => {
-                if let Ok(url) = normalize_url(&url) {
+                // about:blank popups are real (the site fills them in), anything else must be http(s)
+                let url = if url == "about:blank" { Ok(url) } else { normalize_url(&url) };
+                if let Ok(url) = url {
+                    let opener = page_s.clone();
                     spawn(Box::new(move |core| {
-                        let _ = core.create_page(&project_s, Some(&url), true, false);
+                        let _ = core.create_popup(&project_s, &url, &opener);
                     }));
                 }
             }
@@ -712,7 +718,16 @@ impl BrowserCore {
     /// Makes a page and activates it. `user` is true for the operator's own actions (the tab is
     /// then on screen), false for agents and sites (the tab is brought forward when it is not).
     pub fn create_page(&self, project: &str, url: Option<&str>, popup: bool, user: bool) -> BrowserResult<String> {
-        let url = url.map(normalize_url).transpose()?;
+        self.make_page(project, url, popup, user, None)
+    }
+
+    /// A page the site opened with window.open: shown and active, linked to its opener page.
+    pub fn create_popup(&self, project: &str, url: &str, opener: &str) -> BrowserResult<String> {
+        self.make_page(project, Some(url), true, false, Some(opener.to_string()))
+    }
+
+    fn make_page(&self, project: &str, url: Option<&str>, popup: bool, user: bool, opener: Option<String>) -> BrowserResult<String> {
+        let url = url.map(|u| if popup && u == "about:blank" { Ok(u.to_string()) } else { normalize_url(u) }).transpose()?;
         self.ensure_live(project, false)?;
         let (id, spec, needs_reveal) = {
             let mut g = lock(&self.projects);
@@ -726,6 +741,7 @@ impl BrowserCore {
             let ua = p.effective_ua();
             let mut rec = PageRec::blank(&id);
             rec.popup = popup;
+            rec.opener = opener;
             rec.st.url = url.clone().unwrap_or_default();
             rec.st.loading = url.is_some();
             rec.awaiting = url.is_some().then(Instant::now);
@@ -770,9 +786,11 @@ impl BrowserCore {
         let mut last = false;
         self.update(project, |p| {
             let at = p.pages.iter().position(|r| r.st.id == page).unwrap_or(0);
+            let opener = p.pages.get(at).and_then(|r| r.opener.clone());
             p.pages.retain(|r| r.st.id != page);
             if p.active == page {
-                p.active = p.pages.get(at.saturating_sub(1)).map(|r| r.st.id.clone()).unwrap_or_default();
+                let back = opener.filter(|o| p.pages.iter().any(|r| r.st.id == *o));
+                p.active = back.unwrap_or_else(|| p.pages.get(at.saturating_sub(1)).map(|r| r.st.id.clone()).unwrap_or_default());
             }
             if p.pages.is_empty() {
                 last = true;

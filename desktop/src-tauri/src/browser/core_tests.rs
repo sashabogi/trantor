@@ -1217,3 +1217,40 @@ fn closing_the_last_page_clears_the_saved_list() {
     r.core.close("p").expect("close");
     assert!(saved(&dir, "p").pages.is_empty());
 }
+
+// ---- real popups (#14517) -----------------------------------------------------------------
+
+#[test]
+fn a_popup_is_shown_active_and_closing_it_returns_to_its_opener() {
+    let dir = tmp("popup-opener");
+    let r = rig_on(&dir);
+    r.core.create_page("p", Some("http://localhost:3000/a"), false, true).expect("a");
+    r.core.create_page("p", Some("http://localhost:3000/b"), false, true).expect("b");
+    r.core.select_page("p", "pg1").expect("select opener");
+    r.core.apply_page_event("p", "pg1", BackendEvent::NewWindow("https://accounts.example/o/oauth".into()));
+    wait_for("popup page", || r.core.state("p").pages.len() == 3);
+    let st = r.core.state("p");
+    assert_eq!(st.active_page, "pg3");
+    assert!(r.fake.calls().iter().any(|c| c.starts_with("open p pg3 https://accounts.example/o/oauth") && c.contains("visible=true") && c.contains("popup=true")));
+    // the popup is never saved
+    let urls: Vec<String> = saved(&dir, "p").pages.iter().map(|p| p.url.clone()).collect();
+    assert_eq!(urls, vec!["http://localhost:3000/a", "http://localhost:3000/b"]);
+    // window.close() in the popup: it goes, the opener (pg1, not the neighbour pg2) is active again
+    r.core.apply_page_event("p", "pg3", BackendEvent::CloseRequested);
+    wait_for("popup closed", || r.core.state("p").pages.len() == 2);
+    assert_eq!(r.core.state("p").active_page, "pg1");
+}
+
+#[test]
+fn an_about_blank_popup_is_a_page_and_a_page_opened_from_a_popup_links_to_it() {
+    let r = rig_at("http://localhost:3000/");
+    r.core.apply_page_event("p", "pg1", BackendEvent::NewWindow("about:blank".into()));
+    wait_for("blank popup", || r.core.state("p").pages.len() == 2);
+    assert!(r.fake.calls().iter().any(|c| c.starts_with("open p pg2 about:blank") && c.contains("popup=true")));
+    r.core.apply_page_event("p", "pg2", BackendEvent::NewWindow("https://idp.example/".into()));
+    wait_for("nested popup", || r.core.state("p").pages.len() == 3);
+    r.core.apply_page_event("p", "pg3", BackendEvent::CloseRequested);
+    wait_for("nested closed", || r.core.state("p").pages.len() == 2);
+    assert_eq!(r.core.state("p").active_page, "pg2");
+}
+
