@@ -43,7 +43,8 @@ try {
     if (req.method === "POST" && req.url.split("?")[0] === "/balances") localBalances++;
     res.writeHead(200, { "content-type": "application/json" }); res.end("{}");
   });
-  await new Promise((r) => localSink.listen(4477, "127.0.0.1", r));
+  // a busy port (the app's own local hub) arrives as an 'error' event, not a throw
+  await new Promise((resolve, reject) => { localSink.once("error", reject); localSink.listen(4477, "127.0.0.1", resolve); });
 } catch { localSink = null; }
 
 // mock qwen gateway: /models answers auth, a passing gate answers /chat/completions → one ok row.
