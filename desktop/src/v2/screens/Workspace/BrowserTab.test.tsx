@@ -296,7 +296,7 @@ it("keeps the tab scoped to its own project", async () => {
 describe("the Browser tab against the Rust core's real shapes", () => {
   it("shows Nothing open when Rust reports no page as an empty url", async () => {
     // BrowserState.url is a String in Rust, so "no page" arrives as "", never null
-    cur = state({ url: "" as unknown as null, title: "" });
+    cur = state({ url: "", title: "" });
     await mount();
     expect(host.textContent).toContain("Nothing open");
     expect(ipc.some(c => c.command === "browser_set_visible" && c.args?.visible === true)).toBe(false);
