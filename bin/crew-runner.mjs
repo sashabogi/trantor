@@ -420,7 +420,6 @@ async function janitorStop(why, card) {
 // Inbox reads dedupe context across turn boundaries; #14520 contracts still need a matching outcome.
 // Persist that turn's completed cards with its read ids so later outcomes cannot consume old work.
 let seenLedger = [];
-let turnCompletedCards = [];
 // A cap, so a long outage cannot grow the queue without bound. Overflow drops the OLDEST and says
 // so on the bus — a silent drop is the exact failure this whole mechanism exists to end.
 const PENDING_MAX = 50;
@@ -1176,7 +1175,6 @@ exit $turn_exit`;
   let ownOut = "";
   try { ownOut = stripPromptEcho(readFileSync(ERRF, "utf8"), readPromptText(pf)); } catch { ownOut = ""; }
   lastErrText = ownOut.slice(-4000);
-  turnCompletedCards = completedCardIds(ownOut);
   if (opts.state) {
     try { lastEnvelope = redactKeys(readFileSync(ENVF, "utf8")); } catch { lastEnvelope = ""; }
     const env = parseEnvelope(lastEnvelope);
@@ -1889,6 +1887,7 @@ async function resolveWakeCard(messages, { session }) {
       // A delta wider than one turn could plausibly carry is a corrupt or rewound ledger: mark
       // nothing. Non-marking only risks the duplicate this fixes, never a lost message.
       if (!(readUpTo > upToCursor) || readUpTo - upToCursor > 10000) return 0;
+      const turnCompletedCards = completedCardIds(lastErrText);
       for (let id = upToCursor + 1; id <= readUpTo; id++) seenLedger.push({ id, ts: Date.now(), completedCards: turnCompletedCards });
       seenLedger = seenLedger.filter(e => e.id > upToCursor).slice(-500);
       // persist HERE, at every caller: a runner killed seconds after the boundary is exactly the
