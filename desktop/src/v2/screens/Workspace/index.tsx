@@ -92,6 +92,8 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
     try { localStorage.setItem(LAYOUT_KEY, l); } catch { /* storage blocked: the layout lasts the session */ }
   }, []);
   const focusSeat = (key: string) => { setSelKey(key); pickLayout("focus"); };
+  // Every project opens on Terminal: a tab picked in one project (an empty Browser) never follows you to the next.
+  useEffect(() => { setTab("terminal"); setBrowserMax(false); }, [project]);
   // An agent that opens a page brings the Browser tab forward, so you can watch it drive.
   useEffect(() => {
     const off = listen<{ project: string }>(BROWSER_REVEAL_EVENT, e => {

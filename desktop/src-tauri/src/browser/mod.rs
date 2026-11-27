@@ -107,6 +107,13 @@ fn drill(app: &AppHandle<Wry>, core: Arc<BrowserCore>) {
             for (label, wv) in probe_app.webviews() {
                 let _ = crate::changes::app_log(format!("browser drill: frame {label}: {}", backend_macos::frame_in_window(&wv)));
             }
+            let r2 = core.set_rect(&project, Rect { x: 40.0, y: 80.0, w: 900.0, h: 600.0 });
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            for (label, wv) in probe_app.webviews() {
+                if label.starts_with("bv-") {
+                    let _ = crate::changes::app_log(format!("browser drill: after set_rect({r2:?}) {label}: {}", backend_macos::frame_in_window(&wv)));
+                }
+            }
         }
         if std::env::var_os("TRANTOR_BROWSER_DRILL_POP").is_some() {
             let step = |what: &str, r: BrowserResult<()>| {

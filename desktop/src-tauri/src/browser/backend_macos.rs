@@ -67,6 +67,36 @@ fn tauri_err(e: tauri::Error) -> BrowserError {
     BrowserError::new("timeout", e.to_string())
 }
 
+/// How far a window's content area runs up under its title bar (contentView minus the layout rect).
+/// The app's own DOM starts below it, so a page placed from DOM coordinates must shift down by it.
+fn title_inset(win: &Window) -> f64 {
+    fn read(w: &Window) -> f64 {
+        w.ns_window().ok().map(|ptr| {
+            // SAFETY: ns_window is this window's live NSWindow, read on the main thread.
+            let ns: &objc2_app_kit::NSWindow = unsafe { &*ptr.cast() };
+            let full = ns.contentView().map(|v| v.frame().size.height).unwrap_or(0.0);
+            (full - ns.contentLayoutRect().size.height).max(0.0)
+        }).unwrap_or(0.0)
+    }
+    // already on the main thread (a window event): read directly, waiting on it would deadlock
+    if MainThreadMarker::new().is_some() {
+        return read(win);
+    }
+    let (tx, rx) = channel();
+    let w = win.clone();
+    let sent = win.run_on_main_thread(move || {
+        let _ = tx.send(read(&w));
+    });
+    if sent.is_err() {
+        return 0.0;
+    }
+    rx.recv_timeout(Duration::from_secs(2)).unwrap_or(0.0)
+}
+
+fn below_title(r: Rect, inset: f64) -> Rect {
+    Rect { x: r.x, y: r.y + inset, w: r.w, h: r.h }
+}
+
 fn bounds(r: Rect) -> tauri::Rect {
     tauri::Rect { position: LogicalPosition::new(r.x, r.y).into(), size: LogicalSize::new(r.w, r.h).into() }
 }
@@ -123,19 +153,50 @@ impl Backend for MacBackend {
                 e4(&p4, BackendEvent::NewWindow(url.to_string()));
                 NewWindowResponse::Deny
             });
-        let r = rect.sane();
+        let r = below_title(rect.sane(), title_inset(&window));
         let webview = window
             .add_child(builder, LogicalPosition::new(r.x, r.y), LogicalSize::new(r.w, r.h))
             .map_err(tauri_err)?;
         if !visible {
             let _ = webview.hide();
         }
+        // NSViews no longer clip by default (macOS 14): a loaded page drew past its top edge over
+        // the address bar. Clip the page to its own frame.
+        let _ = webview.with_webview(|pw| {
+            // SAFETY: as in `history`; these closures run on the main thread.
+            let web: &WKWebView = unsafe { &*pw.inner().cast() };
+            web.setClipsToBounds(true);
+            if let Some(parent) = unsafe { web.superview() } {
+                parent.setClipsToBounds(true);
+            }
+        });
+        #[cfg(debug_assertions)]
+        {
+            let wv = webview.clone();
+            std::thread::spawn(move || {
+                for _ in 0..20 {
+                    std::thread::sleep(Duration::from_secs(2));
+                    let _ = crate::changes::app_log(format!("browser frame tick: {}", frame_in_window(&wv)));
+                }
+            });
+        }
         lock(&self.pages).insert(project.to_string(), Page { webview, popout: None });
         Ok(())
     }
 
     fn set_rect(&self, project: &str, rect: Rect) -> BrowserResult<()> {
-        self.webview(project)?.set_bounds(bounds(rect)).map_err(tauri_err)
+        let wv = self.webview(project)?;
+        let main = self.app.get_window("main").ok_or_else(|| BrowserError::new("not_found", "the main window is not open"))?;
+        wv.set_bounds(bounds(below_title(rect, title_inset(&main)))).map_err(tauri_err)?;
+        #[cfg(debug_assertions)]
+        {
+            let wv = wv.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                let _ = crate::changes::app_log(format!("browser rect: asked x={} y={} w={} h={} -> placed {}", rect.x, rect.y, rect.w, rect.h, frame_in_window(&wv)));
+            });
+        }
+        Ok(())
     }
 
     fn set_visible(&self, project: &str, visible: bool) -> BrowserResult<()> {
@@ -222,7 +283,8 @@ impl Backend for MacBackend {
         wb = if frame.is_some() { wb.position(f.x, f.y) } else { wb.center() };
         let win = wb.build().map_err(tauri_err)?;
         webview.reparent(&win).map_err(tauri_err)?;
-        webview.set_bounds(bounds(Rect { x: 0.0, y: 0.0, w: f.w, h: f.h })).map_err(tauri_err)?;
+        let inset = title_inset(&win);
+        webview.set_bounds(bounds(Rect { x: 0.0, y: inset, w: f.w, h: (f.h - inset).max(1.0) })).map_err(tauri_err)?;
         let _ = webview.show();
         let sink = lock(&self.sink).clone();
         let (wv, w2, p) = (webview, win.clone(), project.to_string());
@@ -230,7 +292,7 @@ impl Backend for MacBackend {
             WindowEvent::Resized(size) => {
                 let scale = w2.scale_factor().unwrap_or(1.0);
                 let s = size.to_logical::<f64>(scale);
-                let _ = wv.set_bounds(bounds(Rect { x: 0.0, y: 0.0, w: s.width, h: s.height }));
+                let _ = wv.set_bounds(bounds(Rect { x: 0.0, y: inset, w: s.width, h: (s.height - inset).max(1.0) }));
             }
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
@@ -253,7 +315,7 @@ impl Backend for MacBackend {
         let Some(win) = win else { return Ok(None) };
         let frame = frame_of(&win);
         webview.reparent(&main).map_err(tauri_err)?;
-        webview.set_bounds(bounds(rect.sane())).map_err(tauri_err)?;
+        webview.set_bounds(bounds(below_title(rect.sane(), title_inset(&main)))).map_err(tauri_err)?;
         let _ = webview.show();
         let _ = win.destroy();
         Ok(frame)
@@ -288,7 +350,9 @@ pub fn frame_in_window(wv: &Webview) -> String {
         let web: &WKWebView = unsafe { &*pw.inner().cast() };
         let f = unsafe { web.convertRect_toView(web.bounds(), None) };
         let content_h = web.window().and_then(|w| w.contentView()).map(|v| v.frame().size.height).unwrap_or(-1.0);
-        let _ = tx.send(format!("x={} y={} w={} h={} content_h={}", f.origin.x, f.origin.y, f.size.width, f.size.height, content_h));
+        let layout_h = web.window().map(|w| w.contentLayoutRect().size.height).unwrap_or(-1.0);
+        let inset_top = web.safeAreaInsets().top;
+        let _ = tx.send(format!("x={} y={} w={} h={} content_h={} layout_h={} safe_top={}", f.origin.x, f.origin.y, f.size.width, f.size.height, content_h, layout_h, inset_top));
     });
     rx.recv_timeout(Duration::from_secs(2)).unwrap_or_else(|_| "no frame".into())
 }
