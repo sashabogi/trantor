@@ -7,7 +7,19 @@ pub(crate) static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashM
     std::sync::Mutex::new(None);
 pub(crate) static CHAT_WATCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) static FILE_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct FileWatchKey {
+    root: std::path::PathBuf,
+    project: String,
+    seat: Option<String>,
+}
+
+struct FileWatch {
+    stop: Arc<AtomicBool>,
+    _watcher: notify::RecommendedWatcher,
+}
+
+static FILE_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<FileWatchKey, FileWatch>>> =
     std::sync::Mutex::new(None);
 
 pub(crate) fn seed_tail(path: &Path) -> (TranscriptTail, u64, ChatMeta) {
@@ -558,13 +570,11 @@ mod chat_watcher_tests {
     }
 }
 
-pub(crate) fn forget_file_watcher(project: &str, stop: &Arc<AtomicBool>) {
+fn forget_file_watcher(key: &FileWatchKey, stop: &Arc<AtomicBool>) {
     let mut g = lock_or_recover(&FILE_WATCHERS);
     if let Some(map) = g.as_mut() {
-        if let Some(existing) = map.get(project) {
-            if Arc::ptr_eq(existing, stop) {
-                map.remove(project);
-            }
+        if map.get(key).is_some_and(|entry| Arc::ptr_eq(&entry.stop, stop)) {
+            map.remove(key);
         }
     }
 }
@@ -573,68 +583,50 @@ pub(crate) fn is_ignored(path: &Path, ignore_list: &[&str]) -> bool {
     path.components().any(|c| ignore_list.contains(&c.as_os_str().to_string_lossy().as_ref()))
 }
 
-#[tauri::command]
-pub(crate) fn file_watch(window: tauri::Window, project: String) -> Result<(), String> {
-    let project = project.trim().to_string();
-    if project.is_empty() {
-        return Err("project is required".into());
+fn start_file_watch(
+    root: std::path::PathBuf,
+    project: String,
+    seat: Option<String>,
+    emit: impl Fn(Vec<String>) -> bool + Send + 'static,
+) -> Result<(), String> {
+    let mut guard = lock_or_recover(&FILE_WATCHERS);
+    let map = guard.get_or_insert_with(std::collections::HashMap::new);
+    let key = FileWatchKey { root: root.clone(), project: project.clone(), seat };
+    if map.contains_key(&key) {
+        return Ok(());
     }
-    let root = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
-
-    {
-        let g = lock_or_recover(&FILE_WATCHERS);
-        if let Some(map) = g.as_ref() {
-            if map.contains_key(&project) {
-                return Ok(());
-            }
-        }
-    }
-
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = Arc::clone(&stop);
-
-    {
-        let mut g = lock_or_recover(&FILE_WATCHERS);
-        let map = g.get_or_insert_with(std::collections::HashMap::new);
-        map.insert(project.clone(), Arc::clone(&stop));
-    }
-
     let (tx, rx) = std::sync::mpsc::channel();
-
-    let mut watcher = notify::recommended_watcher(
-        // Rule 8: FSEvents drives this closure from platform code, so a panic here would unwind
-        // through an extern "C" frame and abort the app instead of losing one file event.
-        move |res| {
-            crate::guard_boundary("notify file watcher callback", || {
-                if let Ok(event) = res {
-                    let _ = tx.send(event);
-                }
-            });
-        },
-    )
-    .map_err(|e| format!("failed to create watcher: {e}"))?;
-
-    watcher
-        .watch(&root, notify::RecursiveMode::Recursive)
+    let mut watcher = notify::recommended_watcher(move |res| {
+        crate::guard_boundary("notify file watcher callback", || {
+            if let Ok(event) = res {
+                let _ = tx.send(event);
+            }
+        });
+    }).map_err(|e| format!("failed to create watcher: {e}"))?;
+    watcher.watch(&root, notify::RecursiveMode::Recursive)
         .map_err(|e| format!("failed to watch {project}: {e}"))?;
+    // The registry owns the native watcher after this command returns. A stop flag alone
+    // does not keep notify's OS subscription alive (#14486).
+    map.insert(key.clone(), FileWatch { stop, _watcher: watcher });
+    drop(guard);
 
-    tauri::async_runtime::spawn(async move {
-        use tauri::Emitter;
+    tauri::async_runtime::spawn_blocking(move || {
         let mut batch: Vec<String> = Vec::new();
         let mut last_emit = Instant::now();
-        let ignore_list = TREE_SKIP;
-
-        loop {
-            if stop_clone.load(Ordering::SeqCst) {
-                break;
-            }
-
+        while !stop_clone.load(Ordering::SeqCst) {
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(event) => {
+                    // Reading the editor's file can itself emit Access events on Linux.
+                    // Only mutations should trigger another read.
+                    if !(event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove()) {
+                        continue;
+                    }
                     for path in event.paths {
                         let rel = path.strip_prefix(&root).unwrap_or(&path);
                         let rel_str = rel.to_string_lossy().to_string();
-                        if !rel_str.is_empty() && !is_ignored(rel, ignore_list) {
+                        if !rel_str.is_empty() && !is_ignored(rel, TREE_SKIP) {
                             batch.push(rel_str);
                         }
                     }
@@ -642,40 +634,49 @@ pub(crate) fn file_watch(window: tauri::Window, project: String) -> Result<(), S
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(_) => break,
             }
-
             if last_emit.elapsed() >= Duration::from_millis(200) && !batch.is_empty() {
-                let paths = std::mem::take(&mut batch);
+                let mut paths = std::mem::take(&mut batch);
+                paths.sort();
+                paths.dedup();
                 last_emit = Instant::now();
-                let payload = serde_json::json!({ "project": project, "paths": paths });
-                if window.emit("file-changed", payload).is_err() {
+                if stop_clone.load(Ordering::SeqCst) || !emit(paths) {
                     break;
                 }
             }
         }
-
-        if !batch.is_empty() {
-            let payload = serde_json::json!({ "project": project, "paths": batch });
-            let _ = window.emit("file-changed", payload);
-        }
-
         stop_clone.store(true, Ordering::SeqCst);
-        forget_file_watcher(&project, &stop_clone);
+        forget_file_watcher(&key, &stop_clone);
     });
-
     Ok(())
 }
 
 #[tauri::command]
-pub(crate) fn file_unwatch(project: String) {
-    let project = project.trim();
+pub(crate) fn file_watch(window: tauri::Window, project: String, seat: Option<String>) -> Result<(), String> {
+    use tauri::Emitter;
+    let project = project.trim().to_string();
     if project.is_empty() {
-        return;
+        return Err("project is required".into());
     }
-    let stop = {
-        let mut g = lock_or_recover(&FILE_WATCHERS);
-        g.as_mut().and_then(|map| map.remove(project))
-    };
-    if let Some(stop) = stop {
-        stop.store(true, Ordering::SeqCst);
+    let root = source_root_read(&project, seat.as_deref())?;
+    let event_project = project.clone();
+    let event_seat = seat.clone();
+    start_file_watch(root, project, seat, move |paths| {
+        window.emit("file-changed", serde_json::json!({ "project": event_project, "seat": event_seat, "paths": paths })).is_ok()
+    })
+}
+
+#[tauri::command]
+pub(crate) fn file_unwatch(project: String, seat: Option<String>) {
+    let mut guard = lock_or_recover(&FILE_WATCHERS);
+    if let Some(map) = guard.as_mut() {
+        map.retain(|key, entry| {
+            let keep = key.project != project.trim() || key.seat != seat;
+            if !keep { entry.stop.store(true, Ordering::SeqCst); }
+            keep
+        });
     }
 }
+
+#[cfg(test)]
+#[path = "file_watch_tests.rs"]
+mod file_watch_tests;

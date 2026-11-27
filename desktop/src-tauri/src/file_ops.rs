@@ -9,6 +9,7 @@ pub(crate) fn file_write_plain(
     path: String,
     seat: Option<String>,
     text: String,
+    expected_text: Option<String>,
 ) -> Result<(), String> {
     let root = source_root(&project, seat.as_deref())?;
     if path.contains("..") {
@@ -25,9 +26,23 @@ pub(crate) fn file_write_plain(
     if !full.is_file() {
         return Err("that file does not exist".into());
     }
-    std::fs::write(&full, text).map_err(|e| format!("cannot write {path}: {e}"))?;
+    write_file_checked(&full, &text, expected_text.as_deref())?;
     Ok(())
 }
+
+fn write_file_checked(full: &Path, text: &str, expected: Option<&str>) -> Result<(), String> {
+    if let Some(expected) = expected {
+        let disk = std::fs::read(full).map_err(|e| format!("cannot check {}: {e}", full.display()))?;
+        if disk != expected.as_bytes() {
+            return Err("file_changed_on_disk".into());
+        }
+    }
+    std::fs::write(full, text).map_err(|e| format!("cannot write {}: {e}", full.display()))
+}
+
+#[cfg(test)]
+#[path = "file_write_guard_tests.rs"]
+mod file_write_guard_tests;
 
 /// Create a new file at `path` with the given `text`. Parent directories are
 /// created automatically. The path must stay inside the project root.

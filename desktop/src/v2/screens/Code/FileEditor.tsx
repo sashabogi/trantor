@@ -6,6 +6,7 @@ import type { editor as MonacoEditor } from "monaco-editor";
 import { CodeView } from "../../../features/code/CodeView";
 import { ImportedBy } from "./ImportedBy";
 import { Button } from "../../ui/Button";
+import { FileConflictNotice } from "../../ui/FileConflictNotice";
 import { AskControls, type AskSeat } from "./AskControls";
 import { useAskActions } from "./useAskActions";
 import { useFileDoc } from "./useFileDoc";
@@ -52,8 +53,9 @@ function TextFileEditor({ project, scope, path, reveal, headRev = null, onOpenFi
         {doc.load.truncated && <span className="text-[var(--v2-warn)]">first 512 KB only: saving is off</span>}
         {doc.saveError && <span role="alert" className="text-[var(--v2-bad)]">{doc.saveError}</span>}
         <AskControls getEditor={() => editorRef.current} path={path} scope={scope} seats={seats} menuOpen={seatMenu} onMenuOpen={setSeatMenu} onAsk={onAsk} onSendToSeat={onSendToSeat} />
-        <Button variant="ghost" onClick={doc.save} disabledReason={doc.load.truncated ? "The file is truncated, so saving would lose the rest" : !doc.dirty ? "No unsaved changes" : null}>Save</Button>
+        <Button variant="ghost" onClick={doc.save} disabledReason={doc.saving ? "Saving" : doc.conflict ? "Choose which version to keep before saving" : doc.load.truncated ? "The file is truncated, so saving would lose the rest" : !doc.dirty ? "No unsaved changes" : null}>Save</Button>
       </div>
+      {doc.conflict && <FileConflictNotice mine={doc.draft} theirs={doc.conflict.text} truncated={doc.conflict.truncated} onKeepMine={doc.keepMine} onLoadTheirs={doc.loadTheirs} />}
       <div className="min-h-0 flex-1">
         <CodeView value={doc.draft} path={path} editable={!doc.load.truncated} onChange={doc.edit} onSave={doc.save} project={project} seat={scope} showGhostToggle={false}
           onReady={ed => { editorRef.current = ed; setEditorVersion(v => v + 1); if (reveal) revealAt(ed, reveal); }} />

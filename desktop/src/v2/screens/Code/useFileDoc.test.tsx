@@ -5,9 +5,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emit } from "@tauri-apps/api/event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { draftDrop, draftFor } from "./drafts";
 import { useFileDoc } from "./useFileDoc";
+import { FileConflictNotice } from "../../ui/FileConflictNotice";
 
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -22,44 +24,72 @@ function DocHarness({ project, scope, path, onDirty, onSaved }: DocProps) {
       <span data-draft={doc.draft} />
       <span data-dirty={String(doc.dirty)} />
       <span data-error={doc.saveError ?? ""} />
+      <span data-conflict={doc.conflict?.text ?? ""} />
+      <span data-saving={String(doc.saving)} />
+      <button type="button" onClick={doc.keepMine}>keep</button>
+      <button type="button" onClick={doc.loadTheirs}>load</button>
       <button type="button" onClick={() => doc.edit(doc.draft + "x")}>type</button>
       <button type="button" onClick={doc.save}>save</button>
+      {doc.conflict && <FileConflictNotice mine={doc.draft} theirs={doc.conflict.text} truncated={doc.conflict.truncated} onKeepMine={doc.keepMine} onLoadTheirs={doc.loadTheirs} />}
     </div>
   );
 }
 
-type WriteCall = { command: string; args: { project: string; path: string; seat: string | null; text: string } };
+type WriteCall = { command: string; args: { project: string; path: string; seat: string | null; text: string; expectedText?: string } };
 let writes: WriteCall[] = [];
 let failWrites: string | null = null;
+let disk: string;
+let failReads: string | null;
+let commands: { command: string; project?: string }[];
+let pendingWrite: Promise<void> | null;
+let pendingRead: Promise<string> | null;
+let changeBeforeWrite: string | null;
 
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(() => {
   writes = [];
   failWrites = null;
-  mockIPC((command, args) => {
+  disk = "hello";
+  failReads = null;
+  commands = [];
+  pendingWrite = null;
+  pendingRead = null;
+  changeBeforeWrite = null;
+  mockIPC(async (command, args) => {
     // SAFETY: mockIPC types args as unknown; the file commands are invoked with an object of named args.
-    const named = (args ?? {}) as { project?: string; path?: string; seat?: string | null; text?: string; truncated?: boolean };
+    const named = (args ?? {}) as { project?: string; path?: string; seat?: string | null; text?: string; expectedText?: string; truncated?: boolean };
+    commands.push({ command, project: named.project });
     if (command === "read_file") {
+      if (failReads) throw new Error(failReads);
+      if (pendingRead) { const read = pendingRead; pendingRead = null; return read; }
       const truncated = named.path === "big.bin";
-      return JSON.stringify({ text: "hello", truncated, bytes: 5 });
+      return JSON.stringify({ text: disk, truncated, bytes: disk.length });
     }
     if (command === "file_write_plain") {
+      if (changeBeforeWrite !== null) disk = changeBeforeWrite;
+      if (named.expectedText !== undefined && named.expectedText !== disk) throw new Error("file_changed_on_disk");
       if (failWrites) throw new Error(failWrites);
-      writes.push({ command, args: { project: named.project ?? "", path: named.path ?? "", seat: named.seat ?? null, text: named.text ?? "" } });
+      writes.push({ command, args: { project: named.project ?? "", path: named.path ?? "", seat: named.seat ?? null, text: named.text ?? "", expectedText: named.expectedText } });
+      await pendingWrite;
+      disk = named.text ?? "";
       return null;
     }
     return null;
-  });
+  }, { shouldMockEvents: true });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); draftDrop("trantor", null, "src/a.ts"); draftDrop("trantor", "glm-5", "src/a.ts"); });
+afterEach(async () => { await act(async () => root.unmount()); await flush(); host.remove(); clearMocks(); draftDrop("trantor", null, "src/a.ts"); draftDrop("trantor", "glm-5", "src/a.ts"); });
 
 const flush = () => act(async () => { await new Promise(r => setTimeout(r, 20)); });
 const mount = async (props: DocProps) => { await act(async () => { root.render(<DocHarness {...props} />); }); await flush(); };
 const click = async (text: string) => { await act(async () => { [...host.querySelectorAll("button")].find(b => b.textContent === text)?.click(); }); await flush(); };
+const changed = async (project = "trantor", paths = ["src/a.ts"]) => {
+  await act(async () => { await emit("file-changed", { project, paths }); });
+  await flush();
+};
 const attr = (name: string) => host.querySelector(`[data-${name}]`)?.getAttribute(`data-${name}`) ?? "";
 
 describe("useFileDoc", () => {
@@ -75,7 +105,7 @@ describe("useFileDoc", () => {
     expect(attr("draft")).toBe("hellox");
     expect(onDirty).toHaveBeenLastCalledWith(true);
     await click("save");
-    expect(writes).toEqual([{ command: "file_write_plain", args: { project: "trantor", path: "src/a.ts", seat: null, text: "hellox" } }]);
+    expect(writes).toEqual([{ command: "file_write_plain", args: { project: "trantor", path: "src/a.ts", seat: null, text: "hellox", expectedText: "hello" } }]);
     expect(onSaved).toHaveBeenCalledTimes(1);
     expect(onDirty).toHaveBeenLastCalledWith(false);
     expect(attr("dirty")).toBe("false");
@@ -142,6 +172,196 @@ describe("useFileDoc", () => {
     expect(draftFor("trantor", null, "src/a.ts")).toBe("hellox");
     await click("save");
     expect(attr("dirty")).toBe("false");
+    expect(draftFor("trantor", null, "src/a.ts")).toBeNull();
+  });
+});
+
+
+describe("external file changes (#14486)", () => {
+  it("offers a calm notice and a comparison that leaves both copies untouched", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    disk = "agent edit";
+    await changed();
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("changed on disk");
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    await click("Compare");
+    expect([...host.querySelectorAll("pre")].map(pre => pre.textContent)).toEqual(["agent edit", "hellox"]);
+    expect(writes).toHaveLength(0);
+    expect(disk).toBe("agent edit");
+    await click("Hide comparison");
+    expect(host.querySelector("pre")).toBeNull();
+    await click("Load theirs");
+    expect(attr("draft")).toBe("agent edit");
+    expect(host.querySelector('[data-note="file-changed-on-disk"]')).toBeNull();
+  });
+  it("silently reloads a clean file and ignores another project or path", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    disk = "agent edit";
+    await changed("another");
+    await changed("trantor", ["src/b.ts"]);
+    expect(attr("draft")).toBe("hello");
+    await changed();
+    expect(attr("draft")).toBe("agent edit");
+    expect(attr("dirty")).toBe("false");
+    expect(attr("conflict")).toBe("");
+  });
+
+  it("keeps a dirty draft and refuses save until the conflict is resolved", async () => {
+    const onSaved = vi.fn();
+    await mount({ project: "trantor", scope: null, path: "src/a.ts", onSaved });
+    await click("type");
+    disk = "agent edit";
+    await changed();
+    expect(attr("draft")).toBe("hellox");
+    expect(attr("conflict")).toBe("agent edit");
+    await click("save");
+    expect(writes).toHaveLength(0);
+    expect(onSaved).not.toHaveBeenCalled();
+    await click("load");
+    expect(attr("draft")).toBe("agent edit");
+    expect(attr("dirty")).toBe("false");
+    expect(draftFor("trantor", null, "src/a.ts")).toBeNull();
+  });
+
+  it("rechecks disk before saving even without a watcher event", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    disk = "unannounced edit";
+    await click("save");
+    expect(writes).toHaveLength(0);
+    expect(disk).toBe("unannounced edit");
+    expect(attr("conflict")).toBe("unannounced edit");
+    expect(attr("saving")).toBe("false");
+  });
+
+  it("turns a write-side baseline mismatch into the conflict notice", async () => {
+    const onSaved = vi.fn();
+    await mount({ project: "trantor", scope: null, path: "src/a.ts", onSaved });
+    await click("type");
+    changeBeforeWrite = "edit after preflight";
+    await click("save");
+    expect(writes).toHaveLength(0);
+    expect(disk).toBe("edit after preflight");
+    expect(attr("conflict")).toBe("edit after preflight");
+    expect(attr("draft")).toBe("hellox");
+    expect(attr("error")).toBe("");
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("reloads seat files only for events from that seat", async () => {
+    await mount({ project: "trantor", scope: "glm-5", path: "src/a.ts" });
+    disk = "seat edit";
+    await changed();
+    expect(attr("draft")).toBe("hello");
+    await act(async () => { await emit("file-changed", { project: "trantor", seat: "glm-5", paths: ["src/a.ts"] }); });
+    await flush();
+    expect(attr("draft")).toBe("seat edit");
+  });
+
+  it("Keep mine adopts only the shown disk copy and checks for another change on save", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    disk = "first agent edit";
+    await changed();
+    await click("keep");
+    expect(writes).toHaveLength(0);
+    expect(attr("draft")).toBe("hellox");
+    expect(attr("conflict")).toBe("");
+    disk = "second agent edit";
+    await click("save");
+    expect(writes).toHaveLength(0);
+    expect(attr("conflict")).toBe("second agent edit");
+    await click("keep");
+    await click("save");
+    expect(disk).toBe("hellox");
+    expect(writes).toHaveLength(1);
+  });
+
+  it("retains the baseline across a tab switch and detects changes while inactive", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    await mount({ project: "trantor", scope: null, path: "src/b.ts" });
+    disk = "changed while away";
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    expect(attr("draft")).toBe("hellox");
+    expect(attr("conflict")).toBe("changed while away");
+    await click("save");
+    expect(writes).toHaveLength(0);
+  });
+
+  it("releases the watcher on project switch and final unmount", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await mount({ project: "other", scope: null, path: "src/a.ts" });
+    await act(async () => root.unmount());
+    await flush();
+    expect(commands.filter(c => c.command === "file_watch").map(c => c.project)).toEqual(["trantor", "other"]);
+    expect(commands.filter(c => c.command === "file_unwatch").map(c => c.project)).toEqual(["trantor", "other"]);
+    const reads = commands.filter(c => c.command === "read_file").length;
+    await changed();
+    expect(commands.filter(c => c.command === "read_file")).toHaveLength(reads);
+  });
+
+  it("never saves when reading the current disk copy fails", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    failReads = "file no longer exists";
+    await click("save");
+    expect(writes).toHaveLength(0);
+    expect(attr("error")).toBe("file no longer exists");
+    expect(attr("draft")).toBe("hellox");
+    expect(attr("saving")).toBe("false");
+  });
+
+  it("refuses a file that grew past the preview limit even when its prefix matches", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    pendingRead = Promise.resolve(JSON.stringify({ text: "hello", truncated: true, bytes: 600000 }));
+    await click("save");
+    expect(writes).toHaveLength(0);
+    expect(attr("conflict")).toBe("hello");
+    expect(host.querySelector('[role="status"]')?.textContent).toContain("truncated");
+    await click("keep");
+    await click("save");
+    expect(writes).toHaveLength(0);
+  });
+
+  it("keeps edits made during a save dirty and prevents duplicate writes", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    let complete = () => {};
+    pendingWrite = new Promise<void>(resolve => { complete = resolve; });
+    await click("save");
+    await click("type");
+    await click("save");
+    expect(writes).toHaveLength(1);
+    await act(async () => { complete(); });
+    await flush();
+    expect(disk).toBe("hellox");
+    expect(attr("draft")).toBe("helloxx");
+    expect(attr("dirty")).toBe("true");
+    expect(draftFor("trantor", null, "src/a.ts")).toBe("helloxx");
+  });
+
+  it("ignores a late read from the previous file", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    let complete = (_value: string) => {};
+    pendingRead = new Promise<string>(resolve => { complete = resolve; });
+    await changed();
+    disk = "new file";
+    await mount({ project: "trantor", scope: null, path: "src/b.ts" });
+    await act(async () => { complete(JSON.stringify({ text: "old file", truncated: false, bytes: 8 })); });
+    await flush();
+    expect(attr("draft")).toBe("new file");
+  });
+
+  it("treats an external save of the same draft as clean", async () => {
+    await mount({ project: "trantor", scope: null, path: "src/a.ts" });
+    await click("type");
+    disk = "hellox";
+    await changed();
+    expect(attr("dirty")).toBe("false");
+    expect(attr("conflict")).toBe("");
     expect(draftFor("trantor", null, "src/a.ts")).toBeNull();
   });
 });
