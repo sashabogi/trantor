@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient, type Card, type Message, type Peer } from "../../../shared/api/client";
 import { hasSeen } from "../../../shared/seen";
+import { takeMessagesFocus } from "../../shell/messagesFocus";
 import { InboxScreen } from "./index";
 import { makeInboxItems, rankInboxItems, splitStaleItems } from "./model";
 
@@ -148,5 +149,17 @@ describe("InboxScreen", () => {
     await keyOn(box, "Escape");
     expect(box.value).toBe("");
     expect(host.querySelectorAll("[data-inbox-key]").length).toBe(2);
+  });
+
+  // #14495: the conversation opens on the sender's thread, not an arbitrary one.
+  it("Open the conversation names the sender for Messages and navigates there", async () => {
+    const client = new HubClient("http://test");
+    stub(client, { messages: [{ ...message(7002, "codex-8:trantor", [], Date.now()), text: "Where is the ring?" }] });
+    const gone: string[] = [];
+    await act(async () => { root.render(<InboxScreen client={client} project="" onNavigate={s => gone.push(s)} />); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Open the conversation"]')?.click(); });
+    expect(takeMessagesFocus()).toBe("codex-8:trantor");
+    expect(gone).toEqual(["messages"]);
+    takeMessagesFocus();
   });
 });

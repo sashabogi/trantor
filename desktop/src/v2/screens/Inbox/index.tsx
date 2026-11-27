@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ScreenProps } from "../../index";
+import { openMessagesWith } from "../../shell/messagesFocus";
 import { useTasks } from "../../../shared/tasks";
 import { hasSeen, markSeen, onSeenChange } from "../../../shared/seen";
 import { useInboxData } from "./useInboxData";
@@ -64,7 +65,7 @@ export function InboxScreen({ client, onNavigate }: ScreenProps) {
           onSearch={setSearch} onSort={() => setSort(NEXT_SORT[sort])} onSelect={setSelectedKey} onClearStale={clearStale} />
         {selected ? (
           <InboxDetail key={selected.key} client={client} item={selected} cards={cards} peers={data.peers}
-            onSettled={settle} onOpenConversation={() => onNavigate("messages")}
+            onSettled={settle} onOpenConversation={session => { openMessagesWith(session); onNavigate("messages"); }}
             onOpenCard={() => onNavigate("board", selected.project || undefined)} />
         ) : <EmptyInboxDetail />}
       </div>

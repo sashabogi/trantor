@@ -1,13 +1,15 @@
 // @vitest-environment happy-dom
 // #13984 drill: an embedded classic lens must not draw a second title and lens row under the 2.0 tabs.
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HubClient } from "../../shared/api/client";
-import { ClassicLens } from "./ClassicLenses";
+import { HubClient, type HubEvent } from "../../shared/api/client";
+import { ClassicLens, MessagesLens } from "./ClassicLenses";
 import { clearGraphBack, currentGraphBack } from "./graphBack";
 import { takeOpenIntent } from "./openIntent";
+import { openMessagesWith, takeMessagesFocus } from "./messagesFocus";
 import { SIX_NODE_GRAPH } from "../../features/code/graph/fixture";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { Screen } from "../routes";
@@ -18,12 +20,19 @@ let host: HTMLDivElement;
 let root: Root;
 let style: HTMLStyleElement;
 beforeEach(() => {
+  const storage = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => { storage.set(key, value); },
+    removeItem: (key: string) => { storage.delete(key); },
+    clear: () => storage.clear(),
+  });
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   style = document.createElement("style");
-  style.textContent = readFileSync("src/v2/theme.css", "utf8");
+  style.textContent = readFileSync(resolve(__dirname, "../theme.css"), "utf8");
   document.head.append(style);
 });
-afterEach(() => { act(() => root.unmount()); host.remove(); style.remove(); clearMocks(); clearGraphBack(); vi.restoreAllMocks(); });
+afterEach(() => { act(() => root.unmount()); host.remove(); style.remove(); clearMocks(); clearGraphBack(); takeMessagesFocus(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("embedded classic lenses", () => {
   it("hides the classic header (title + lens row) but keeps the Feed's own filters", async () => {
@@ -63,5 +72,30 @@ describe("embedded classic lenses", () => {
     expect(takeOpenIntent("trantor")).toEqual({ kind: "file", path, fromGraph: true });
     expect(currentGraphBack()).toEqual({ project: "trantor", path });
     expect(gone).toEqual([["code", undefined]]);
+  });
+});
+
+describe("MessagesLens focus (#14495)", () => {
+  const ev = (by: string, text: string, id: number): HubEvent => ({ id, ts: id * 1000, type: "message", by, toSession: "sasha", text, project: "trantor", msgId: id });
+
+  it("an Inbox jump opens the sender's thread, and a later jump switches threads", async () => {
+    const client = new HubClient("http://127.0.0.1:1");
+    vi.spyOn(client, "events").mockResolvedValue({
+      events: [ev("glm-5:trantor", "the glm thread", 1), ev("codex-8:trantor", "ship the ring", 2)],
+    });
+    vi.spyOn(client, "peers").mockResolvedValue([]);
+    vi.spyOn(client, "streamEvents").mockReturnValue(() => {});
+    openMessagesWith("codex-8:trantor");
+    act(() => root.render(<StrictMode><MessagesLens client={client} me="sasha" /></StrictMode>));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const thread = host.querySelector("section");
+    expect(thread?.textContent).toContain("codex-8:trantor");
+    expect(thread?.textContent).toContain("ship the ring");
+    expect(thread?.textContent).not.toContain("the glm thread");
+    expect(takeMessagesFocus()).toBeNull();
+    // A second jump while Messages is already on screen retargets the open thread.
+    await act(async () => { openMessagesWith("glm-5:trantor"); });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(host.querySelector("section")?.textContent).toContain("the glm thread");
   });
 });

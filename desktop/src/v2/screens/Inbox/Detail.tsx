@@ -15,7 +15,8 @@ type DetailProps = {
   cards: Card[];
   peers: Peer[];
   onSettled: (item: InboxItem) => void;
-  onOpenConversation: () => void;
+  /** #14495: opens the sender's conversation in Messages, not an arbitrary thread. */
+  onOpenConversation: (session: string) => void;
   onOpenCard: (project: string) => void;
 };
 
@@ -156,7 +157,7 @@ export function InboxDetail(props: DetailProps) {
         <div className="flex items-center gap-2 text-v2-body text-[var(--v2-muted)]">
           {item.project && <><ProjectTile name={item.project} size={18} />{item.project}<span>·</span></>}
           <span className="capitalize">{item.kind}</span><span>· asked {ago(item.ts)} · waiting on you {ago(item.ts)}</span><span className="flex-1" />
-          <IconButton label="Open the conversation" title={`Open the whole conversation with ${seatLabel(sender)}`} variant="outline" onClick={onOpenConversation}><ExternalLink size={13} aria-hidden /></IconButton>
+          <IconButton label="Open the conversation" title={`Open the whole conversation with ${seatLabel(sender)}`} variant="outline" onClick={() => onOpenConversation(sender)}><ExternalLink size={13} aria-hidden /></IconButton>
         </div>
         <h2 className="m-0 text-v2-title font-semibold leading-[1.35]">{item.title}</h2>
         <div className="flex flex-wrap items-center gap-2 text-v2-body text-[var(--v2-muted)]">

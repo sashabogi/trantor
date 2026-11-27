@@ -1,7 +1,7 @@
 // Graph, Feed, Bus and Messages reuse the classic components inside 2.0 chrome until they get
 // their own screens; they are imported, never forked (#v2-F).
 import { StartCard } from "../screens/Projects/StartCard";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { HubClient } from "../../shared/api/client";
 import type { Lens } from "../../features/project/ProjectHeader";
 import { GraphLens } from "../../features/code/graph/GraphLens";
@@ -15,6 +15,7 @@ import type { LensScreen, Navigate } from "../routes";
 import { landingLens } from "./shellMode";
 import { setOpenIntent } from "./openIntent";
 import { setGraphBack } from "./graphBack";
+import { takeMessagesFocus, watchMessagesFocus } from "./messagesFocus";
 
 export type ClassicLensProps = { client: HubClient; project: string; me: string; lens: Exclude<LensScreen, "workspace" | "code" | "board">; onNavigate: Navigate };
 
@@ -49,8 +50,20 @@ export function NotWired({ title, line }: { title: string; line: string }) {
 }
 
 export function MessagesLens({ client, me }: { client: HubClient; me: string }) {
+  // #14495: an Inbox jump names the sender; taken once on mount, and again whenever another
+  // jump lands while Messages is already on screen.
+  const [focus, setFocus] = useState<string | null>(null);
+  useEffect(() => {
+    const update = () => {
+      const next = takeMessagesFocus();
+      if (next !== null) setFocus(next);
+    };
+    const stop = watchMessagesFocus(update);
+    update();
+    return stop;
+  }, []);
   if (!me) return <NotWired title="Messages" line="Waiting for the signed identity before messages can be read." />;
-  return <Messages client={client} me={me} />;
+  return <Messages client={client} me={me} focus={focus} />;
 }
 
 export function AllProjects({ projects, live, onNavigate, onStartProject, onWake }: {
