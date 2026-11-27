@@ -175,9 +175,9 @@ describe("ShellV2", () => {
   // #14495: a palette card result opens the Board with that card's drawer, as classic AppShell did.
   it("a palette card result opens the Board with that card's drawer", async () => {
     const card = { id: 77, project: "trantor", title: "Palette drill card", status: "todo", updated: Date.now() - 1000 };
-    const body = (over: Record<string, unknown> = {}) => JSON.stringify({
+    const body = (task?: { task: typeof card & { checklist: { text: string; done: boolean }[] } }) => JSON.stringify({
       peers: [], messages: [], cursor: 0, tasks: [card], proposals: [], pendingCount: 0, holds: [],
-      events: [], entries: [], machines: [], ts: Date.now(), staleAfterMs: 90_000, ...over,
+      events: [], entries: [], machines: [], ts: Date.now(), staleAfterMs: 90_000, ...task,
     });
     mockIPC((command, args) => {
       calls.push(command);
