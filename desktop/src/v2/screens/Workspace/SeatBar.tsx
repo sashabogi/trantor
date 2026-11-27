@@ -1,6 +1,6 @@
 // The seat bar: view tabs, what the seat is on, and its labelled actions in one 32px row (#14351).
 // It replaces the old Inspector row and the Terminal and Changes bar.
-import { Code2, Ellipsis, GitBranch, MessageCircle, Shuffle, Square, SquareKanban, X } from "lucide-react";
+import { Code2, Ellipsis, GitBranch, Globe, MessageCircle, Shuffle, Square, SquareKanban, X } from "lucide-react";
 import type { Card } from "../../../shared/api/client";
 import { IconButton } from "../../ui/IconButton";
 import { seatAgent } from "../../ui/identity";
@@ -12,10 +12,13 @@ import { useBranch, worktreeAgent } from "./seatFacts";
 import { takesSeatMessage, type SeatView } from "./seatModel";
 import type { Crew } from "./useCrew";
 
-export type WorkTab = "terminal" | "changes";
+export type WorkTab = "terminal" | "changes" | "browser";
 
+// #14505: the browser is the project's, not one seat's, so every seat row — helpers included — gets it.
 const viewTabs = (seat: SeatView): { id: WorkTab; label: string }[] =>
-  seat.isHelper ? [{ id: "terminal", label: "Terminal" }] : [{ id: "terminal", label: "Terminal" }, { id: "changes", label: "Changes" }];
+  seat.isHelper
+    ? [{ id: "terminal", label: "Terminal" }, { id: "browser", label: "Browser" }]
+    : [{ id: "terminal", label: "Terminal" }, { id: "changes", label: "Changes" }, { id: "browser", label: "Browser" }];
 
 /** The items of the seat's "..." menu: Swap agent and Stop seat. The orchestrator has none (it is managed from its own window) and a helper is stopped from its tab. */
 export function seatMenuItems(seat: SeatView, crew: Crew): ActionItem[] {
@@ -52,6 +55,7 @@ export function SeatBar({ project, seat, card, crew, tab, onTab, changed, onNavi
               <button key={t.id} type="button" role="tab" aria-selected={on} onClick={() => onTab(t.id)}
                 className={`inline-flex items-center gap-1.5 border-0 border-b-2 bg-transparent px-0.5 text-v2-body font-medium transition-colors ${on ? "border-b-[var(--v2-accent)] text-[var(--v2-text)]" : "border-b-transparent text-[var(--v2-text-2)] hover:text-[var(--v2-text)]"}`}
                 style={{ transitionDuration: "var(--v2-dur-1)" }}>
+                {t.id === "browser" && <Globe size={12} aria-hidden className="shrink-0" />}
                 {t.label}
                 {t.id === "changes" && changed > 0 && <span className="v2-mono text-v2-small text-[var(--v2-muted)]">{changed}</span>}
               </button>

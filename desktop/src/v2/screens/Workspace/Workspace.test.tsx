@@ -348,7 +348,7 @@ describe("middle column (#14351)", () => {
   it("the seat bar replaces the inspector: view tabs, card link, Message focuses the input, no disabled hand off", async () => {
     await mountScreen(fakeClient([]));
     const views = [...host.querySelectorAll('[role="tablist"][aria-label="Seat views"] [role="tab"]')];
-    expect(views.map(v => v.textContent)).toEqual(["Terminal", "Changes1"]);
+    expect(views.map(v => v.textContent)).toEqual(["Terminal", "Changes1", "Browser"]);
     expect(host.querySelector('button[aria-label="Hand off codex-8\'s session"]')).toBeNull();
     expect(host.textContent).not.toContain("Hand off");
     await click(host.querySelector('button[title="Open the card"]'));
@@ -379,6 +379,26 @@ describe("middle column (#14351)", () => {
     const needing = tiles.find(t => t.hasAttribute("data-needs"));
     expect(needing?.className).toContain("!border-[var(--v2-warn)]");
     expect(needing?.textContent).toContain("needs you: approve edit a.ts");
+  });
+
+  // #14505: the Browser tab is the project's; maximize fills the Workspace and Esc restores it.
+  it("the Browser tab opens, maximizes over the Workspace and Esc puts the columns back", async () => {
+    await mountScreen(fakeClient([]));
+    await click([...host.querySelectorAll('[role="tablist"][aria-label="Seat views"] [role="tab"]')].find(v => v.textContent === "Browser") ?? null);
+    expect(ipc.find(c => c.command === "browser_state")?.args).toEqual({ project: "trantor" });
+    expect(host.textContent).toContain("Nothing open");
+    expect(ipc.filter(c => c.command === "browser_open")).toHaveLength(1);
+    expect(host.querySelector("aside[aria-label='Chat column']")).not.toBeNull();
+    expect(host.querySelector('[role="tablist"][aria-label="Seats"]')).not.toBeNull();
+    await click(host.querySelector('button[aria-label="Maximize the browser"]'));
+    expect(host.querySelector("aside[aria-label='Chat column']")).toBeNull();
+    expect(host.querySelector('[role="tablist"][aria-label="Seats"]')).toBeNull();
+    expect(host.querySelector('[role="tablist"][aria-label="Seat views"]')).toBeNull();
+    expect(ipc.filter(c => c.command === "browser_set_rect").length).toBeGreaterThanOrEqual(1);
+    await act(async () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+    expect(host.querySelector("aside[aria-label='Chat column']")).not.toBeNull();
+    expect(host.querySelector('[role="tablist"][aria-label="Seats"]')).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Maximize the browser"]')).not.toBeNull();
   });
 });
 
