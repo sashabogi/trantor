@@ -169,7 +169,7 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
         <div className="flex min-h-[38px] shrink-0 flex-wrap items-center gap-2 border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-panel)] px-2.5 py-1.5">
           <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--v2-warn)]" />
           <span className="min-w-0 flex-1 text-v2-body text-[var(--v2-text-2)]">
-            <span className="font-medium text-[var(--v2-text)]">{ask.label}</span> wants to open <span className="v2-mono text-[var(--v2-text)]">{ask.host}</span>
+            <span className="font-medium text-[var(--v2-text)]">{ask.label}</span> wants to {ask.kind === "evaluate" ? "run a script on" : "open"} <span className="v2-mono text-[var(--v2-text)]">{ask.host}</span>
           </span>
           <button type="button" className={LINE_BUTTON} onClick={() => commands.answer(ask.id, "once")}>Allow once</button>
           <button type="button" className={LINE_BUTTON} onClick={() => commands.answer(ask.id, "site")}>Allow this site</button>

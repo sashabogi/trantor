@@ -554,7 +554,7 @@ describe("the wave-2 model", () => {
     expect(DEVICE_PRESETS[3]).toEqual({ name: "iPad", w: 820, h: 1180, mobile: true });
     expect(DEVICE_PRESETS[4]).toEqual({ name: "Laptop", w: 1280, h: 800, mobile: false });
     expect(DEVICE_PRESETS[5]).toEqual({ name: "Desktop", w: 1920, h: 1080, mobile: false });
-    expect(USER_AGENTS).toEqual(["Safari", "Mobile Safari", "Chrome", "Chrome Android", "Firefox"]);
+    expect(USER_AGENTS).toEqual(["Safari", "Chrome", "Firefox", "iPhone", "iPad", "Android"]);
     expect(addressToUrl("github.com")).toBe("http://github.com");
   });
 });

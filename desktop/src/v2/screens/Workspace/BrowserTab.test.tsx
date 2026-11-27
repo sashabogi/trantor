@@ -209,6 +209,14 @@ describe("who is driving", () => {
     expect(last("browser_give_back")).toEqual({ project: "trantor" });
   });
 
+  it("an agent asking to run a script says so, not that it wants a new site", async () => {
+    await sendState(state({ url: "http://localhost:5173", driver: DRIVER }));
+    await mount();
+    await act(async () => { await emit("browser://ask", { project: "trantor", id: "e1", session: "codex-8:trantor", label: "orchestrator", host: "localhost", kind: "evaluate" }); });
+    expect(host.textContent).toContain("orchestrator wants to run a script on localhost");
+    expect(host.textContent).not.toContain("wants to open");
+  });
+
   it("an agent asking for a new site gets its three answers and the ask clears", async () => {
     await sendState(state({ url: "http://localhost:5173", driver: DRIVER }));
     await mount();

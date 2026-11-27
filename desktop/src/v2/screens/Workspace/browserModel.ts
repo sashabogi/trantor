@@ -28,7 +28,8 @@ export type BrowserPage = { id: string; url: string; title: string; loading: boo
 /** The contract's Device { name, w, h, mobile }; emulation letterboxes the page at this size. */
 export type BrowserDevice = { name: string; w: number; h: number; mobile: boolean };
 
-export type BrowserAsk = { project: string; id: string; session: string; label: string; host: string };
+/** kind "evaluate": an agent asks to run a script on the page, not to open a new host. */
+export type BrowserAsk = { project: string; id: string; session: string; label: string; host: string; kind?: "evaluate" };
 
 export type BrowserAskChoice = "once" | "site" | "deny";
 
@@ -72,7 +73,8 @@ export const EMPTY_BROWSER_STATE: BrowserState = {
 };
 
 /** The user agent list the More menu offers (artboard F1); the name goes to browser_set_user_agent. */
-export const USER_AGENTS: readonly string[] = ["Safari", "Mobile Safari", "Chrome", "Chrome Android", "Firefox"];
+// the presets the Rust core accepts (anything else is bad_request)
+export const USER_AGENTS: readonly string[] = ["Safari", "Chrome", "Firefox", "iPhone", "iPad", "Android"];
 
 /** The device presets the contract fixes, shown as the device bar's pills (artboard F2). */
 export const DEVICE_PRESETS: readonly BrowserDevice[] = [
