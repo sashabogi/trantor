@@ -66,24 +66,36 @@ export function judge(d: PromptVerdict, blocked: string | null): SendResult {
 }
 
 function useHarness(project: string) {
-  const [auto, setAuto] = useState<boolean | null>(null);
+  const [state, setState] = useState<{ project: string; auto: boolean } | null>(null);
+  const generation = useRef(0);
+  const read = (raw: string) => {
+    const resolved = parseAutonomy(raw);
+    return resolved?.harness === "bypass" && resolved.baton === "auto";
+  };
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    setAuto(null);
+    const version = ++generation.current;
+    setState(null);
+    setError(null);
     invoke<string>("autonomy_get", { project })
-      .then(raw => { if (alive) setAuto(parseAutonomy(raw)?.harness === "bypass"); })
+      .then(raw => { if (alive && version === generation.current) setState({ project, auto: read(raw) }); })
       .catch(() => {});
-    return () => { alive = false; };
+    return () => { alive = false; generation.current++; };
   }, [project]);
   const set = (next: boolean) => {
+    const version = ++generation.current;
     setError(null);
     invoke<string>("autonomy_set", { project, dial: "harness", value: next ? "bypass" : "prompt" })
       .then(() => invoke<string>("autonomy_set", { project, dial: "baton", value: next ? "auto" : "ask" }))
-      .then(() => setAuto(next))
-      .catch(e => setError(`Permission not changed: ${String(e)}`));
+      .then(raw => { if (version === generation.current) setState({ project, auto: read(raw) }); })
+      .catch(e => {
+        if (version !== generation.current) return;
+        setState(null);
+        setError(`Permission not changed: ${String(e)}`);
+      });
   };
-  return { auto, set, error };
+  return { auto: state?.project === project && state.auto, set, error };
 }
 
 export function ComposerAdapter(p: ClassicProps) {
@@ -96,6 +108,9 @@ export function ComposerAdapter(p: ClassicProps) {
   const [note, setNote] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
   const harness = useHarness(p.project);
+  useEffect(() => {
+    p.onLongRunChange(harness.auto);
+  }, [harness.auto, p.onLongRunChange]);
   // #14030: the Mode menu consults the table — below the feature's verified range it shows its
   // honest unavailable row; above it the closed-loop read stays the guard.
   const mode = useAgentMode(p.target, p.working, featureRange(useAgentCliCompatibility(), "Mode menu"));

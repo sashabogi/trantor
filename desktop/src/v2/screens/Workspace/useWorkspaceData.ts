@@ -93,7 +93,7 @@ export function useWorkspaceData(client: HubClient, project: string): WorkspaceD
 
 export type MayDo = { label: string; title: string } | null;
 
-export type Autonomy = { harness?: string; push?: boolean; commit?: boolean };
+export type Autonomy = { harness?: string; baton?: string; push?: boolean; commit?: boolean };
 
 /** The resolved dials from `autonomy_get`'s JSON; undefined when the CLI sent none. */
 export function parseAutonomy(raw: string): Autonomy | undefined {

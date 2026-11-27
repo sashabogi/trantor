@@ -456,7 +456,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   );
   const [fontStep, setFontStep] = useState<FontStep>(() => loadFontStep());
   const [trayOpen, setTrayOpen] = useState<boolean>(() => loadTrayOpen());
-  const [longRun, setLongRun] = useState(false);
+  const [longRunState, setLongRunState] = useState({ project, on: false });
+  const longRun = longRunState.project === project && longRunState.on;
+  const setLongRun = useCallback((on: boolean) => setLongRunState({ project, on }), [project]);
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [handoffConfirm, setHandoffConfirm] = useState(false);
   const [handoffError, setHandoffError] = useState<string | null>(null);
