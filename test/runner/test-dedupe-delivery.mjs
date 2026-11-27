@@ -1,12 +1,6 @@
 #!/usr/bin/env node
-// trantor duplicate-delivery drill (#7778) — ONE message id, ONE delivery, whichever path sees it
-// first. The session's own inbox read (relay_inbox, the PostToolUse hook) and the runner's /poll
-// are two readers of one bus with no shared cursor, so a message the seat read and answered
-// MID-TURN used to be re-polled after the turn and woken AGAIN (seen live on codex:crebral-scribe:
-// it answered #20258 inside its turn, then a second turn 16s later re-quoted the same message
-// verbatim). The hub hands each message row out to every reader whose cursor is behind — delivery
-// to the MODEL is the runner's job to dedupe. Hermetic: a mock hub with the REAL seam (poll
-// filters by the caller's cursor, never by deliveredUpTo), a fake CLI, the REAL runner.
+// #7778 / #14520: inbox reads consume FYIs, but contracts still owe work.
+// Drive the real runner with independent inbox and poll cursors.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync, existsSync } from "node:fs";
@@ -33,7 +27,7 @@ const hub = http.createServer((req, res) => {
     const reply = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
     if (req.method === "POST" && P === "/send") {
       let b = {}; try { b = JSON.parse(buf); } catch {}
-      const msg = { id: ++state.seq, ts: Date.now(), from: b.from || "anon", to: b.to || "all", text: b.text || "" };
+      const msg = { id: ++state.seq, ts: Date.now(), from: b.from || "anon", to: b.to || "all", text: b.text || "", kind: b.kind, wake: b.wake };
       state.messages.push(msg);
       return reply({ ok: true, id: msg.id });
     }
@@ -70,18 +64,12 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 const post = (path, b) => fetch(`${HUB}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const handoffs = (id) => state.events.filter(e => e.id === id).map(e => `${e.path}@${new Date(e.ts).toISOString()}`);
 
-// ---- harness: the REAL runner + a fake `codex`. #9832: the kickoff turn no longer lasts a
-// fixed 2s — the fake CLI SIGNS its start (kickoff-live marker) and HOLDS the turn open until
-// the drill releases it. The probe's mid-turn arrival is then an EVENT anchored to the turn,
-// not a race against the runner's boot: under a loaded host the old sleep(800) could fire
-// before the kickoff had even started (the poll woke on the probe directly — the exact
-// duplicate delivery this suite exists to prove suppressed) and sleep(3200) could post probe 2
-// before the kickoff's boundary reconcile had consumed probe 1. -------------------------------
+// Hold the fake CLI until the probe has arrived, avoiding a boot timing race.
 const PROJ = "tt-dedupe";
 const PROBE1 = "DEDUPE-PROBE #4242: answer this clarification in place, then end your turn";
 const PROBE2 = "SECOND-PROBE #4243: one more ask, needing its own turn";
 
-async function drill({ sessionRead = false, failWakeTurns = 0, lateProbe = false, restart = false, waitMs = 8000 }) {
+async function drill({ sessionRead = false, failWakeTurns = 0, lateProbe = false, restart = false, waitMs = 8000, probe = PROBE1, kind, wake, outcome = "" }) {
   state.seq = 0; state.messages = []; state.dUT = 0; state.events = []; state.inboxDown = false;
   const work = mkdtempSync(join(tmpdir(), "tt-dedupe-"));
   const HOME = join(work, "home");
@@ -105,6 +93,7 @@ if grep -q "NEW BUS MESSAGE" "$P"; then
 fi
 # #7759: the success fixture answers past the substantive floor — this drill tests delivery
 # dedupe, not turn validity.
+echo "${outcome}"
 echo "the probe was handled: card moved, the fix landed in the worktree, and the gate ran green,"
 echo "so this turn consumed its wake message and ends here."
 exit 0
@@ -125,7 +114,7 @@ exit 0
   const bootT0 = Date.now();
   while (!existsSync(KICKMARK) && Date.now() - bootT0 < 30000) await sleep(50);
   if (!existsSync(KICKMARK)) console.log("  FAIL  kickoff never signalled live within 30s — drill window missed");
-  const sent = await post("/send", { from: "sasha@mac", to: session, text: PROBE1 });
+  const sent = await post("/send", { from: "sasha@mac", to: session, text: probe, kind, wake });
   probe1Id = sent.id;
   if (sessionRead) {
     // the session reads it through its OWN inbox path (the seat's relay_inbox call in the live
@@ -159,7 +148,7 @@ exit 0
   runner.kill("SIGKILL"); await sleep(150);
   const turns = read(LOGF).split("===TURN").filter(t => t.trim());
   return {
-    probe1Turns: turns.filter(t => t.includes("DEDUPE-PROBE")),
+    probe1Turns: turns.filter(t => t.includes(probe)),
     probe2Turns: turns.filter(t => t.includes("SECOND-PROBE")),
     fileHadSeen, PENDF, pendingLeft: existsSync(PENDF),
     pendingSeen: (() => { try { const j = JSON.parse(readFileSync(PENDF, "utf8")); return j.seen || []; } catch { return []; } })(),
@@ -217,6 +206,21 @@ exit 0
     r.probe2Turns.length === 2, `got ${r.probe2Turns.length}`);
   ok("probe 2's redelivery still carries the original text",
     r.probe2Turns.every(t => t.includes("SECOND-PROBE")));
+}
+
+for (const spec of [
+  { name: "text contract stays owed", probe: "Contract #4242: DEDUPE-PROBE", expected: 1 },
+  { name: "typed contract stays owed", kind: "contract", expected: 1 },
+  { name: "contract colon stays owed", probe: "contract: DEDUPE-PROBE", expected: 1 },
+  { name: "FYI remains batched", wake: false, probe: "Contract #4242: DEDUPE-PROBE", expected: 0 },
+  { name: "explicit testing consumes same card", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4242 testing", expected: 0 },
+  { name: "explicit done consumes same card", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4242: done", expected: 0 },
+  { name: "other card completion leaves contract owed", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4243 done", expected: 1 },
+  { name: "deferred card stays owed", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4242 remains context for a later turn", expected: 1 },
+]) {
+  const r = await drill({ ...spec, sessionRead: true, waitMs: 2200 });
+  ok(`#14520: ${spec.name}`, r.probe1Turns.length === spec.expected,
+    `got ${r.probe1Turns.length} wake(s), expected ${spec.expected}`);
 }
 
 hub.close();

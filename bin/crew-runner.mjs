@@ -31,7 +31,7 @@ import {
   cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, turnDelivered, budgetPause, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   ownCardForInstance, contractedCardIds,
-  shouldAlignForContract, hasContractText,
+  shouldAlignForContract, hasContractText, completedCardIds, owesReadContract,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
@@ -417,11 +417,10 @@ async function janitorStop(why, card) {
   log(text);
   await api("/send", { from: SESSION, to: "all", text, project: PROJ, kind: "status" }).catch(() => {});
 }
-// #7778: message ids this seat already consumed through its OWN inbox path (relay_inbox, the
-// PostToolUse hook) — reconciled from the hub's deliveredUpTo ledger at each clean turn boundary
-// and persisted in the pending file, so a message the session read mid-turn is never re-woken by
-// the poll, across turn AND process boundaries.
+// Inbox reads dedupe context across turn boundaries; #14520 contracts still need a matching outcome.
+// Persist that turn's completed cards with its read ids so later outcomes cannot consume old work.
 let seenLedger = [];
+let turnCompletedCards = [];
 // A cap, so a long outage cannot grow the queue without bound. Overflow drops the OLDEST and says
 // so on the bus — a silent drop is the exact failure this whole mechanism exists to end.
 const PENDING_MAX = 50;
@@ -474,7 +473,7 @@ function loadPending() {
       wake: Array.isArray(j.wake) ? j.wake : [],
       bcast: Array.isArray(j.bcast) ? j.bcast : [],
       seen: Array.isArray(j.seen)
-        ? j.seen.filter(e => e && Number.isFinite(Number(e.id))).map(e => ({ id: Number(e.id), ts: Number(e.ts) || 0 }))
+        ? j.seen.filter(e => e && Number.isFinite(Number(e.id))).map(e => ({ id: Number(e.id), ts: Number(e.ts) || 0, completedCards: e.completedCards || [] }))
         : [],
       ask: Number(j.ask) || 0, askTo: String(j.askTo || ""),
     };
@@ -1177,6 +1176,7 @@ exit $turn_exit`;
   let ownOut = "";
   try { ownOut = stripPromptEcho(readFileSync(ERRF, "utf8"), readPromptText(pf)); } catch { ownOut = ""; }
   lastErrText = ownOut.slice(-4000);
+  turnCompletedCards = completedCardIds(ownOut);
   if (opts.state) {
     try { lastEnvelope = redactKeys(readFileSync(ENVF, "utf8")); } catch { lastEnvelope = ""; }
     const env = parseEnvelope(lastEnvelope);
@@ -1780,7 +1780,10 @@ async function resolveWakeCard(messages, { session }) {
     // not the shared ledger, so the second reader stands down here and the cursor adopts the consumed
     // ids. Filtering BEFORE the wake/bcast split keeps a dupe out of #7766's demoted-sender notice.
     if (seenLedger.length) {
-      const seenIds = new Set(seenLedger.map(e => e.id));
+      const seenIds = new Set(msgs.filter(m => {
+        const entry = seenLedger.find(e => e.id === m.id);
+        return entry && !owesReadContract(m, SESSION, entry.completedCards);
+      }).map(m => m.id));
       const dupes = msgs.filter(m => seenIds.has(m.id));
       if (dupes.length) {
         log(`duplicate delivery suppressed — ${dupes.map(m => `#${m.id}`).join(", ")} already consumed by the session's own inbox read`);
@@ -1886,12 +1889,12 @@ async function resolveWakeCard(messages, { session }) {
       // A delta wider than one turn could plausibly carry is a corrupt or rewound ledger: mark
       // nothing. Non-marking only risks the duplicate this fixes, never a lost message.
       if (!(readUpTo > upToCursor) || readUpTo - upToCursor > 10000) return 0;
-      for (let id = upToCursor + 1; id <= readUpTo; id++) seenLedger.push({ id, ts: Date.now() });
+      for (let id = upToCursor + 1; id <= readUpTo; id++) seenLedger.push({ id, ts: Date.now(), completedCards: turnCompletedCards });
       seenLedger = seenLedger.filter(e => e.id > upToCursor).slice(-500);
       // persist HERE, at every caller: a runner killed seconds after the boundary is exactly the
       // restart the restored seen-set exists for.
       savePending(pendingWake, pendingBcast);
-      log(`dedupe: message id(s) ${upToCursor + 1}..${readUpTo} were consumed by the session's own inbox read — the poll will not wake on them again`);
+      log(`dedupe: message id(s) ${upToCursor + 1}..${readUpTo} were read by the session — context dedupes; contracts require a matching done/testing outcome`);
       return readUpTo - upToCursor;
     } catch { return 0; }
   }
