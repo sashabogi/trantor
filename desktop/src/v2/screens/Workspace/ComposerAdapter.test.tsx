@@ -151,6 +151,51 @@ describe("ComposerAdapter mode menu", () => {
   });
 });
 
+// #14487: while the orchestrator's turn runs, the one action is Stop — Escape to the pane over
+// the classic pane_keys command, with the classic slot rule (words queue instead of stopping).
+describe("ComposerAdapter stop slot", () => {
+  const keys = () => calls.filter(c => c.cmd === "pane_keys");
+  const escape = (ta: Element | null) =>
+    act(async () => { ta?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+
+  it("turns Send into Stop while the turn runs, sends Escape to the pane, and returns to Send when idle", async () => {
+    ipc(claudeAt("default"));
+    await mount({ working: true });
+    const stop = host.querySelector<HTMLButtonElement>('button[aria-label="Stop"]');
+    expect(stop).not.toBeNull();
+    expect(host.querySelector('button[aria-label="Send"]')).toBeNull();
+    await act(async () => { stop?.click(); });
+    expect(keys()).toEqual([{ cmd: "pane_keys", args: { target: "w4:p1", keys: "Escape" } }]);
+    await mount({ working: false });
+    expect(host.querySelector('button[aria-label="Stop"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Send"]')).not.toBeNull();
+    expect(keys()).toHaveLength(1);
+  });
+
+  it("stops the turn on Esc in the composer, but not once words queue a message", async () => {
+    ipc(claudeAt("default"));
+    await mount({ working: true });
+    const ta = host.querySelector("textarea");
+    if (!ta) throw new Error("no textarea");
+    await escape(ta);
+    expect(keys().map(c => c.args)).toEqual([{ target: "w4:p1", keys: "Escape" }]);
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    act(() => { setter?.call(ta, "hold on"); ta.dispatchEvent(new Event("input", { bubbles: true })); });
+    expect(host.querySelector('button[aria-label="Stop"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Send"]')).not.toBeNull();
+    await escape(ta);
+    expect(keys()).toHaveLength(1);
+  });
+
+  it("offers no Stop without a pane to interrupt", async () => {
+    ipc(claudeAt("default"));
+    await mount({ working: true, target: null });
+    expect(host.querySelector('button[aria-label="Stop"]')).toBeNull();
+    expect(host.querySelector('button[aria-label="Send"]')).not.toBeNull();
+    expect(keys()).toEqual([]);
+  });
+});
+
 // #14030: the Mode menu consults the Rust-owned table. Below the feature's verified range the
 // section shows one disabled row and never presses a key; above it the closed-loop read stays the
 // guard and an unreadable mode line is explained instead of a bare "Mode unknown".

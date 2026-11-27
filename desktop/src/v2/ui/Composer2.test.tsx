@@ -106,6 +106,33 @@ describe("Composer2", () => {
     expect(host.querySelector("textarea")?.value).toBe("");
   });
 
+  // #14487: one action slot, two states — while the parent says a turn runs (onStop set) the
+  // button is Stop and Esc in the box rides the same interrupt.
+  it("swaps Send for Stop while onStop is set, and Esc stops too", () => {
+    const onStop = vi.fn();
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ busy: true, onStop }} />));
+    const stop = q('button[aria-label="Stop"]');
+    expect(stop).not.toBeNull();
+    expect(q('button[aria-label="Send"]')).toBeNull();
+    expect(stop?.title).toBe("Interrupt this turn (Esc)");
+    act(() => stop?.click());
+    expect(onStop).toHaveBeenCalledTimes(1);
+    const ta = host.querySelector("textarea");
+    if (!ta) throw new Error("no textarea");
+    act(() => { ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(onStop).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows Send again once onStop is gone, and Esc is just a key then", () => {
+    const onStop = vi.fn();
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ busy: true, onStop }} />));
+    act(() => root.render(<Harness onSend={vi.fn()} extra={{ busy: false }} />));
+    expect(q('button[aria-label="Stop"]')).toBeNull();
+    expect(q('button[aria-label="Send"]')).not.toBeNull();
+    act(() => { host.querySelector("textarea")?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
   it("puts the paperclip right before the round send button", () => {
     act(() => root.render(<Harness onSend={vi.fn()} />));
     const send = q('button[aria-label="Send"]');

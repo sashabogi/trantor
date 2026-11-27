@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, Square } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./IconButton";
 import { Ring } from "./Ring";
@@ -51,6 +51,9 @@ export type Composer2Props = {
   /** Context window used, 0 to 100; null hides the ring (not reported yet). */
   contextPct: number | null;
   onAttach?: () => void;
+  /** #14487: interrupt the running turn — while set, the one action button is Stop and Esc in the
+   *  box does the same. The parent decides when a turn is stoppable; omit when it never is. */
+  onStop?: () => void;
   /** Chips, drop, paste and picker (#13984 drill); omit and the paperclip stays as `onAttach` says. */
   attachments?: AttachmentsApi;
   /** Disables sending and says why. */
@@ -195,6 +198,9 @@ export function Composer2(p: Composer2Props) {
   const hasChips = !!att?.chips.length;
   const send = () => { if ((text || hasChips) && !blocked) p.onSend(text); };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // #14487: Esc stops the running turn the way the button does. The parent sets onStop only
+    // while a turn runs with nothing to queue, so the key and the button are always ONE action.
+    if (e.key === "Escape" && p.onStop) { e.preventDefault(); p.onStop(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
   };
   return (
@@ -216,11 +222,21 @@ export function Composer2(p: Composer2Props) {
         {(att || p.onAttach) && <IconButton label="Attach a file or image"
           title={att ? "Attach images (drop or paste any file or image onto the box)" : "Attach"}
           round onClick={att ? () => picker.current?.click() : p.onAttach}><Paperclip size={14} aria-hidden /></IconButton>}
-        <button type="button" aria-label="Send" title={p.disabledReason || (text || hasChips ? "Send (Enter)" : "Type a message to send")}
-          disabled={(!text && !hasChips) || blocked} onClick={send}
-          className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border-0 bg-[var(--v2-text)] text-[var(--v2-ink)] disabled:opacity-40">
-          <ArrowUp size={14} strokeWidth={2.4} aria-hidden />
-        </button>
+        {/* #14487: one action slot, two states — the classic composer's #5556 pattern. While the
+            parent says a turn is running (onStop set) the slot stops it in warn amber; Esc and the
+            click ride the same handler, and the button never sits beside a Send. */}
+        {p.onStop ? (
+          <button type="button" aria-label="Stop" title="Interrupt this turn (Esc)" onClick={p.onStop}
+            className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border-0 bg-[var(--v2-warn)] text-[var(--v2-warn-ink)]">
+            <Square size={12} strokeWidth={2.5} fill="currentColor" aria-hidden />
+          </button>
+        ) : (
+          <button type="button" aria-label="Send" title={p.disabledReason || (text || hasChips ? "Send (Enter)" : "Type a message to send")}
+            disabled={(!text && !hasChips) || blocked} onClick={send}
+            className="inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border-0 bg-[var(--v2-text)] text-[var(--v2-ink)] disabled:opacity-40">
+            <ArrowUp size={14} strokeWidth={2.4} aria-hidden />
+          </button>
+        )}
       </div>
     </div>
   );

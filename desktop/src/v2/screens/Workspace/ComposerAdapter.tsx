@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Composer } from "../../../features/chat/Composer";
 import { modelLabel } from "../../../features/chat/modelLabel";
 import { brandOfModel, modelLabel as vendorModelLabel } from "../../ui/identity";
-import { normalizeAttachments, type PromptVerdict } from "../../../features/chat/streaming";
+import { normalizeAttachments, composerSlot, type PromptVerdict } from "../../../features/chat/streaming";
 import { parseAutonomy } from "./useWorkspaceData";
 import { useAttachments } from "../../ui/useAttachments";
 import { Composer2, type Choice } from "../../ui/Composer2";
@@ -115,6 +115,15 @@ export function ComposerAdapter(p: ClassicProps) {
   }, [p.suggestion]);
   // The pills hide while there are words in the box: report the draft, as the classic composer does.
   useEffect(() => { p.onDraftChange?.(value); }, [value]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // #14487: interrupting is a KEY, not a message — the classic stop, over the same pane_keys
+  // command. The slot rule stays the classic composerSlot, never forked: a running turn with an
+  // empty box stops, while words or chips queue a message instead (Claude Code queues mid-turn).
+  const stop = () => {
+    if (!p.target) return;
+    invoke("pane_keys", { target: p.target, keys: "Escape" })
+      .catch(e => setNote(`Not interrupted: ${String(e)}`));
+  };
+  const stoppable = composerSlot(p.working, p.live, value, false, attachments.chips.length).kind === "stop" && !!p.target;
   const pickEffort = (v: string) => { setEffort(v); void line(`/effort ${v}`); p.onDispatch("effort", v); };
   // The pick is per project and saved before the slash command, exactly as the classic composer does it.
   const pickModel = (v: string) => {
@@ -141,7 +150,8 @@ export function ComposerAdapter(p: ClassicProps) {
           modelChoices={claude ? MODEL_CHOICES : undefined} modelValue={modelChoiceOf(p.model || "")} onModelChange={pickModel}
           effort={claude ? effort : undefined} effortChoices={EFFORT_CHOICES} onEffortChange={pickEffort}
           permission={harness.auto ? "auto" : "ask"} permissionChoices={PERMISSION_CHOICES} onPermissionChange={next => harness.set(next === "auto")}
-          contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason} />
+          contextPct={frac == null ? null : Math.round(frac * 100)} attachments={attachments} disabledReason={disabledReason}
+          onStop={stoppable ? stop : undefined} />
       </div>
     </div>
   );
