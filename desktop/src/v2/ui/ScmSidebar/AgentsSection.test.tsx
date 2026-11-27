@@ -109,7 +109,8 @@ describe("Agents working", () => {
     expect(picked).toEqual(["wt:/repo/.claude/worktrees/agent-a3b04308faa"]);
     expect(calls.some(c => c.command === "git_panel" && c.args.agent === "wt:/repo/.claude/worktrees/agent-a3b04308faa")).toBe(true);
     expect(host.querySelector("[data-agent-row]")?.getAttribute("aria-pressed")).toBe("true");
-    expect(host.querySelector("header")?.textContent).toContain("agent a3b0430");
+    // #14511: whose worktree this is lives in the review band now, not the branch header
+    expect(host.querySelector("[data-review-band]")?.textContent).toContain("Reviewing agent a3b0430");
   });
 });
 
