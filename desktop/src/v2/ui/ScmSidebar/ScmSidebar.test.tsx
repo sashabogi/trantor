@@ -166,17 +166,17 @@ describe("the sidebar", () => {
     expect(host.querySelector('[role="tree"]')).toBeNull();
   });
 
-  it("names the scope once, in a pill with a way back, and only off the main checkout", async () => {
+  it("names the scope in a band with a way back, and only off the main checkout", async () => {
     await render();
-    const pill = host.querySelector("[data-scope-pill]");
-    expect(pill?.textContent).toBe("glm-5’s worktree, read only");
-    expect(host.querySelectorAll("[data-scope-pill]")).toHaveLength(1);
-    await click([...host.querySelectorAll("button")].find(b => b.textContent === "Back to my checkout") ?? null);
+    const pill = host.querySelector("[data-review-band]");
+    expect(pill?.textContent).toContain("Reviewing glm-5's work");
+    expect(host.querySelectorAll("[data-review-band]")).toHaveLength(1);
+    await click([...host.querySelectorAll("button")].find(b => b.textContent?.startsWith("Back to my checkout")) ?? null);
     expect(picked).toEqual([null]);
     state = { kind: "ok", snap: CHECKOUT_SNAP };
     await render("trantor", null);
-    expect(host.querySelector("[data-scope-pill]")).toBeNull();
-    expect([...host.querySelectorAll("button")].find(b => b.textContent === "Back to my checkout")).toBeUndefined();
+    expect(host.querySelector("[data-review-band]")).toBeNull();
+    expect([...host.querySelectorAll("button")].find(b => b.textContent?.startsWith("Back to my checkout"))).toBeUndefined();
   });
 
   it("shows every changed file in its group: Staged first, then Changes with counts, each with a count in the header", async () => {

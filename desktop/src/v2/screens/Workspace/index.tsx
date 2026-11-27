@@ -1,3 +1,6 @@
+import { peekReviewMessage, takeReviewMessage, type ReviewMessage } from "../../ui/ScmSidebar/reviewScope";
+import { isWorktreeScope } from "../Code/scopeGitApi";
+import type { ReviewDraft } from "./reviewDraft";
 import { useActivePane } from "../../ui/useActivePane";
 // The project Workspace screen: seat strip, inspector, work area and the project panel (#13987).
 // The shell already renders the project header and lens tabs; this is everything under them.
@@ -139,6 +142,28 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
     requestAnimationFrame(() => messageRef.current?.focus());
   };
 
+  const [reviewDraft, setReviewDraft] = useState<ReviewDraft | null>(null);
+  const reviewMessage = (review: ReviewMessage) => {
+    if (isWorktreeScope(review.scope)) {
+      if (!seats.some(s => s.isOrchestrator)) return;
+      setBrowserMax(false);
+      chatCol.setOpen(true);
+      setReviewDraft({ project, text: `About ${review.name}'s worktree (${review.files} files): ` });
+    } else {
+      const seat = seats.find(s => s.agent === review.scope);
+      if (seat) { setSelKey(seat.key); message(); }
+    }
+  };
+  useEffect(() => {
+    if (!data.seats) return;
+    const pending = peekReviewMessage(project);
+    if (!pending) return;
+    const recipient = isWorktreeScope(pending.scope) ? seats.some(s => s.isOrchestrator) : seats.some(s => s.agent === pending.scope);
+    if (!recipient) return;
+    takeReviewMessage(project);
+    reviewMessage(pending);
+  });
+
   // The same scoping the Files sheet used: a crew seat on this machine shows its worktree, anything else the project checkout.
   const [shownScope, setShownScope] = useState<string | null>(null);
   const scope = selected && !selected.isOrchestrator && !selected.isHelper && !selected.agentInfo && !selected.machine ? selected.agent : null;
@@ -191,6 +216,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
     <ChatLinks project={project} navigate={onNavigate}>
     <div ref={workspaceRef} className="flex min-h-0 flex-1 gap-[6px] bg-[var(--v2-chrome)] p-[6px]">
       {!browserFull && <FilesColumn col={filesCol} workspace={workspaceRef} project={project} scope={scope}
+        onReviewMessage={reviewMessage} canAskOrchestrator={seats.some(s => s.isOrchestrator)}
         scopeName={scope ?? "project checkout"} seats={seatInfos} onPickScope={pickScope}
         onOpenFile={openFile} onOpenChange={openChange} onOpenCommit={openCommit} onShownScope={setShownScope}
         selectedPath={openedPath} onOpenConflict={openConflict} />}
@@ -201,7 +227,7 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
         {body}
       </div>
       {!browserFull && <ChatColumn col={chatCol} workspace={workspaceRef}>
-        <RightPanel project={project} seat={selected?.isHelper || selected?.agentInfo ? undefined : selected} orchestrator={seats.find(s => s.isOrchestrator)}
+        <RightPanel reviewDraft={reviewDraft} project={project} seat={selected?.isHelper || selected?.agentInfo ? undefined : selected} orchestrator={seats.find(s => s.isOrchestrator)}
           changed={diff.diff?.files.length ?? 0} onNavigate={onNavigate} wake={wake} onClose={() => chatCol.setOpen(false)} />
       </ChatColumn>}
       {recording && (me

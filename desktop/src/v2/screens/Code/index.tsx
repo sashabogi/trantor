@@ -1,3 +1,5 @@
+import { queueReviewMessage } from "../../ui/ScmSidebar/reviewScope";
+import { useLocalPanes } from "../Workspace/useWorkspaceData";
 import { useActivePane } from "../../ui/useActivePane";
 // Trantor 2.0 Code and Git (#13988): icon bar, tabs, source control with history and changes, branch
 // picker, PR and merge-conflict tabs. Real data from the classic git and file commands only.
@@ -59,6 +61,7 @@ function LocalCodeScreen({ client, project, onNavigate, intent }: ScreenProps & 
   const [scope, setScope] = useState<string | null>(null);
   const { state, refresh } = useScopeGit(project, scope);
   const { seats, peers } = useSeats(client, project);
+  const { rows: localPanes } = useLocalPanes(project);
   const cards = useTasks(client, project);
   const tabs = useTabs(project);
   const [side, setSide] = useState<SideView>("source");
@@ -174,7 +177,7 @@ function LocalCodeScreen({ client, project, onNavigate, intent }: ScreenProps & 
     <div className="flex min-h-[600px] min-w-0 flex-1 gap-[6px] bg-[var(--v2-chrome)] p-[6px]" data-testid="code-screen">
       <IconBar active={side} folded={!visible} onPick={onIcon} changeCount={changeCount} />
       {visible && (
-        <Sidebar view={side} explorerKey={explorerShown} client={client} project={project} scope={scope} seats={seats} state={state} selected={changeFocus}
+        <Sidebar canAskOrchestrator={localPanes.some(pane => pane.kind === "orch")} onReviewMessage={message => { queueReviewMessage(project, message); onNavigate("workspace"); }} view={side} explorerKey={explorerShown} client={client} project={project} scope={scope} seats={seats} state={state} selected={changeFocus}
           onOpenFile={openFile} onOpenChange={openChange} onMutated={refresh} onOpenSource={() => { tabs.activate("source"); setOverride(false); }}
           onOpenCommit={openCommit} onPickSeat={pick} onOpenConflict={openConflict} />
       )}

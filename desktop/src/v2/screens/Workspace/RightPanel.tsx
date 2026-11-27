@@ -1,3 +1,4 @@
+import { ReviewDraftContext, type ReviewDraft } from "./reviewDraft";
 // The chat column's content: the orchestrator Chat is the only permanent view; Sessions opens as a sheet over it (#13987 drill).
 import { saveTrayOpen } from "../../../features/chat/prefs";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -36,12 +37,14 @@ function Sheet({ kind, onBack, children }: { kind: SheetKind; onBack: () => void
   );
 }
 
-export function RightPanel({ project, seat, orchestrator, changed, onNavigate, onClose, wake }: {
+export function RightPanel({ reviewDraft, project, seat, orchestrator, changed, onNavigate, onClose, wake }: {
+  reviewDraft?: ReviewDraft | null;
   project: string; seat: SeatView | undefined; orchestrator: SeatView | undefined; changed: number;
   onNavigate: Navigate; onClose: () => void; wake?: WakeApi;
 }) {
   const [sheet, setSheet] = useState<SheetKind | null>(null);
   const [session, setSession] = useState<SessionRow | null>(null);
+  useEffect(() => { if (reviewDraft) { setSession(null); setSheet(null); } }, [reviewDraft]);
   const scope = seat && !seat.isOrchestrator && !seat.machine ? seat.agent : null;
   const back = () => setSheet(null);
   // #13987 drill: Git is the Code screen's Source control, not a sheet; the seat travels with the intent.
@@ -51,11 +54,11 @@ export function RightPanel({ project, seat, orchestrator, changed, onNavigate, o
   return (
     <section aria-label="Project panel" className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1 flex-col">
-        <ChatNoTray onOpenChange={openChange}><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" variant="v2" onDock={() => {}} deps={CHAT_DEPS}
+        <ReviewDraftContext.Provider value={session ? null : reviewDraft ?? null}><ChatNoTray onOpenChange={openChange}><Chat key={session?.id ?? "live"} project={project} sessionId={session?.id} dock="pane" variant="v2" onDock={() => {}} deps={CHAT_DEPS}
           renderHeader={state => <ChatHeader state={{ ...state, title: session?.title.trim() || state.title, branch: state.branch || session?.branch || "" }}
             brand={session?.harness ?? orchestrator?.brand} actions={{ sheet, onSheet: setSheet, changed, project,
               sessionId: session?.id ?? orchestrator?.session ?? null, onGit: openGit, onClose }} />}
-          emptyAction={wake ? <StartOrchestrator project={project} wake={wake} onNavigate={onNavigate} /> : undefined} onClose={() => setSession(null)} /></ChatNoTray>
+          emptyAction={wake ? <StartOrchestrator project={project} wake={wake} onNavigate={onNavigate} /> : undefined} onClose={() => setSession(null)} /></ChatNoTray></ReviewDraftContext.Provider>
       </div>
       {sheet === "sessions" && (
         <Sheet kind="sessions" onBack={back}>

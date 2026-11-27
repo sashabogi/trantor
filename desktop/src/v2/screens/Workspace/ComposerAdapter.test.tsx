@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import type { AgentCliCompatibility } from "../../../shared/api/client";
-import { draftSlots } from "../../../features/chat/composerDraft";
+import { ReviewDraftContext } from "./reviewDraft";
+import { draftSlots, emptyDraft } from "../../../features/chat/composerDraft";
 import { ComposerAdapter } from "./ComposerAdapter";
 import { MODE_READ_RETRY_MS, MODE_READ_WINDOW_MS } from "./useAgentMode";
 // SAFETY: React's test-only flag enables act warnings for this DOM fixture.
@@ -20,8 +21,11 @@ type Reply = (cmd: string, args?: InvokeArgs) => Answer | undefined;
 let host: HTMLDivElement;
 let root: Root;
 let calls: Calls;
-beforeEach(() => { host = document.createElement("div"); document.body.append(host); root = createRoot(host); calls = []; draftSlots.reset(); });
-afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); clearMocks(); vi.useRealTimers(); });
+beforeEach(() => {
+  const mem = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (key: string) => mem.get(key) ?? null, setItem: (key: string, value: string) => mem.set(key, value), removeItem: (key: string) => mem.delete(key) });
+  host = document.createElement("div"); document.body.append(host); root = createRoot(host); calls = []; draftSlots.reset(); });
+afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); clearMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 function ipc(reply: Reply) {
   mockIPC((cmd, args) => { calls.push({ cmd, args }); return reply(cmd, args); });
@@ -394,4 +398,22 @@ it("searches this project's files and sends a selected path as an attachment (#1
   expect(calls.filter(c => c.cmd === "pane_send").map(c => c.args)).toEqual([
     { target: "w4:p1", text: "/repo/src/example.ts Read" },
   ]);
+});
+
+
+describe("worktree review draft", () => {
+  it("prefills and focuses the orchestrator without sending, preserving existing words", async () => {
+    ipc(claudeAt("default"));
+    draftSlots.put({ ...emptyDraft("trantor"), text: "An existing question" });
+    const request = { project: "trantor", text: "About agent abcdef1's worktree (2 files): " };
+    await act(async () => root.render(<ReviewDraftContext.Provider value={request}><ComposerAdapter {...props()} /></ReviewDraftContext.Provider>));
+    const box = host.querySelector("textarea");
+    expect(box?.value).toBe(request.text + "\nAn existing question");
+    expect(document.activeElement).toBe(box);
+    expect(box?.selectionStart).toBe(request.text.length);
+    expect(box?.selectionEnd).toBe(request.text.length);
+    expect(calls.some(c => c.cmd === "pane_send")).toBe(false);
+    await act(async () => root.render(<ReviewDraftContext.Provider value={request}><ComposerAdapter {...props({ working: true })} /></ReviewDraftContext.Provider>));
+    expect(box?.value).toBe(request.text + "\nAn existing question");
+  });
 });

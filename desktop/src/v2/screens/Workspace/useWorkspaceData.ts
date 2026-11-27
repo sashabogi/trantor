@@ -38,7 +38,7 @@ export function usePeerList(client: HubClient) {
   return { peers, error, refresh };
 }
 
-function useLocalPanes(project: string) {
+export function useLocalPanes(project: string) {
   const [owned, setOwned] = useState<{ project: string; rows: HerdrSeat[] }>({ project, rows: [] });
   const [version, setVersion] = useState(0);
   const refresh = useCallback(() => setVersion(v => v + 1), []);

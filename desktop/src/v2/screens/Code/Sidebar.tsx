@@ -1,3 +1,4 @@
+import type { ReviewMessage } from "../../ui/ScmSidebar/reviewScope";
 import { useActivePane } from "../../ui/useActivePane";
 // The sidebar beside file tabs (#13988): Explorer, Search, the source control sidebar, Agents,
 // Cards. The "source" view is the same ScmSidebar the Workspace left column shows
@@ -51,6 +52,7 @@ function CardsPane({ cards }: { cards: Card[] }) {
 }
 
 export type SidebarProps = {
+  onReviewMessage?: (message: ReviewMessage) => void; canAskOrchestrator?: boolean;
   view: SideView; explorerKey?: number; client: HubClient; project: string; scope: string | null; seats: SeatInfo[]; state: ScopeState;
   selected: string | null; onOpenFile: OpenAt; onOpenChange: (path: string) => void; onOpenCommit: (sha: string) => void;
   onMutated: () => void; onOpenSource: () => void; onPickSeat: (seat: string | null) => void; onOpenConflict: (path: string) => void;
@@ -74,6 +76,7 @@ export function Sidebar(p: SidebarProps) {
     return (
       <aside {...pane} aria-label="Source control" className={panel}>
         <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scope ?? "project checkout"} state={p.state} seats={p.seats}
+          onReviewMessage={p.onReviewMessage} canAskOrchestrator={p.canAskOrchestrator}
           onPickScope={p.onPickSeat} hostPicksWorktree selectedPath={p.selected}
           onMutated={p.onMutated} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onOpenConflict={p.onOpenConflict}
           actions={<IconButton label="Open the full source control tab" title="Open the full tab" size={24} onClick={p.onOpenSource}><Maximize2 size={13} aria-hidden /></IconButton>} />

@@ -1,8 +1,9 @@
+import { ReviewDraftContext, takeReviewDraft } from "./reviewDraft";
 // Composer2 standing in for the classic composer inside the classic Chat, through Chat's own
 // `deps.Composer` seam. It sends over the identical path: invoke("pane_send") with herdr's verdict (#13987).
 // #14488: words and chips live in the classic composerDraft slots — one per project, debounced to
 // composer_draft_set — so a draft survives a restart and never rides into another project.
-import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, type ComponentProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Composer } from "../../../features/chat/Composer";
 import { modelLabel } from "../../../features/chat/modelLabel";
@@ -104,6 +105,23 @@ export function ComposerAdapter(p: ClassicProps) {
   // `project` prop moves the draft is swapped here rather than carried into the new one.
   const [current, setCurrent] = useState<ComposerDraft>(() => draftSlots.get(p.project) ?? emptyDraft(p.project));
   if (current.project !== p.project) setCurrent(draftSlots.get(p.project) ?? emptyDraft(p.project));
+  const reviewDraft = useContext(ReviewDraftContext);
+  const composerRoot = useRef<HTMLDivElement>(null);
+  const [focusReview, setFocusReview] = useState(false);
+  useEffect(() => {
+    if (reviewDraft?.project !== p.project) return;
+    const text = takeReviewDraft(reviewDraft);
+    if (text === null) return;
+    setCurrent(c => ({ ...c, text: text + (c.text ? `\n${c.text}` : "") }));
+    setFocusReview(true);
+  }, [reviewDraft, p.project]);
+  useEffect(() => {
+    if (!focusReview) return;
+    const box = composerRoot.current?.querySelector("textarea");
+    box?.focus();
+    box?.setSelectionRange(reviewDraft?.text.length ?? 0, reviewDraft?.text.length ?? 0);
+    setFocusReview(false);
+  }, [focusReview, reviewDraft]);
   const value = current.text;
   const [note, setNote] = useState<string | null>(null);
   const [effort, setEffort] = useState<string | null>(null);
@@ -205,7 +223,7 @@ export function ComposerAdapter(p: ClassicProps) {
     modeReading: mode.reading, onModeMenuOpen: mode.read,
   } : {};
   return (
-    <div className="v2-composer-gutter">
+    <div ref={composerRoot} className="v2-composer-gutter">
       <div className="v2-composer-float flex flex-col gap-1.5">
         {shown && <div role="status" className="text-v2-body text-[var(--v2-warn)]">{shown}</div>}
         <Composer2 fileSearch={fileSearch} onPickFile={attachments.addPath} busy={p.working} value={value} onChange={v => { setCurrent(c => ({ ...c, text: v })); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
