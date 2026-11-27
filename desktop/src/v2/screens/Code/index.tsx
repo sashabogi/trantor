@@ -4,7 +4,7 @@ import { useActivePane } from "../../ui/useActivePane";
 // #14241: the source tab's list runs full height beside the panel column, so its shared state
 // (the picked file, the chips, the history rows) lives here instead of inside SourceControlTab.
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { takeOpenIntent, watchOpenIntent } from "../../shell/openIntent";
+import { takeOpenIntent, watchOpenIntent, type OpenIntent } from "../../shell/openIntent";
 import { revealFolder } from "./revealFolder";
 import type { Card } from "../../../shared/api/client";
 import { useTasks } from "../../../shared/tasks";
@@ -34,13 +34,28 @@ import { useTabs } from "./useTabs";
 import { BackToGraph } from "../../../features/code/graph/BackToGraph";
 import { isGraphBackKey, type GraphOrigin } from "../../../features/code/graph/graphOrigin";
 import { clearGraphBack, currentGraphBack, setGraphBack, watchGraphBack } from "../../shell/graphBack";
+import { RemoteSeatCode } from "./RemoteSeatCode";
 
 const FileEditor = lazy(() => import("./FileEditor"));
 
 const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
 const copy = (text: string) => { void navigator.clipboard?.writeText(text).catch(() => undefined); };
 
-export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
+export function CodeScreen(props: ScreenProps) {
+  return <CodeProject key={props.project} {...props} />;
+}
+
+function CodeProject(props: ScreenProps) {
+  const [intent, setIntent] = useState(() => takeOpenIntent(props.project));
+  useEffect(() => watchOpenIntent(props.project, () => setIntent(takeOpenIntent(props.project))), [props.project]);
+  if (intent?.kind === "source-control" && intent.seat && intent.machine) {
+    return <RemoteSeatCode key={`${intent.seat}:${intent.machine}`} {...props} seat={intent.seat} machine={intent.machine}
+      onCheckout={() => setIntent({ kind: "source-control" })} />;
+  }
+  return <LocalCodeScreen {...props} intent={intent} />;
+}
+
+function LocalCodeScreen({ client, project, onNavigate, intent }: ScreenProps & { intent?: OpenIntent }) {
   const [scope, setScope] = useState<string | null>(null);
   const { state, refresh } = useScopeGit(project, scope);
   const { seats, peers } = useSeats(client, project);
@@ -106,33 +121,28 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   // #13987/#14044 drill: the Workspace source control sidebar leaves a note here; take it once per project.
   const { open: openTab, activate: activateTab } = tabs;
   useEffect(() => {
-    const apply = () => {
-      const intent = takeOpenIntent(project);
-      if (!intent) return;
-      const seat = intent.seat ?? null;
-      setScope(seat);
-      setKey(null);
-      if (intent.kind === "file") {
-        const id = `file:${seat ?? ""}:${intent.path}`;
-        openTab({ id, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
-        if (intent.line) setReveal({ tab: id, line: intent.line, column: intent.col, nonce: Date.now() });
-        // #14495: a graph origin rides the intent; any other file open retires it, the classic AppShell rule.
-        if (intent.fromGraph) setGraphBack({ project, path: intent.path });
-        else clearGraphBack();
-      } else if (intent.kind === "folder") {
-        revealFolder(project, seat, intent.path);
-        setExplorerShown(n => n + 1);
-        setSide("explorer");
-        setOverride(true);
-      } else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
-      else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
-      // the seat comes from the intent, not from `scope`, which this render has not seen change yet
-      else if (intent.kind === "conflict") { setConflictPath(intent.path); openTab({ id: "conflict", kind: "conflict", label: "Merge conflicts", scope: seat }); }
-      else activateTab("source");
-    };
-    apply();
-    return watchOpenIntent(project, apply);
-  }, [project, openTab, activateTab]);
+    if (!intent) return;
+    const seat = intent.seat ?? null;
+    setScope(seat);
+    setKey(null);
+    if (intent.kind === "file") {
+      const id = `file:${seat ?? ""}:${intent.path}`;
+      openTab({ id, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
+      if (intent.line) setReveal({ tab: id, line: intent.line, column: intent.col, nonce: Date.now() });
+      // #14495: a graph origin rides the intent; any other file open retires it, the classic AppShell rule.
+      if (intent.fromGraph) setGraphBack({ project, path: intent.path });
+      else clearGraphBack();
+    } else if (intent.kind === "folder") {
+      revealFolder(project, seat, intent.path);
+      setExplorerShown(n => n + 1);
+      setSide("explorer");
+      setOverride(true);
+    } else if (intent.kind === "change") { setChangeFocus(intent.path); setViewPick("changes"); activateTab("source"); setWantChange(intent.path); }
+    else if (intent.kind === "commit") { setKey(intent.sha); setViewPick("history"); activateTab("source"); }
+    // the seat comes from the intent, not from `scope`, which this render has not seen change yet
+    else if (intent.kind === "conflict") { setConflictPath(intent.path); openTab({ id: "conflict", kind: "conflict", label: "Merge conflicts", scope: seat }); }
+    else activateTab("source");
+  }, [project, intent, openTab, activateTab]);
   // #14084 drill: a file with no uncommitted change has no diff to land on, so its tab opens instead of an unrelated change.
   const [wantChange, setWantChange] = useState<string | null>(null);
   useEffect(() => {

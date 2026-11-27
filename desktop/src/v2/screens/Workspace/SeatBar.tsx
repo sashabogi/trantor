@@ -42,8 +42,8 @@ export function SeatBar({ project, seat, card, crew, tab, onTab, changed, onNavi
 }) {
   const branch = useBranch(project, seat);
   const name = seat.label;
-  // Open Code on THIS seat's worktree; the orchestrator and remote seats open the project checkout.
-  const openInCode = () => { setOpenIntent(project, { kind: "source-control", seat: worktreeAgent(seat) ?? undefined }); onNavigate("code"); };
+  // Remote seats keep their machine so Code reads their real worktree over SSH.
+  const openInCode = () => { setOpenIntent(project, { kind: "source-control", seat: seat.machine ? seat.agent : worktreeAgent(seat) ?? undefined, machine: seat.machine }); onNavigate("code"); };
   const items = seatMenuItems(seat, crew);
   return (
     <div className="shrink-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bg)]">

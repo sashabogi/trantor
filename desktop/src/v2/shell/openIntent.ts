@@ -6,7 +6,7 @@ export type OpenIntent =
   // #14495: fromGraph marks the file the Graph lens opened, so Code records the way back.
   | { kind: "file"; path: string; line?: number; col?: number; seat?: string; fromGraph?: boolean }
   | { kind: "folder"; path: string; seat?: string }
-  | { kind: "source-control"; seat?: string }
+  | { kind: "source-control"; seat?: string; machine?: string }
   | { kind: "change"; path: string; seat?: string }
   /** #14344: open the merge view on a conflicted file (the Workspace sidebar's Resolve). */
   | { kind: "conflict"; path: string; seat?: string }
