@@ -143,6 +143,18 @@ try {
   await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "identity-drill", version: "0" } });
   mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   await rpc("tools/call", { name: "relay_send", arguments: { to: "host:identity-drill", text: "identity proof" } });
+  for (const [text, wake, expected] of [
+    ["Contract #14520: fix threaded replies", undefined, "will wake the seat"],
+    ["Yes. contract: fix threaded replies", undefined, "will wake the seat"],
+    ["thanks, accepted", undefined, "batched as a reply, will not start a turn"],
+    ["Contract #14520: context only", false, "batched — no turn"],
+  ]) {
+    const args = { to: "host:identity-drill", text, re: 35695 };
+    if (wake === false) args.wake = wake;
+    const reply = await rpc("tools/call", { name: "relay_send", arguments: args });
+    ok(`threaded send reports delivery: ${text}`, reply.result?.content?.some(c => c.text?.includes(expected)), JSON.stringify(reply));
+    ok("thread id reaches the hub", sends.some(m => m.text === text && m.re === 35695));
+  }
   const seatSend = sends.find(message => message.text === "identity proof");
   ok("the hosted seat's MCP sends as qwen:identity-drill", seatSend?.from === "qwen:identity-drill", JSON.stringify(seatSend));
   ok("the same MCP registers under the qwen seat id",

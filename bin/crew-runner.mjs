@@ -31,7 +31,7 @@ import {
   cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, turnDelivered, budgetPause, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   ownCardForInstance, contractedCardIds,
-  shouldAlignForContract,
+  shouldAlignForContract, hasContractText,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
@@ -1498,7 +1498,7 @@ function isReceipt(message) {
   // contract riding `re` must wake. A reply is a receipt only when it threads an outcome THIS seat
   // sent and its own text carries no work (an ack/closure, #7079).
   if (!(Number(message?.re) > 0)) return false;
-  return sentOutcomes.has(Number(message.re)) && !carriesWork(text) && !isContract(message);
+  return sentOutcomes.has(Number(message.re)) && !carriesWork(text) && !isContract(message) && !hasContractText(text);
 }
 
 function isStatusBroadcast(message) {
@@ -1529,11 +1529,11 @@ function shouldWake(message) {
   // into the next turn's prompt like a broadcast and never buys a CLI session of its own.
   if (message?.wake === false) return false;
   if (message?.to === SESSION) {
-    // #7766: with wake unset or true the sender's flag IS the decision. No keyword, card or
-    // sender-shape heuristic on the body second-guesses a direct message any more, so a plain
-    // question buys its turn. kind:status stays chatter; what is still demoted tells the sender
-    // (see the demotion notice at the wake split).
+    // #14520: threaded contracts start work; ordinary replies only resume a held question.
     if (message?.kind === "status") return false;
+    if (Number(message.re) > 0 && !hasContractText(message.text) && message.kind !== "contract") {
+      return Boolean(awaitingAsk && (Number(message.re) === awaitingAsk.id || message.from === awaitingAsk.to));
+    }
     return true;
   }
   return message?.to === "all"
@@ -1802,7 +1802,7 @@ async function resolveWakeCard(messages, { session }) {
     // answering one would loop. What remains today is the expired hub alert.
     const demotedSenders = new Set();
     for (const m of rest) {
-      if (m.to !== SESSION || direct.includes(m) || m.wake === false || m.kind === "status") continue;
+      if (m.to !== SESSION || direct.includes(m) || m.wake === false || m.kind === "status" || Number(m.re) > 0) continue;
       const who = String(m.from || "");
       if (!who || who === SESSION || demotedSenders.has(who)) continue;
       demotedSenders.add(who);

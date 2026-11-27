@@ -1,9 +1,5 @@
 #!/usr/bin/env node
-// trantor wake-policy drill, sender-notice half (#7766, #7288) — the seat speaks back: a demoted
-// direct message TELLS its sender (silence read as a dead seat), and a threaded reply riding `re`
-// is a work order, never swallowed as a receipt. Hermetic: mock hub + fake CLI, REAL runner.
-// #9832 part 4: split out of test-wake-policy.mjs (it grew past the runner's per-suite cap); the
-// shared mock harness is test/lib/wake-mock.mjs.
+// Real runner with a mock hub: demotion notices, contract replies and silent acknowledgements.
 import { createWakeHarness } from "../lib/wake-mock.mjs";
 
 let pass = 0, fail = 0;
@@ -75,6 +71,20 @@ console.log("\n## threaded replies");
     `${r.wakeTurns.length} wake turn(s)`);
   ok("#7288: the ack was consumed as a receipt, not kept as context",
     r.wakeTurns.length === 2 && !r.wakeTurns[1].includes("nothing more owed"), r.wakeTurns[1]?.slice(0, 300));
+}
+
+// #14520: a contract can ride an answer to any message, not just a seat outcome.
+for (const text of ["Contract #14509: build B4", "Yes, use that base. Contract #14509: build B4", "Yes. contract: build B4"]) {
+  const r = await drill([{ text, re: 35695 }], { waitMs: 5000 });
+  ok(`threaded assignment wakes: ${text}`, r.wakeTurns.length === 1);
+}
+{
+  const r = await drill([{ text: "thanks, accepted", re: 35695 }], { waitMs: 5000 });
+  ok("plain threaded acknowledgement never starts a turn", r.wakeTurns.length === 0);
+}
+{
+  const r = await drill([{ text: "Contract #14509: context only", re: 35695, wake: false }], { waitMs: 5000 });
+  ok("explicit wake:false still batches a threaded contract", r.wakeTurns.length === 0);
 }
 
 close();

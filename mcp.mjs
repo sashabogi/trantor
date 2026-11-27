@@ -15,7 +15,7 @@ import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { formatInboxPage, fmtMessage } from "./hooks/lib/inbox-page.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
-import { isMessageCardTitle, OPEN_CARD_STATUSES, ownCardForInstance, contractedCardIds } from "./lib/turn-policy.mjs";
+import { isMessageCardTitle, OPEN_CARD_STATUSES, ownCardForInstance, contractedCardIds, hasContractText } from "./lib/turn-policy.mjs";
 import { markDoing, hollowVerdict, blastRadius, blastLine } from "./hooks/lib/hollow-move.mjs";
 import { createBrowserClient, BrowserError } from "./lib/browser-client.mjs";
 import { readFile } from "node:fs/promises";
@@ -520,7 +520,7 @@ server.tool("relay_peers", "Find who you can talk to: the live agent sessions on
 
 server.tool("relay_send", "Send a live message to another agent session (or 'all'). Message the agent yourself; never ask the human to relay. Ids: relay_peers. Cross-project sends are a breach unless the operator linked the projects (`trantor policy link <a> <b> --reason \"<why>\"`); the hub answers 403 for an unlinked project.",
   { to: z.string(), text: z.string(),
-    wake: z.boolean().optional().describe("false = context, not a contract: batches into the target's next turn. Unset or true, a direct message ALWAYS earns a turn whatever its text says, so set false on every ack, FYI and queue note."),
+    wake: z.boolean().optional().describe("false = context, not a contract: batches into the target's next turn. Unthreaded directs earn a turn; threaded replies earn a new turn when they contain Contract #<id> or contract:. Set false on every ack, FYI and queue note."),
     re: z.number().optional().describe("message id you are answering; set it on every reply. Without it the hub matches your reply to the peer's OLDEST outstanding contract, closing the wrong one.") },
   async ({ to, text, wake, re }) => {
     // The event log is append-only — a secret in it is unrecoverable, so refuse BEFORE
@@ -542,7 +542,11 @@ server.tool("relay_send", "Send a live message to another agent session (or 'all
       throw error;
     }
     const { id } = sent;
-    return { content: [{ type: "text", text: `sent #${id} to ${to}${wake === false ? " (batched — no turn)" : ""}` }] };
+    const delivery = wake === false ? " (batched — no turn)"
+      : Number(re) > 0 && to !== "all"
+        ? hasContractText(text) ? " (contract reply — will wake the seat)" : " (batched as a reply, will not start a turn; may resume a pending question)"
+        : "";
+    return { content: [{ type: "text", text: `sent #${id} to ${to}${delivery}` }] };
   });
 
 server.tool("relay_ask", "Ask a blocking question on your card without forfeiting the contract. Use it when the contract omits a fact you cannot proceed without; never invent the value. Sends a kind:ask to the card's assigner, blocks the card with your question as its note, and the answer resumes this session with the original contract re-attached. End your turn right after calling it.",
