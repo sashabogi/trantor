@@ -101,6 +101,64 @@ pub(crate) fn redirect_stderr_to_log() {
     }
 }
 
+/// launchd starts every GUI app with a soft open-file limit of 256. Trantor holds PTYs, sockets,
+/// WebKit stores and git children at once, and on 2026-11-27 a long-running app hit the cap: the
+/// terminal died with "spawn attach: dup of fd 222 failed", the seat catalog with "Too many open
+/// files (os error 24)", and the handoff could not even spawn `kill`. Raise the soft limit at
+/// startup to the most the hard limit allows, capped where macOS accepts it (Zed and VS Code do
+/// the same). Children inherit it, which is what a terminal shell expects.
+const OPEN_FILE_TARGET: u64 = 10240;
+
+pub(crate) fn open_file_soft_target(soft: u64, hard: u64) -> u64 {
+    soft.max(OPEN_FILE_TARGET.min(hard))
+}
+
+pub(crate) fn raise_open_file_limit() -> Option<(u64, u64)> {
+    let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit/setrlimit only read and write the struct we pass.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        eprintln!("open file limit: getrlimit failed: {}", std::io::Error::last_os_error());
+        return None;
+    }
+    let before = lim.rlim_cur as u64;
+    let target = open_file_soft_target(before, lim.rlim_max as u64);
+    if target == before {
+        return Some((before, before));
+    }
+    lim.rlim_cur = target as libc::rlim_t;
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } != 0 {
+        eprintln!("open file limit: setrlimit {before} -> {target} failed: {}", std::io::Error::last_os_error());
+        return Some((before, before));
+    }
+    eprintln!("open file limit raised {before} -> {target}");
+    Some((before, target))
+}
+
+#[cfg(test)]
+mod open_file_limit_tests {
+    use super::*;
+
+    #[test]
+    fn the_launchd_default_of_256_is_raised_to_the_target() {
+        assert_eq!(open_file_soft_target(256, u64::MAX), OPEN_FILE_TARGET);
+    }
+
+    #[test]
+    fn the_target_never_exceeds_the_hard_limit_or_lowers_a_higher_soft_limit() {
+        assert_eq!(open_file_soft_target(256, 1024), 1024);
+        assert_eq!(open_file_soft_target(65536, u64::MAX), 65536);
+    }
+
+    #[test]
+    fn raising_the_limit_leaves_the_process_at_or_above_the_target() {
+        let (_, after) = raise_open_file_limit().expect("getrlimit works");
+        let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) }, 0);
+        assert_eq!(lim.rlim_cur as u64, after);
+        assert!(after >= OPEN_FILE_TARGET.min(lim.rlim_max as u64), "soft limit {after}");
+    }
+}
+
 pub fn run() {
     identity_env::scrub_launch_identity();
     if std::env::var_os("TRANTOR_ENV_SCRUB_DRILL").is_some() {
@@ -111,6 +169,7 @@ pub fn run() {
         return;
     }
     redirect_stderr_to_log();
+    raise_open_file_limit();
     install_panic_hook();
     key_drill::install_objc_exception_reporter();
     key_drill::prepare();
