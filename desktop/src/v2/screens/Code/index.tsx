@@ -31,6 +31,9 @@ import { useCodeCommands } from "./useCodeCommands";
 import { branchMutationRefusal } from "./scopeGitApi";
 import { useShellMode } from "../../shell/shellMode";
 import { useTabs } from "./useTabs";
+import { BackToGraph } from "../../../features/code/graph/BackToGraph";
+import { isGraphBackKey, type GraphOrigin } from "../../../features/code/graph/graphOrigin";
+import { clearGraphBack, currentGraphBack, setGraphBack, watchGraphBack } from "../../shell/graphBack";
 
 const FileEditor = lazy(() => import("./FileEditor"));
 
@@ -65,6 +68,24 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
   const rows = useMemo(() => (snap?.log ?? []).map(c => toRow(c, rowCtx)), [snap, rowCtx]);
   const [historyRows, setHistoryRows] = useState<HistoryRow[]>(rows);
 
+  // #14495: the way back from a file the graph opened — classic #11603 over the shell's store.
+  const [graphOrigin, setGraphOrigin] = useState<GraphOrigin | null>(currentGraphBack);
+  useEffect(() => watchGraphBack(() => setGraphOrigin(currentGraphBack())), []);
+  const activePath = tabs.active.kind === "file" ? tabs.active.path ?? null : null;
+  const backToGraph = useCallback(() => { clearGraphBack(); onNavigate("graph"); }, [onNavigate]);
+  // Cmd+[ (browser-style back) leaves Code for the graph; a field being typed in keeps the key.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!graphOrigin || graphOrigin.project !== project) return;
+      if (!isGraphBackKey(e) || e.defaultPrevented) return;
+      if (e.target instanceof Element && e.target.closest("textarea, input, .monaco-editor")) return;
+      e.preventDefault();
+      backToGraph();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [graphOrigin, project, backToGraph]);
+
   const addToChat = useCallback((text: string) => { setDraft(d => (d.trim() ? `${d}\n${text}` : text)); setChatOpen(true); }, []);
   const mode = useShellMode();
   const branchRefusal = branchMutationRefusal(scope, mode) ?? (seats.find(seat => seat.seat === scope)?.presence === "working" ? `${scope} is working; change its worktree after the turn ends` : null);
@@ -95,6 +116,9 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
         const id = `file:${seat ?? ""}:${intent.path}`;
         openTab({ id, kind: "file", label: base(intent.path), scope: seat, path: intent.path });
         if (intent.line) setReveal({ tab: id, line: intent.line, column: intent.col, nonce: Date.now() });
+        // #14495: a graph origin rides the intent; any other file open retires it, the classic AppShell rule.
+        if (intent.fromGraph) setGraphBack({ project, path: intent.path });
+        else clearGraphBack();
       } else if (intent.kind === "folder") {
         revealFolder(project, seat, intent.path);
         setExplorerShown(n => n + 1);
@@ -158,6 +182,12 @@ export function CodeScreen({ client, project, onNavigate }: ScreenProps) {
           <TabBar tabs={tabs.tabs} activeId={tabs.activeId} sidebarFolded={!visible} dirty={tabs.dirty} confirmId={tabs.confirmId}
             onActivate={tabs.activate} onRequestClose={tabs.requestClose} onConfirmClose={tabs.confirmClose} onCancelClose={tabs.cancelClose}
             onShowSidebar={() => { setSide("source"); setOverride(true); }} onNew={() => { setSide("search"); setOverride(true); }} />
+          {/* #14495: the classic return chip, only while the open tab IS the file the graph opened. */}
+          {graphOrigin?.project === project && graphOrigin.path === activePath && (
+            <div className="flex shrink-0 items-center border-b border-[var(--v2-edge)] bg-[var(--v2-chrome)] px-3 py-1">
+              <BackToGraph origin={graphOrigin} project={project} activePath={activePath} onBack={backToGraph} />
+            </div>
+          )}
           {/* #14268: source control actions mean nothing above a file editor, so only the Source control tab mounts them. */}
           {tabs.active.kind === "source" && <Toolbar project={project} snap={snap} seats={seats} scope={scope} acts={picker} view={view} onView={setViewPick} onMutated={refresh} onError={setNotice} onOpenConflict={openConflict} />}
           {notice && <button type="button" role="alert" onClick={() => setNotice(null)} title="Dismiss" className="border-0 border-b border-[var(--v2-edge)] bg-[var(--v2-bad-soft)] px-4 py-1.5 text-left text-v2-body text-[var(--v2-bad)]">{notice}</button>}

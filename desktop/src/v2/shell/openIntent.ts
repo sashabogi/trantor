@@ -3,7 +3,8 @@
 // (#13987, #14044, #14327). Workspace sets it then navigates; Code takes it on mount, or at once
 // when it is already showing that project.
 export type OpenIntent =
-  | { kind: "file"; path: string; line?: number; col?: number; seat?: string }
+  // #14495: fromGraph marks the file the Graph lens opened, so Code records the way back.
+  | { kind: "file"; path: string; line?: number; col?: number; seat?: string; fromGraph?: boolean }
   | { kind: "folder"; path: string; seat?: string }
   | { kind: "source-control"; seat?: string }
   | { kind: "change"; path: string; seat?: string }
