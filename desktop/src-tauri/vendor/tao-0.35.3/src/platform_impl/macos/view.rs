@@ -294,6 +294,15 @@ extern "C" fn dealloc(this: &Object, _sel: Sel) {
     let marked_text: *mut NSMutableAttributedString = *this.get_ivar("markedText");
     let _: () = msg_send![marked_text, release];
     if !state.is_null() {
+      // AppKit keeps routing mouse moves to a view's tracking rect after the view is torn down:
+      // drop the rect first, then clear the ivar so a straggler event sees no state (2.1.20 crash)
+      let st = &mut *(state as *mut ViewState);
+      if let Some(tracking_rect) = st.tracking_rect.take() {
+        let _: () = msg_send![this, removeTrackingRect: tracking_rect];
+      }
+      if let Some(ivar) = this.class().instance_variable(c"taoState") {
+        *ivar.load_ptr::<*mut c_void>(this) = std::ptr::null_mut();
+      }
       drop(Box::from_raw(state as *mut ViewState));
     }
   }
