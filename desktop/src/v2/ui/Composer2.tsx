@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, Paperclip, Square } from "lucide-react";
 import { Avatar } from "./Avatar";
 import { IconButton } from "./IconButton";
@@ -6,11 +6,13 @@ import { Ring } from "./Ring";
 import { brandOfModel, modelHue, seatLabel } from "./identity";
 import { AttachmentRow } from "./AttachmentRow";
 import type { AttachmentsApi } from "./useAttachments";
-import { ChipMenu, ChoiceIcon, ChoiceRow, LevelPills, MenuHeading, type Choice } from "./ComposerMenu";
+import { ChipMenu, ChoiceIcon, ChoiceRow, LevelPills, MenuHeading, MenuPanel, type Choice } from "./ComposerMenu";
 
 export type { Choice } from "./ComposerMenu";
 
 export type Composer2Props = {
+  fileSearch?: (query: string) => Promise<string[]>;
+  onPickFile?: (path: string) => void;
   busy?: boolean;
   value: string;
   onChange: (value: string) => void;
@@ -191,6 +193,32 @@ export function Composer2(p: Composer2Props) {
     // A zero reading means no layout (tests, a hidden pane): the two rows stand.
     if (el.scrollHeight > 0) el.style.height = `${Math.min(el.scrollHeight, MAX_BOX_PX)}px`;
   }, [p.value]);
+  const [cursor, setCursor] = useState(p.value.length);
+  const [dismissed, setDismissed] = useState(false);
+  const [files, setFiles] = useState<string[]>([]);
+  const [pick, setPick] = useState(0);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const prefix = p.value.slice(0, cursor);
+  const match = /(?:^|\s)@([^\s]*)$/.exec(prefix);
+  const query = match && !dismissed ? match[1] : null;
+  useEffect(() => {
+    setFiles([]);
+    setFileError(null);
+    if (query === null || !p.fileSearch || !p.onPickFile) return;
+    let alive = true;
+    p.fileSearch(query).then(paths => {
+      if (alive) { setFiles(paths); setPick(0); }
+    }, () => { if (alive) setFileError("Could not search project files."); });
+    return () => { alive = false; };
+  }, [query, p.fileSearch, !!p.onPickFile]);
+  const acceptFile = (path: string) => {
+    const at = prefix.lastIndexOf("@");
+    p.onChange(p.value.slice(0, at) + p.value.slice(cursor));
+    p.onPickFile?.(path);
+    setDismissed(true);
+    setFiles([]);
+    box.current?.focus();
+  };
   const text = p.value.trim();
   const blocked = !!p.disabledReason;
   const att = p.attachments;
@@ -198,17 +226,35 @@ export function Composer2(p: Composer2Props) {
   const hasChips = !!att?.chips.length;
   const send = () => { if ((text || hasChips) && !blocked) p.onSend(text); };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
+    if (query !== null && p.fileSearch) {
+      if (e.key === "Escape") { e.preventDefault(); setDismissed(true); setFiles([]); return; }
+      if (files.length) {
+        if (e.key === "ArrowDown") { e.preventDefault(); setPick(n => (n + 1) % files.length); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); setPick(n => (n - 1 + files.length) % files.length); return; }
+        if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey) { e.preventDefault(); acceptFile(files[pick]); return; }
+      }
+    }
     // #14487: Esc stops the running turn the way the button does. The parent sets onStop only
     // while a turn runs with nothing to queue, so the key and the button are always ONE action.
     if (e.key === "Escape" && p.onStop) { e.preventDefault(); p.onStop(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
   };
   return (
-    <div ref={att?.rootRef} data-v2-composer className="v2-composer isolate flex min-w-0 flex-col gap-1.5 rounded-xl px-2.5 pt-2.5 pb-2">
+    <div ref={att?.rootRef} data-v2-composer
+      onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) { setDismissed(true); setFiles([]); } }}
+      className="v2-composer relative isolate flex min-w-0 flex-col gap-1.5 rounded-xl px-2.5 pt-2.5 pb-2">
       {p.busy && <span className="v2-composer-sweep" aria-hidden="true"><span className="v2-sweep" /></span>}
+      {files.length > 0 && <MenuPanel label="Project files">
+        {files.map((path, i) => <ChoiceRow key={path} choice={{ value: path, label: path }} current={pick === i}
+          onPick={() => acceptFile(path)} />)}
+      </MenuPanel>}
+      {fileError && <div role="status" className="text-v2-small text-[var(--v2-warn)]">{fileError}</div>}
       <label htmlFor={id} className="sr-only">{p.label}</label>
       <textarea id={id} ref={box} rows={2} value={p.value} placeholder={p.placeholder}
-        onChange={e => p.onChange(e.target.value)} onKeyDown={onKey} onPaste={att?.onPaste}
+        onChange={e => { setCursor(e.target.selectionStart); setDismissed(false); p.onChange(e.target.value); }}
+        onSelect={e => setCursor(e.currentTarget.selectionStart)}
+        onKeyDown={onKey} onPaste={att?.onPaste}
         className="v2-composer-field resize-none overflow-y-auto border-0 bg-transparent p-[2px] text-v2-base text-[var(--v2-text)] placeholder:text-[var(--v2-muted)]" />
       {att && <AttachmentRow chips={att.chips} onRemove={att.remove} />}
       {att?.error && <div role="status" className="text-v2-small text-[var(--v2-warn)]">{att.error}</div>}

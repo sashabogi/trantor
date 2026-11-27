@@ -367,3 +367,31 @@ describe("ComposerAdapter Mode menu × the version table", () => {
     expect(calls.filter(c => c.cmd === "pane_mode_set")).toEqual([]);
   });
 });
+
+it("searches this project's files and sends a selected path as an attachment (#14495)", async () => {
+  mockIPC((cmd, args) => {
+    calls.push({ cmd, args });
+    if (cmd === "search_files") return JSON.stringify(["/repo/src/example.ts"]);
+    if (cmd === "pane_mode_get") return { mode: "default", prompt_showing: false };
+    if (cmd === "pane_send") return { outcome: "delivered" };
+    return null;
+  });
+  await mount();
+  const ta = host.querySelector("textarea");
+  if (!ta) throw new Error("no textarea");
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+  await act(async () => {
+    setter?.call(ta, "Read @example");
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await flush();
+  expect(calls.find(c => c.cmd === "search_files")?.args).toEqual({ project: "trantor", query: "example", seat: null });
+  await act(async () => { ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true })); });
+  expect(ta.value).toBe("Read ");
+  expect(host.querySelector("[data-chip]")?.getAttribute("title")).toBe("/repo/src/example.ts");
+  expect(calls.filter(c => c.cmd === "pane_send")).toHaveLength(0);
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Send"]')?.click(); });
+  expect(calls.filter(c => c.cmd === "pane_send").map(c => c.args)).toEqual([
+    { target: "w4:p1", text: "/repo/src/example.ts Read" },
+  ]);
+});

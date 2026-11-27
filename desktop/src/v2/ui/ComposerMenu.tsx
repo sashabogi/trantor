@@ -52,10 +52,7 @@ export function ChipMenu({ label, title, group, className = "", chip, menuLabel,
         <ChevronDown size={10} aria-hidden className="ml-[3px] flex-none text-[var(--v2-muted)]" style={{ transform: open ? "rotate(180deg)" : undefined }} />
       </button>
       {open && (
-        <div role="menu" aria-label={menuLabel}
-          className="absolute bottom-[calc(100%+8px)] left-0 z-50 max-h-[60vh] w-[min(320px,100%)] overflow-y-auto rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1.5 shadow-[var(--v2-shadow-menu-up)]">
-          {children(() => setOpen(false))}
-        </div>
+        <MenuPanel label={menuLabel}>{children(() => setOpen(false))}</MenuPanel>
       )}
     </div>
   );
@@ -100,4 +97,13 @@ export function LevelPills({ label, choices, value, onPick }: {
       ))}
     </div>
   );
+}
+
+
+// Shared popup surface for chip choices and file suggestions.
+export function MenuPanel({ label, children }: { label: string; children: ReactNode }) {
+  return <div role="menu" aria-label={label}
+    className="absolute bottom-[calc(100%+8px)] left-0 z-50 max-h-[60vh] w-[min(320px,100%)] overflow-y-auto rounded-xl border border-[var(--v2-edge-2)] bg-[var(--v2-panel-2)] p-1.5 shadow-[var(--v2-shadow-menu-up)]">
+    {children}
+  </div>;
 }

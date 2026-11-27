@@ -13,6 +13,7 @@ export type AttachmentsApi = {
   chips: AttachmentChip[];
   /** The composer's root element: drops count only when they land inside it. */
   rootRef: RefObject<HTMLDivElement | null>;
+  addPath: (path: string) => void;
   remove: (id: string) => void;
   clear: () => void;
   /** Paperclip door: the picked image files become chips. */
@@ -86,6 +87,7 @@ export function useAttachments(): AttachmentsApi {
   const pick = (files: File[]) => saveAll(files.filter(f => f.type.startsWith("image/")));
 
   return {
+    addPath: path => attach([path], null),
     chips, rootRef, error, onPaste, pick, restore: next => setChips(next),
     remove: id => setChips(cs => removeChip(cs, id)),
     clear: () => setChips([]),

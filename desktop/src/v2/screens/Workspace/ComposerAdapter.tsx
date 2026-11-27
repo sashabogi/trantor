@@ -2,7 +2,7 @@
 // `deps.Composer` seam. It sends over the identical path: invoke("pane_send") with herdr's verdict (#13987).
 // #14488: words and chips live in the classic composerDraft slots — one per project, debounced to
 // composer_draft_set — so a draft survives a restart and never rides into another project.
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Composer } from "../../../features/chat/Composer";
 import { modelLabel } from "../../../features/chat/modelLabel";
@@ -14,6 +14,8 @@ import { useAttachments } from "../../ui/useAttachments";
 import { Composer2, type Choice } from "../../ui/Composer2";
 import { useAgentMode } from "./useAgentMode";
 import { featureRange, useAgentCliCompatibility } from "../../shell/agentCli";
+
+import { searchFiles } from "../../../features/code/fileApi";
 
 type ClassicProps = ComponentProps<typeof Composer>;
 
@@ -98,6 +100,7 @@ export function ComposerAdapter(p: ClassicProps) {
   // honest unavailable row; above it the closed-loop read stays the guard.
   const mode = useAgentMode(p.target, p.working, featureRange(useAgentCliCompatibility(), "Mode menu"));
   const attachments = useAttachments();
+  const fileSearch = useCallback((query: string) => searchFiles(p.project, query), [p.project]);
   const blockedQuestion = p.blockedAsk?.questions[0]?.question ?? null;
   const disabledReason = !p.live ? p.liveWhy : !p.target ? "There is no pane to send to" : null;
   // Chips are born in the attachments hook (drop, paste, pick); the draft mirrors them so the slot
@@ -190,7 +193,7 @@ export function ComposerAdapter(p: ClassicProps) {
     <div className="v2-composer-gutter">
       <div className="v2-composer-float flex flex-col gap-1.5">
         {shown && <div role="status" className="text-v2-body text-[var(--v2-warn)]">{shown}</div>}
-        <Composer2 busy={p.working} value={value} onChange={v => { setCurrent(c => ({ ...c, text: v })); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
+        <Composer2 fileSearch={fileSearch} onPickFile={attachments.addPath} busy={p.working} value={value} onChange={v => { setCurrent(c => ({ ...c, text: v })); if (note) setNote(null); mode.clearError(); }} onSend={send} {...modeProps}
           permissionHeading={PERMISSION_HEADING}
           label="Message the orchestrator" placeholder="Message the orchestrator (⇧⏎ new line)"
           agent="orchestrator" model={{ id: p.model || "unknown", label: shownModel(p.model) }}

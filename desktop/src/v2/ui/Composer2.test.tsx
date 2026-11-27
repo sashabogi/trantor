@@ -251,3 +251,61 @@ describe("Composer2", () => {
     expect(send?.title).toBe("Seat is offline");
   });
 });
+
+describe("project file autocomplete (#14495)", () => {
+  it.each(["Enter", "Tab"])("picks a file with %s without sending, preserving surrounding words", async key => {
+    const onSend = vi.fn();
+    const onPickFile = vi.fn();
+    const fileSearch = vi.fn().mockResolvedValue(["src/alpha.ts", "src/beta.ts"]);
+    act(() => root.render(<Harness onSend={onSend} extra={{ fileSearch, onPickFile }} />));
+    const ta = type("Read @src");
+    await act(async () => {});
+    expect(fileSearch).toHaveBeenLastCalledWith("src");
+    expect(q('[aria-label="Project files"]')).not.toBeNull();
+    act(() => { ta.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    act(() => { ta.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true })); });
+    expect(onPickFile).toHaveBeenCalledWith("src/beta.ts");
+    expect(ta.value).toBe("Read ");
+    expect(onSend).not.toHaveBeenCalled();
+    expect(q('[aria-label="Project files"]')).toBeNull();
+  });
+
+  it("Escape dismisses pending results without stopping the turn", async () => {
+    let resolve: (paths: string[]) => void = () => {};
+    const fileSearch = () => new Promise<string[]>(r => { resolve = r; });
+    const onStop = vi.fn();
+    act(() => root.render(<Harness onSend={() => {}} extra={{ fileSearch, onPickFile: () => {}, onStop }} />));
+    const ta = type("@src");
+    act(() => { ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await act(async () => { resolve(["src/a.ts"]); });
+    expect(q('[aria-label="Project files"]')).toBeNull();
+    expect(ta.value).toBe("@src");
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it("ignores stale searches and allows a mouse selection", async () => {
+    const pending = new Map<string, (paths: string[]) => void>();
+    const fileSearch = (query: string) => new Promise<string[]>(resolve => { pending.set(query, resolve); });
+    const onPickFile = vi.fn();
+    act(() => root.render(<Harness onSend={() => {}} extra={{ fileSearch, onPickFile }} />));
+    type("@old");
+    const ta = type("@new");
+    await act(async () => { pending.get("new")?.(["new.ts"]); });
+    await act(async () => { pending.get("old")?.(["old.ts"]); });
+    expect(q('[aria-label="Project files"]')?.textContent).toBe("new.ts");
+    act(() => { q('[aria-label="Project files"] button')?.click(); });
+    expect(onPickFile).toHaveBeenCalledWith("new.ts");
+    expect(ta.value).toBe("");
+  });
+
+  it("reports a failed search and leaves normal prose alone", async () => {
+    const fileSearch = vi.fn().mockRejectedValue(new Error("offline"));
+    act(() => root.render(<Harness onSend={() => {}} extra={{ fileSearch, onPickFile: () => {} }} />));
+    type("name@example.com");
+    await act(async () => {});
+    expect(fileSearch).not.toHaveBeenCalled();
+    type("@src");
+    await act(async () => {});
+    expect(q('[role="status"]')?.textContent).toBe("Could not search project files.");
+  });
+});
