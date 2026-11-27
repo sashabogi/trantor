@@ -216,6 +216,7 @@ for (const spec of [
   { name: "explicit testing consumes same card", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4242 testing", expected: 0 },
   { name: "explicit done consumes same card", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4242: done", expected: 0 },
   { name: "other card completion leaves contract owed", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4243 done", expected: 1 },
+  { name: "future completion stays owed", probe: "Contract #4242: DEDUPE-PROBE", outcome: "I will mark #4242 done next", expected: 1 },
   { name: "deferred card stays owed", probe: "Contract #4242: DEDUPE-PROBE", outcome: "#4242 remains context for a later turn", expected: 1 },
 ]) {
   const r = await drill({ ...spec, sessionRead: true, waitMs: 2200 });
