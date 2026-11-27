@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { HubClient } from "../../../shared/api/client";
 import { setOpenIntent, takeOpenIntent } from "../../shell/openIntent";
+import { clearGraphBack, currentGraphBack } from "../../shell/graphBack";
 import { expandedKey } from "../../ui/useExplorerData";
 import { CodeScreen } from "./index";
 
@@ -147,5 +148,50 @@ describe("open intent", () => {
   it("without an intent the screen opens on Source control as before", async () => {
     await mount();
     expect(activeTab()).toContain("Source control");
+  });
+});
+
+// #14495: the file the Graph lens opened carries the way back — the classic BackToGraph chip,
+// Cmd+[, and retirement when a file is opened by anything else.
+describe("graph origin", () => {
+  afterEach(() => { clearGraphBack(); });
+
+  const mountWith = async (onNavigate: (s: string) => void) => {
+    await act(async () => { root.render(<CodeScreen client={client} project="trantor" onNavigate={onNavigate} />); });
+    await flush(); await flush();
+  };
+
+  it("a fromGraph file intent opens the file and offers the chip, which returns to the graph", async () => {
+    setOpenIntent("trantor", { kind: "file", path: "src/a.ts", fromGraph: true });
+    const gone: string[] = [];
+    await mountWith(s => gone.push(s));
+    expect(activeTab()).toContain("a.ts");
+    const chip = host.querySelector<HTMLElement>('[data-testid="back-to-graph"]');
+    expect(chip).not.toBeNull();
+    await act(async () => { chip?.click(); });
+    expect(gone).toEqual(["graph"]);
+    expect(currentGraphBack()).toBeNull();
+    expect(host.querySelector('[data-testid="back-to-graph"]')).toBeNull();
+  });
+
+  it("Cmd+[ returns from Code the way the classic shell's key did", async () => {
+    setOpenIntent("trantor", { kind: "file", path: "src/a.ts", fromGraph: true });
+    const gone: string[] = [];
+    await mountWith(s => gone.push(s));
+    expect(host.querySelector('[data-testid="back-to-graph"]')).not.toBeNull();
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "[", metaKey: true, cancelable: true })); });
+    expect(gone).toEqual(["graph"]);
+    expect(currentGraphBack()).toBeNull();
+  });
+
+  it("a file intent that did not come from the graph retires the way back", async () => {
+    setOpenIntent("trantor", { kind: "file", path: "src/a.ts", fromGraph: true });
+    await mountWith(() => undefined);
+    expect(currentGraphBack()).toEqual({ project: "trantor", path: "src/a.ts" });
+    setOpenIntent("trantor", { kind: "file", path: "bin/a.mjs" });
+    await mountWith(() => undefined);
+    expect(activeTab()).toContain("a.mjs");
+    expect(currentGraphBack()).toBeNull();
+    expect(host.querySelector('[data-testid="back-to-graph"]')).toBeNull();
   });
 });

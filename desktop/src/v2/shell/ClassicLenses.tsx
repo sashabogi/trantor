@@ -13,6 +13,8 @@ import { ProjectTile } from "../ui/ProjectTile";
 import { IconButton } from "../ui/IconButton";
 import type { LensScreen, Navigate } from "../routes";
 import { landingLens } from "./shellMode";
+import { setOpenIntent } from "./openIntent";
+import { setGraphBack } from "./graphBack";
 
 export type ClassicLensProps = { client: HubClient; project: string; me: string; lens: Exclude<LensScreen, "workspace" | "code" | "board">; onNavigate: Navigate };
 
@@ -26,7 +28,10 @@ function ClassicLensBody({ client, project, me, lens, onNavigate }: ClassicLensP
   const [seat, setSeat] = useState<string | null>(null);
   const onLens = (l: Lens) => onNavigate(l);
   if (lens === "graph") {
-    return <GraphLens client={client} project={project} lens="graph" onLens={onLens} seat={seat} onSeat={setSeat} onOpenFile={() => onNavigate("code")} />;
+    // #14495: the file the graph opens lands in Code on its own tab, with the origin recorded so
+    // Code can offer the classic "back to graph" return.
+    return <GraphLens client={client} project={project} lens="graph" onLens={onLens} seat={seat} onSeat={setSeat}
+      onOpenFile={p => { setOpenIntent(project, { kind: "file", path: p, fromGraph: true }); setGraphBack({ project, path: p }); onNavigate("code"); }} />;
   }
   if (lens === "feed") return <Feed client={client} project={project} lens="feed" onLens={onLens} />;
   // The Bus lens: it needs the signed identity before the conversation can be read.
