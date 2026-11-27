@@ -35,10 +35,10 @@ pub(crate) fn arm(app: &AppHandle) {
         while rx.recv().is_ok() {
             // Each arriving ping resets the quiet window; a burst is one save at its end.
             while rx.recv_timeout(SAVE_DEBOUNCE).is_ok() {}
-            let app = app.clone();
+            let saver = app.clone();
             let _ = app.run_on_main_thread(move || {
                 // A failed write is dropped the way the plugin drops its own exit write.
-                let _ = app.save_window_state(tauri_plugin_window_state::StateFlags::all());
+                let _ = saver.save_window_state(tauri_plugin_window_state::StateFlags::all());
             });
         }
     });
