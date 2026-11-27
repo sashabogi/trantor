@@ -29,6 +29,12 @@ impl<T: Serialize + DeserializeOwned + Clone + Default> Store<T> {
         self.save();
     }
 
+    pub fn remove(&mut self, project: &str) {
+        if self.data.remove(project).is_some() {
+            self.save();
+        }
+    }
+
     fn save(&self) {
         let Some(path) = &self.path else { return };
         if let Some(dir) = path.parent() {

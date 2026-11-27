@@ -1063,3 +1063,157 @@ fn a_new_page_made_while_the_tab_is_hidden_reveals_it_and_shows_when_the_tab_doe
     r.core.set_visible("p", true).expect("tab shown");
     assert_eq!(r.fake.last("visible p pg1").as_deref(), Some("visible p pg1 true"));
 }
+
+// ---- pages survive a relaunch (#14522) ---------------------------------------------------------
+
+/// A rig whose stores live in `dir`, so a second rig on the same dir is a relaunch.
+fn rig_on(dir: &std::path::Path) -> Rig {
+    let bus = dir.join("bus");
+    let fake = Arc::new(Fake::default());
+    let rec = Arc::new(Rec::default());
+    let mut cfg = CoreConfig::new(bus.clone());
+    cfg.data_dir = Some(dir.join("data"));
+    cfg.linger = Duration::from_millis(40);
+    cfg.load_timeout = Duration::from_secs(3);
+    cfg.settle = Duration::from_millis(60);
+    let core = BrowserCore::new(fake.clone(), rec.clone(), HostRules::in_memory(), FrameStore::in_memory(), cfg);
+    Rig { core, fake, rec, bus }
+}
+
+fn tmp(name: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!("trantor-restore-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+fn saved(dir: &std::path::Path, project: &str) -> SavedPages {
+    Store::<SavedPages>::load(dir.join("data").join("pages.json")).get(project)
+}
+
+fn opens(r: &Rig) -> usize {
+    r.fake.calls().iter().filter(|c| c.starts_with("open ")).count()
+}
+
+/// Two pages, the first selected, then a "relaunch".
+fn relaunched(name: &str) -> (PathBuf, Rig) {
+    let dir = tmp(name);
+    let a = rig_on(&dir);
+    a.core.create_page("p", Some("http://localhost:3000/a"), false, true).expect("a");
+    a.core.create_page("p", Some("http://localhost:3000/b"), false, true).expect("b");
+    a.core.select_page("p", "pg1").expect("select");
+    drop(a);
+    let b = rig_on(&dir);
+    (dir, b)
+}
+
+#[test]
+fn the_page_list_is_saved_on_new_select_and_close() {
+    let dir = tmp("save");
+    let r = rig_on(&dir);
+    r.core.create_page("p", Some("http://localhost:3000/a"), false, true).expect("a");
+    assert_eq!(saved(&dir, "p").pages.len(), 1);
+    r.core.create_page("p", Some("http://localhost:3000/b"), false, true).expect("b");
+    let s = saved(&dir, "p");
+    assert_eq!((s.pages.len(), s.active), (2, 1));
+    r.core.select_page("p", "pg1").expect("select");
+    assert_eq!(saved(&dir, "p").active, 0);
+    r.core.close_page("p", "pg1").expect("close");
+    let s = saved(&dir, "p");
+    assert_eq!((s.pages.iter().map(|p| p.url.as_str()).collect::<Vec<_>>(), s.active), (vec!["http://localhost:3000/b"], 0));
+}
+
+#[test]
+fn a_relaunch_lists_the_saved_pages_without_creating_webviews() {
+    let (_dir, b) = relaunched("list");
+    let st = b.core.state("p");
+    assert_eq!(st.pages.len(), 2);
+    assert!(st.pages.iter().all(|p| p.restored && !p.loading));
+    assert_eq!((st.active_page.as_str(), st.url.as_str()), ("pg1", "http://localhost:3000/a"));
+    assert_eq!(opens(&b), 0);
+    // listing over the socket and answering state do not create them either
+    assert_eq!(b.core.handle_request(&req("pages", json!({})))["pages"].as_array().map(Vec::len), Some(2));
+    b.core.handle_request(&req("state", json!({})));
+    b.core.set_visible("p", true).expect("visible");
+    b.core.set_rect("p", R).expect("rect");
+    assert_eq!(opens(&b), 0);
+}
+
+#[test]
+fn opening_the_tab_creates_the_saved_pages_active_first_rest_hidden() {
+    let (_dir, b) = relaunched("open");
+    let st = b.core.open("p", None, R).expect("open");
+    let calls: Vec<String> = b.fake.calls().into_iter().filter(|c| c.starts_with("open ")).collect();
+    assert_eq!(calls.len(), 2);
+    assert!(calls[0].contains(" pg1 http://localhost:3000/a "), "{calls:?}");
+    // created hidden, then the tab's visibility shows the active one only
+    assert_eq!(b.fake.last("visible p pg1").as_deref(), Some("visible p pg1 true"));
+    assert!(b.fake.last("visible p pg2").is_none());
+    assert!(calls[1].contains(" pg2 http://localhost:3000/b ") && calls[1].contains("visible=false"), "{calls:?}");
+    assert!(st.pages.iter().all(|p| !p.restored));
+    assert_eq!(st.active_page, "pg1");
+    // a second open creates nothing more
+    b.core.open("p", None, R).expect("again");
+    assert_eq!(opens(&b), 2);
+}
+
+#[test]
+fn the_first_agent_op_creates_the_saved_pages_and_reveals_the_tab() {
+    let (_dir, b) = relaunched("agent");
+    set_eval(&b, |_| r#"{"ok":true}"#.to_string());
+    let v = b.core.handle_request(&req("scroll", json!({ "dy": 10 })));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(opens(&b), 2);
+    assert!(b.fake.calls().iter().any(|c| c.starts_with("open p pg1 ")), "the active page is first");
+    assert_eq!(*lock(&b.rec.reveals), vec!["p".to_string()]);
+}
+
+#[test]
+fn a_new_page_after_a_relaunch_brings_the_saved_ones_too() {
+    let (dir, b) = relaunched("newpage");
+    b.core.create_page("p", Some("http://localhost:3000/c"), false, true).expect("c");
+    assert_eq!(opens(&b), 3);
+    assert_eq!(saved(&dir, "p").pages.len(), 3);
+}
+
+#[test]
+fn closing_an_unloaded_page_needs_no_webview() {
+    let (dir, b) = relaunched("closeunloaded");
+    b.core.close_page("p", "pg2").expect("close");
+    assert_eq!((opens(&b), b.fake.last("close_page").is_none()), (0, true));
+    assert_eq!(saved(&dir, "p").pages.len(), 1);
+}
+
+#[test]
+fn popups_and_blank_pages_are_not_saved() {
+    let dir = tmp("popup");
+    let r = rig_on(&dir);
+    r.core.create_page("p", Some("http://localhost:3000/a"), false, true).expect("a");
+    r.core.create_page("p", Some("http://localhost:3000/signin"), true, false).expect("popup");
+    r.core.create_page("p", None, false, true).expect("blank");
+    let s = saved(&dir, "p");
+    assert_eq!(s.pages.iter().map(|p| p.url.as_str()).collect::<Vec<_>>(), vec!["http://localhost:3000/a"]);
+    // a hand-edited file with a blank url drops that entry on load
+    let file = dir.join("data").join("pages.json");
+    std::fs::write(&file, r#"{"p":{"pages":[{"url":"","title":"x"},{"url":"http://localhost:3000/z","title":"Z"}],"active":1}}"#).expect("write");
+    let b = rig_on(&dir);
+    let st = b.core.state("p");
+    assert_eq!(st.pages.len(), 1);
+    assert_eq!(st.url, "http://localhost:3000/z");
+}
+
+#[test]
+fn closing_the_last_page_clears_the_saved_list() {
+    let dir = tmp("last");
+    let r = rig_on(&dir);
+    r.core.create_page("p", Some("http://localhost:3000/a"), false, true).expect("a");
+    r.core.create_page("p", Some("http://localhost:3000/b"), false, true).expect("b");
+    r.core.close_page("p", "pg2").expect("close b");
+    assert_eq!(saved(&dir, "p").pages.len(), 1);
+    r.core.close_page("p", "pg1").expect("close a");
+    assert_eq!(saved(&dir, "p"), SavedPages::default());
+    assert!(rig_on(&dir).core.state("p").pages.is_empty());
+    // closing the whole browser clears it too
+    r.core.create_page("p", Some("http://localhost:3000/c"), false, true).expect("c");
+    r.core.close("p").expect("close");
+    assert!(saved(&dir, "p").pages.is_empty());
+}

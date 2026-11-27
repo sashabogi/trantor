@@ -23,7 +23,7 @@ export type BrowserState = {
 };
 
 /** One page of the strip (BrowserState.pages): url is "" while a page sits on nothing. */
-export type BrowserPage = { id: string; url: string; title: string; loading: boolean; driver: BrowserDriver | null };
+export type BrowserPage = { id: string; url: string; title: string; loading: boolean; driver: BrowserDriver | null; restored?: boolean };
 
 /** The contract's Device { name, w, h, mobile }; emulation letterboxes the page at this size. */
 export type BrowserDevice = { name: string; w: number; h: number; mobile: boolean };

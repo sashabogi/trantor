@@ -112,7 +112,13 @@ fn drill(app: &AppHandle<Wry>, core: Arc<BrowserCore>) {
         let idle = core.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(3));
-            let _ = idle.open(&project, None, Rect { x: 40.0, y: 80.0, w: 900.0, h: 600.0 });
+            let rect = Rect { x: 40.0, y: 80.0, w: 900.0, h: 600.0 };
+            if idle.state(&project).pages.iter().any(|p| p.restored) {
+                // restored pages stay unloaded until an agent op or the tab needs them
+                let _ = idle.set_rect(&project, rect);
+            } else {
+                let _ = idle.open(&project, None, rect);
+            }
             drill_commands(&idle, &project);
         });
         return;

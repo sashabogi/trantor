@@ -38,6 +38,9 @@ pub struct PageState {
     pub title: String,
     pub loading: bool,
     pub driver: Option<Driver>,
+    /// Remembered from the last run and not yet loaded: no webview exists until the tab opens or an agent uses it.
+    #[serde(default)]
+    pub restored: bool,
 }
 
 /// The top-level url, title, loading, driver and history flags describe the active page.

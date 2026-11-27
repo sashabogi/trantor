@@ -77,9 +77,25 @@ impl Default for Prefs {
     }
 }
 
+/// The pages of one project that survive a relaunch (popups are left out).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SavedPages {
+    pub pages: Vec<SavedPage>,
+    pub active: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SavedPage {
+    pub url: String,
+    pub title: String,
+}
+
 #[derive(Clone)]
 struct PageRec {
     st: PageState,
+    /// Saved from a past run: listed in the state but no webview yet.
+    restored: bool,
     can_back: bool,
     can_forward: bool,
     popup: bool,
@@ -107,7 +123,7 @@ struct Proj {
 }
 
 impl Proj {
-    fn new(project: &str, prefs: Prefs) -> Self {
+    fn new(project: &str, prefs: Prefs, saved: SavedPages) -> Self {
         let mut p = Proj {
             state: BrowserState { project: project.to_string(), ..Default::default() },
             pages: Vec::new(),
@@ -118,8 +134,25 @@ impl Proj {
             steps: Vec::new(),
             next_page: 0,
         };
+        for s in saved.pages.iter().filter(|s| real_url(&s.url)) {
+            p.next_page += 1;
+            let mut rec = PageRec::blank(&format!("pg{}", p.next_page));
+            rec.restored = true;
+            rec.st.url = s.url.clone();
+            rec.st.title = s.title.clone();
+            rec.st.restored = true;
+            p.pages.push(rec);
+        }
+        p.active = p.pages.get(saved.active).or(p.pages.first()).map(|r| r.st.id.clone()).unwrap_or_default();
         p.sync();
         p
+    }
+
+    /// What survives a relaunch: real, non-popup pages and the active one's place among them.
+    fn saved(&self, prior_active: usize) -> SavedPages {
+        let keep: Vec<&PageRec> = self.pages.iter().filter(|r| !r.popup && real_url(&r.st.url)).collect();
+        let active = keep.iter().position(|r| r.st.id == self.active).unwrap_or(prior_active.min(keep.len().saturating_sub(1)));
+        SavedPages { pages: keep.iter().map(|r| SavedPage { url: r.st.url.clone(), title: r.st.title.clone() }).collect(), active }
     }
 
     /// Rebuilds the published state: the page list, and the top-level fields from the active page.
@@ -166,7 +199,7 @@ impl Proj {
 
     /// Whether a page should be on screen now.
     fn wants_shown(&self, rec: &PageRec) -> bool {
-        rec.st.id == self.active && !rec.st.url.is_empty() && (self.visible || self.state.popped_out)
+        rec.st.id == self.active && !rec.restored && !rec.st.url.is_empty() && (self.visible || self.state.popped_out)
     }
 }
 
@@ -174,6 +207,7 @@ impl PageRec {
     fn blank(id: &str) -> Self {
         PageRec {
             st: PageState { id: id.to_string(), ..Default::default() },
+            restored: false,
             can_back: false,
             can_forward: false,
             popup: false,
@@ -197,6 +231,7 @@ pub struct BrowserCore {
     hosts: Mutex<HostRules>,
     frames: Mutex<FrameStore>,
     prefs: Mutex<Store<Prefs>>,
+    saved: Mutex<Store<SavedPages>>,
     history: Mutex<Store<Vec<HistoryEntry>>>,
     favorites: Mutex<Store<Vec<Favorite>>>,
     projects: Mutex<HashMap<String, Proj>>,
@@ -308,9 +343,9 @@ fn observe(rec: &mut PageRec, ev: &BackendEvent, settle: Duration, now: Instant)
 
 impl BrowserCore {
     pub fn new(backend: Arc<dyn Backend>, emitter: Arc<dyn Emitter>, hosts: HostRules, frames: FrameStore, cfg: CoreConfig) -> Arc<Self> {
-        let (prefs, history, favorites) = match &cfg.data_dir {
-            Some(d) => (Store::load(d.join("prefs.json")), Store::load(d.join("history.json")), Store::load(d.join("favorites.json"))),
-            None => (Store::in_memory(), Store::in_memory(), Store::in_memory()),
+        let (prefs, history, favorites, saved) = match &cfg.data_dir {
+            Some(d) => (Store::load(d.join("prefs.json")), Store::load(d.join("history.json")), Store::load(d.join("favorites.json")), Store::load(d.join("pages.json"))),
+            None => (Store::in_memory(), Store::in_memory(), Store::in_memory(), Store::in_memory()),
         };
         let core = Arc::new_cyclic(|me| BrowserCore {
             backend: backend.clone(),
@@ -318,6 +353,7 @@ impl BrowserCore {
             hosts: Mutex::new(hosts),
             frames: Mutex::new(frames),
             prefs: Mutex::new(prefs),
+            saved: Mutex::new(saved),
             history: Mutex::new(history),
             favorites: Mutex::new(favorites),
             projects: Mutex::new(HashMap::new()),
@@ -344,7 +380,27 @@ impl BrowserCore {
 
     /// The project's record, created from its saved prefs on first touch.
     fn entry<'a>(&self, g: &'a mut HashMap<String, Proj>, project: &str) -> &'a mut Proj {
-        g.entry(project.to_string()).or_insert_with(|| Proj::new(project, lock(&self.prefs).get(project)))
+        g.entry(project.to_string()).or_insert_with(|| self.fresh(project))
+    }
+
+    /// A project record from its saved prefs and saved pages (the pages come back unloaded).
+    fn fresh(&self, project: &str) -> Proj {
+        Proj::new(project, lock(&self.prefs).get(project), lock(&self.saved).get(project))
+    }
+
+    /// Writes the project's page list when it differs from what is on disk.
+    fn persist(&self, project: &str, p: &Proj) {
+        let mut s = lock(&self.saved);
+        let prior = s.get(project);
+        let now = p.saved(prior.active);
+        if now == prior {
+            return;
+        }
+        if now.pages.is_empty() {
+            s.remove(project);
+        } else {
+            s.set(project, now);
+        }
     }
 
     /// Applies a change to one project, then wakes waiters and emits the new state.
@@ -355,6 +411,7 @@ impl BrowserCore {
             let p = self.entry(&mut g, project);
             f(p);
             p.sync();
+            self.persist(project, p);
             self.emitter.state(&p.state);
             p.state.clone()
         };
@@ -375,7 +432,7 @@ impl BrowserCore {
     }
 
     pub fn state(&self, project: &str) -> BrowserState {
-        self.peek(project, |p| p.state.clone()).unwrap_or_else(|| Proj::new(project, lock(&self.prefs).get(project)).state)
+        self.peek(project, |p| p.state.clone()).unwrap_or_else(|| self.fresh(project).state)
     }
 
     pub fn steps(&self, project: &str) -> Vec<Step> {
@@ -384,6 +441,14 @@ impl BrowserCore {
 
     /// The page an op or command means: the one named, else the active one.
     fn resolve_page(&self, project: &str, page: Option<&str>) -> BrowserResult<String> {
+        self.ensure_live(project, true)?;
+        self.find_page(project, page)
+    }
+
+    fn find_page(&self, project: &str, page: Option<&str>) -> BrowserResult<String> {
+        if !lock(&self.projects).contains_key(project) && !lock(&self.saved).get(project).pages.is_empty() {
+            self.update_quiet(project, |_| {});
+        }
         self.peek(project, |p| match page {
             Some(id) => p.page(id).map(|r| r.st.id.clone()).ok_or_else(|| BrowserError::new("not_found", format!("no page {id} in this project's browser"))),
             None if p.page(&p.active).is_some() => Ok(p.active.clone()),
@@ -576,10 +641,79 @@ impl BrowserCore {
 
     // ---- pages -------------------------------------------------------------------------------
 
+    /// Creates the webviews of pages restored from the last run (the active one first, the rest
+    /// hidden) and loads their saved urls. A no-op once none are left. `reveal` brings the tab
+    /// forward when an agent, not the tab, caused it.
+    fn ensure_live(&self, project: &str, reveal: bool) -> BrowserResult<()> {
+        let (plan, needs_reveal): (Vec<(String, String, PageSpec)>, bool) = {
+            let mut g = lock(&self.projects);
+            let Some(p) = g.get_mut(project) else {
+                // an untouched project: hydrate it only if the disk holds pages for it
+                if lock(&self.saved).get(project).pages.is_empty() {
+                    return Ok(());
+                }
+                drop(g);
+                self.update_quiet(project, |_| {});
+                return self.ensure_live(project, reveal);
+            };
+            if !p.pages.iter().any(|r| r.restored) {
+                return Ok(());
+            }
+            let (rect, zoom) = p.geometry();
+            let ua = p.effective_ua();
+            let mut order: Vec<usize> = (0..p.pages.len()).collect();
+            order.sort_by_key(|i| p.pages[*i].st.id != p.active);
+            let mut plan = Vec::new();
+            let todo: Vec<usize> = order.into_iter().filter(|i| p.pages[*i].restored).collect();
+            for i in todo {
+                let shown = {
+                    let r = &p.pages[i];
+                    r.st.id == p.active && (p.visible || p.state.popped_out)
+                };
+                let r = &mut p.pages[i];
+                r.restored = false;
+                r.st.restored = false;
+                r.st.loading = true;
+                r.awaiting = Some(Instant::now());
+                r.applied_zoom = zoom;
+                r.applied_ua = ua.to_string();
+                if !p.state.popped_out {
+                    r.applied_rect = Some(rect);
+                }
+                r.shown = shown;
+                plan.push((r.st.id.clone(), r.st.url.clone(), PageSpec { rect, visible: shown, ua: device::ua_string(ua).to_string(), popup: false, zoom }));
+            }
+            p.sync();
+            (plan, reveal && !p.visible && !p.state.popped_out)
+        };
+        self.update(project, |_| {});
+        for (id, url, spec) in plan {
+            if let Err(e) = self.backend.open_page(project, &id, &url, spec) {
+                // keep the page listed and unloaded so a later try can load it
+                self.update(project, |p| {
+                    if let Some(r) = p.page_mut(&id) {
+                        r.restored = true;
+                        r.st.restored = true;
+                        r.st.loading = false;
+                        r.shown = false;
+                    }
+                });
+                return Err(e);
+            }
+        }
+        if needs_reveal {
+            self.emitter.reveal(project);
+        }
+        self.apply_visibility(project);
+        self.changed.notify_all();
+        Ok(())
+    }
+
     /// Makes a page and activates it. `user` is true for the operator's own actions (the tab is
     /// then on screen), false for agents and sites (the tab is brought forward when it is not).
     pub fn create_page(&self, project: &str, url: Option<&str>, popup: bool, user: bool) -> BrowserResult<String> {
         let url = url.map(normalize_url).transpose()?;
+        self.ensure_live(project, false)?;
         let (id, spec, needs_reveal) = {
             let mut g = lock(&self.projects);
             let p = self.entry(&mut g, project);
@@ -627,8 +761,9 @@ impl BrowserCore {
     }
 
     pub fn close_page(&self, project: &str, page: &str) -> BrowserResult<()> {
-        self.resolve_page(project, Some(page))?;
-        let frame = self.backend.close_page(project, page)?;
+        self.find_page(project, Some(page))?;
+        let unloaded = self.peek(project, |p| p.page(page).is_some_and(|r| r.restored)).unwrap_or(false);
+        let frame = if unloaded { None } else { self.backend.close_page(project, page)? };
         if let Some(frame) = frame {
             lock(&self.frames).set(project, frame);
         }
@@ -689,6 +824,7 @@ impl BrowserCore {
             let popped = p.state.popped_out;
             p.pages
                 .iter_mut()
+                .filter(|r| !r.restored)
                 .filter_map(|r| {
                     let rect = (!popped && r.applied_rect != Some(frame)).then(|| {
                         r.applied_rect = Some(frame);
@@ -719,7 +855,7 @@ impl BrowserCore {
             let mut g = lock(&self.projects);
             let Some(p) = g.get_mut(project) else { return Ok(()) };
             let ua = p.effective_ua();
-            let ids = p.pages.iter_mut().filter(|r| r.applied_ua != ua).map(|r| {
+            let ids = p.pages.iter_mut().filter(|r| !r.restored && r.applied_ua != ua).map(|r| {
                 r.applied_ua = ua.to_string();
                 r.st.id.clone()
             });
@@ -746,8 +882,9 @@ impl BrowserCore {
     pub fn open(&self, project: &str, url: Option<String>, rect: Rect) -> BrowserResult<BrowserState> {
         let rect = rect.sane();
         let url = url.as_deref().map(normalize_url).transpose()?;
-        let has_pages = self.peek(project, |p| !p.pages.is_empty()).unwrap_or(false);
         self.update_quiet(project, |p| p.rect = rect);
+        self.ensure_live(project, false)?;
+        let has_pages = self.peek(project, |p| !p.pages.is_empty()).unwrap_or(false);
         if has_pages {
             // a blank page stays hidden so the tab's "Nothing open" shows through
             let show = url.is_some() || !self.state(project).url.is_empty();
@@ -852,7 +989,7 @@ impl BrowserCore {
 
     pub fn close(&self, project: &str) -> BrowserResult<()> {
         lock(&self.hosts).end_visit(project);
-        if self.peek(project, |p| !p.pages.is_empty()).unwrap_or(false) {
+        if self.peek(project, |p| p.pages.iter().any(|r| !r.restored)).unwrap_or(false) {
             if let Some(frame) = self.backend.close(project)? {
                 lock(&self.frames).set(project, frame);
             }
@@ -940,7 +1077,7 @@ impl BrowserCore {
 
     pub fn clear_storage(&self, project: &str) -> BrowserResult<()> {
         self.backend.clear_storage(project)?;
-        let ids: Vec<String> = self.peek(project, |p| p.pages.iter().filter(|r| real_url(&r.st.url)).map(|r| r.st.id.clone()).collect()).unwrap_or_default();
+        let ids: Vec<String> = self.peek(project, |p| p.pages.iter().filter(|r| !r.restored && real_url(&r.st.url)).map(|r| r.st.id.clone()).collect()).unwrap_or_default();
         for id in ids {
             self.backend.run_script(project, &id, "location.reload()")?;
         }
