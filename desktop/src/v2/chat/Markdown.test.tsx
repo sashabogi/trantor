@@ -73,6 +73,30 @@ describe("Markdown blocks", () => {
     expect(first[1].className).not.toContain("v2-mono");
   });
 
+  it("keeps words whole in a narrow chat: label columns never wrap, prose columns keep a floor", async () => {
+    // the operator's crew plan table, which rendered one letter per line ("m/e/di/u/m") in the chat column
+    await md([
+      "| package | diff | executor (model) | pool | est $ | reason |",
+      "| --- | --- | --- | --- | --- | --- |",
+      "| Foundation: image tiles, schema contract, legend | medium | orchestrator | high-sub | — | architect-owned, the orchestrator keeps the shared contract in its own hands |",
+      "| Transcribe charts 38-48 to JSON | hard | deepseek | api | 0.97 | hard, strongest available coder; its api pool means real $ but cheapest capable |",
+    ].join("\n"));
+    const table = host.querySelector("table");
+    expect(table?.className).toContain("[overflow-wrap:normal]");
+    expect(table?.className).toContain("[word-break:normal]");
+    expect(table?.parentElement?.className).toContain("overflow-x-auto");
+    const heads = [...host.querySelectorAll("th")];
+    const cells = [...host.querySelectorAll("tbody tr:first-child td")];
+    for (const c of [1, 2, 3, 4]) {
+      expect(heads[c].className).toContain("whitespace-nowrap");
+      expect(cells[c].className).toContain("whitespace-nowrap");
+    }
+    for (const c of [0, 5]) {
+      expect(cells[c].className).toContain("min-w-[16ch]");
+      expect(cells[c].className).not.toContain("whitespace-nowrap");
+    }
+  });
+
   it("right-aligns a column of plain numbers without an explicit alignment", async () => {
     await md("a | b\n--- | ---\nx | 12\ny | 3.5%");
     const cells = [...host.querySelectorAll("tbody tr td:nth-child(2)")];

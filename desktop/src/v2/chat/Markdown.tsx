@@ -266,17 +266,25 @@ export function parseBlocks(text: string): MdBlock[] {
 // ---- render ------------------------------------------------------------------
 const NUMERIC = /^[-+]?[$€£]?[\d,]+(?:\.\d+)?%?$/;
 
+// a column whose every cell fits this many characters is a label column: it never wraps
+export const SHORT_CELL = 18;
+
 function Table({ block }: { block: Extract<MdBlock, { kind: "table" }> }) {
   const numeric = block.head.map((_, c) => block.rows.length > 0 && block.rows.every(r => NUMERIC.test(r[c] ?? "")));
+  // the chat column is narrow and the markdown root wraps anywhere, which made each cell's
+  // min width one letter ("m/e/di/u/m"). Words stay whole here; label columns never wrap, prose
+  // columns keep a readable floor, and a table wider than the column scrolls instead of collapsing.
+  const short = block.head.map((h, c) => [h, ...block.rows.map(r => r[c] ?? "")].every(t => t.trim().length <= SHORT_CELL));
+  const fit = (c: number) => (short[c] ? "whitespace-nowrap" : "min-w-[16ch]");
   const side = (c: number): "left" | "right" | "center" => block.align[c] ?? (numeric[c] ? "right" : "left");
   const alignClass = { left: "text-left", right: "text-right", center: "text-center" } as const;
   return (
     <div className="my-[.7em] overflow-x-auto rounded-md border border-[var(--v2-edge)]">
-      <table className="w-full border-collapse text-v2-body leading-normal">
+      <table className="w-full border-collapse text-v2-body leading-normal [overflow-wrap:normal] [word-break:normal]">
         <thead>
           <tr className="bg-[var(--v2-panel-2)]">
             {block.head.map((h, c) => (
-              <th key={c} scope="col" className={`px-2.5 py-1.5 text-v2-small font-semibold text-[var(--v2-muted)] ${alignClass[side(c)]}`}>{inlineText(h)}</th>
+              <th key={c} scope="col" className={`px-2.5 py-1.5 align-bottom text-v2-small font-semibold text-[var(--v2-muted)] ${alignClass[side(c)]} ${fit(c)}`}>{inlineText(h)}</th>
             ))}
           </tr>
         </thead>
@@ -285,7 +293,7 @@ function Table({ block }: { block: Extract<MdBlock, { kind: "table" }> }) {
             <tr key={r} className="border-t border-[var(--v2-edge-soft)]">
               {block.head.map((_, c) => (
                 <td key={c} data-numeric={numeric[c] || undefined}
-                  className={`px-2.5 py-1.5 ${alignClass[side(c)]} ${numeric[c] ? "v2-mono" : ""} ${c === 0 ? "font-medium" : ""}`}>
+                  className={`px-2.5 py-1.5 align-top ${alignClass[side(c)]} ${fit(c)} ${numeric[c] ? "v2-mono" : ""} ${c === 0 ? "font-medium" : ""}`}>
                   {inlineText(row[c] ?? "")}
                 </td>
               ))}
