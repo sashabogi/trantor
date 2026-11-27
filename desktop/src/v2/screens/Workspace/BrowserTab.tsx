@@ -1,14 +1,20 @@
 // The Browser tab: the project's shared page host — address bar, the line that says who is driving,
-// and the placeholder the native webview covers (#14489 contract, #14505). Rust lands as B1; every
-// action is one Tauri command and every change arrives as a browser://state event.
+// and the placeholder the native webview covers (#14489 contract, #14505). Wave 2 (#14516) adds the
+// page strip (D), the Inspector and Devices buttons, the More menu, the find bar, the device bar and
+// the history/favorites/permissions panel (F); every action is one Tauri command.
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  ArrowLeft, ArrowRight, Camera, ChevronDown, ChevronRight, ExternalLink, Lock, Maximize2, Minimize2, MousePointer2, PictureInPicture2, RotateCw,
+  ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Code2, Lock, Maximize2, Minimize2, PictureInPicture2, RotateCw, Smartphone, X,
 } from "lucide-react";
 import { IconButton } from "../../ui/IconButton";
 import { useEscape } from "../../ui/useEscape";
 import { addressToUrl, drivingLine, rectOf, type BrowserPreview } from "./browserModel";
+import { BrowserDeviceBar } from "./BrowserDeviceBar";
+import { BrowserFindBar } from "./BrowserFindBar";
+import { BrowserMoreMenu } from "./BrowserMoreMenu";
+import { BrowserPageStrip } from "./BrowserPageStrip";
+import { BrowserPanel, type BrowserPanelTab } from "./BrowserPanel";
 import { useBrowser } from "./useBrowser";
 
 const LINE_BUTTON = "v2-hover inline-flex h-[22px] shrink-0 items-center rounded-md border border-[var(--v2-edge-2)] bg-transparent px-2 text-v2-small font-medium text-[var(--v2-text)]";
@@ -25,9 +31,20 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
   onScreenshot?: () => void;
   onPickElement?: () => void;
 }) {
-  const { state, ask, read, steps, commands } = useBrowser(project);
+  const { state, ask, read, steps, commands, load } = useBrowser(project);
   const [stepsOpen, setStepsOpen] = useState(false);
-  useEscape(() => onMaximize(false), maximized);
+  const [findOpen, setFindOpen] = useState(false);
+  const [devicesOn, setDevicesOn] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [panelTab, setPanelTab] = useState<BrowserPanelTab | null>(null);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+
+  // Esc serves whoever is on top: the find bar, then the popovers, then the maximize restore.
+  useEscape(() => {
+    if (findOpen) { setFindOpen(false); commands.findClear(); return; }
+    if (moreOpen || panelTab !== null) return;
+    onMaximize(false);
+  }, maximized || findOpen || moreOpen || panelTab !== null);
   const regionRef = useRef<HTMLDivElement | null>(null);
   const openedRef = useRef(false);
   const [draft, setDraft] = useState<string | null>(null);
@@ -68,14 +85,39 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
     return () => commands.setVisible(false);
   }, [commands, state.url, state.popped_out]);
 
+  // The Browser tab's own chords (#14516): they live only while this tab is mounted, so another
+  // tab's terminal never sees them. Emulation letterboxing keeps the whole region as the rect.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.metaKey || e.altKey || e.ctrlKey) return;
+      const key = e.key.toLowerCase();
+      if (key === "t") { e.preventDefault(); commands.newPage(null); }
+      else if (key === "w") { e.preventDefault(); if (state.active_page) commands.closePage(state.active_page); }
+      else if (key === "d") { e.preventDefault(); if (state.url) void commands.favoriteToggle(state.url, state.title); }
+      else if (key === "f") { e.preventDefault(); setFindOpen(true); }
+      else if (key === "m" && e.shiftKey) { e.preventDefault(); setDevicesOn(o => !o); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [commands, state.active_page, state.url, state.title]);
+
   const submitAddress = () => {
     const url = addressToUrl(shown);
     if (url !== "") { commands.navigate(url); setDraft(null); }
   };
   const openExternal = () => { if (state.url) void openUrl(state.url).catch(() => {}); };
+  const inspect = () => { void commands.inspect().then(err => setInspectError(err)); };
+  const closeFind = () => { setFindOpen(false); commands.findClear(); };
+  const doneDevices = () => { commands.emulate(null); setDevicesOn(false); };
+  const navigateFromPanel = (url: string) => { setPanelTab(null); commands.navigate(url); };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {state.pages.length >= 2 && (
+        <BrowserPageStrip pages={state.pages} activePage={state.active_page}
+          onSelect={commands.selectPage} onClose={commands.closePage} onNew={() => commands.newPage(null)} />
+      )}
+
       <div className="flex shrink-0 items-center gap-1 border-b border-[var(--v2-edge)] px-2 py-1.5">
         <IconButton label="Back" title={state.can_back ? "Go back one page" : "Nothing to go back to"} size={28} disabled={!state.can_back} onClick={commands.back}><ArrowLeft size={14} aria-hidden /></IconButton>
         <IconButton label="Forward" title={state.can_forward ? "Go forward one page" : "Nothing to go forward to"} size={28} disabled={!state.can_forward} onClick={commands.forward}><ArrowRight size={14} aria-hidden /></IconButton>
@@ -87,15 +129,41 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
             onChange={e => setDraft(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); submitAddress(); } }} />
         </label>
-        <IconButton label="Screenshot to chat" title="Send a screenshot to chat" size={28} onClick={() => onScreenshot?.()}><Camera size={14} aria-hidden /></IconButton>
-        <IconButton label="Pick an element for chat" title="Pick an element and add it to chat" size={28} onClick={() => onPickElement?.()}><MousePointer2 size={14} aria-hidden /></IconButton>
-        <IconButton label="Open in your default browser" title="Open in your default browser" size={28} disabled={state.url === null} onClick={openExternal}><ExternalLink size={14} aria-hidden /></IconButton>
+        <IconButton label="Inspect the page" title="Inspect the page (Web Inspector)" size={28} onClick={inspect}><Code2 size={14} aria-hidden /></IconButton>
+        <IconButton label="Devices" title="Device emulation" size={28} aria-pressed={devicesOn} onClick={() => setDevicesOn(o => !o)}><Smartphone size={14} aria-hidden /></IconButton>
         <span aria-hidden className="h-4 w-px shrink-0 bg-[var(--v2-edge-2)]" />
         {maximized
           ? <IconButton label="Restore" title="Restore · Esc" size={28} onClick={() => onMaximize(false)}><Minimize2 size={14} aria-hidden /></IconButton>
           : <IconButton label="Maximize the browser" title="Maximize (fills the Workspace, Esc to restore)" size={28} onClick={() => onMaximize(true)}><Maximize2 size={14} aria-hidden /></IconButton>}
         <IconButton label="Pop out into its own window" title="Pop out into its own window" size={28} onClick={commands.popOut}><PictureInPicture2 size={14} aria-hidden /></IconButton>
+        <span className="relative inline-flex">
+          <BrowserMoreMenu open={moreOpen} onOpen={() => setMoreOpen(true)} onClose={() => setMoreOpen(false)} state={state}
+            onNewPage={() => commands.newPage(null)}
+            onClosePage={() => { if (state.active_page) commands.closePage(state.active_page); }}
+            onZoom={commands.zoom} onUserAgent={commands.setUserAgent}
+            onFind={() => setFindOpen(true)} onDevices={() => setDevicesOn(o => !o)}
+            onPanel={tab => { setMoreOpen(false); setPanelTab(tab); }}
+            onFavorite={() => { if (state.url) void commands.favoriteToggle(state.url, state.title); }}
+            onClearStorage={commands.clearStorage}
+            onScreenshot={() => onScreenshot?.()} onPickElement={() => onPickElement?.()} onOpenExternal={openExternal} />
+          {panelTab !== null && (
+            <BrowserPanel tab={panelTab} onTab={setPanelTab} load={load}
+              onNavigate={navigateFromPanel} onRevoke={commands.permissionRevoke} onClose={() => setPanelTab(null)} />
+          )}
+        </span>
       </div>
+
+      {inspectError !== null && (
+        <div className="flex min-h-[30px] shrink-0 items-center gap-2 border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-panel)] px-2.5 py-1" role="alert">
+          <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--v2-warn)]" />
+          <span className="min-w-0 flex-1 truncate text-v2-small text-[var(--v2-text-2)]">The Inspector could not open: {inspectError}</span>
+          <IconButton label="Dismiss the notice" title="Dismiss the notice" size={18} onClick={() => setInspectError(null)}><X size={11} aria-hidden /></IconButton>
+        </div>
+      )}
+
+      {findOpen && <BrowserFindBar onFind={commands.find} onClose={closeFind} />}
+
+      {devicesOn && <BrowserDeviceBar device={state.emulation} onEmulate={commands.emulate} onDone={doneDevices} />}
 
       {ask ? (
         <div className="flex min-h-[38px] shrink-0 flex-wrap items-center gap-2 border-b border-[var(--v2-warn-edge)] bg-[var(--v2-warn-panel)] px-2.5 py-1.5">
@@ -125,7 +193,8 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
         </div>
       ))}
 
-      <div ref={regionRef} data-testid="browser-region" className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--v2-sunken)]">
+      <div ref={regionRef} data-testid="browser-region"
+        className={`relative flex min-h-0 flex-1 flex-col overflow-hidden ${state.emulation ? "bg-[var(--v2-chrome)]" : "bg-[var(--v2-sunken)]"}`}>
         {state.popped_out ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
             <div className="text-v2-base text-[var(--v2-muted)]">Open in its own window</div>

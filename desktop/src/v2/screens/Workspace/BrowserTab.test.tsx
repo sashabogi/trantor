@@ -160,17 +160,27 @@ describe("the address bar", () => {
     expect(last("browser_reload")).toEqual({ project: "trantor" });
   });
 
-  it("opens the current page in the default browser and explains when there is none", async () => {
+  it("opens the current page in the default browser from the More menu, and explains when there is none", async () => {
     await sendState(state({ url: "https://github.com/tauri-apps/tauri" }));
     await mount();
-    await click(button("Open in your default browser"));
+    // #14516: open-external moved from the toolbar into the More menu (artboard F1).
+    expect(button("Open in your default browser")).toBeNull();
+    await click(button("More"));
+    await click(text("Open in your default browser"));
     expect(last("plugin:opener|open_url")).toMatchObject({ url: "https://github.com/tauri-apps/tauri" });
+    await act(async () => { root.unmount(); host.remove(); host = document.createElement("div"); document.body.append(host); root = createRoot(host); });
+    cur = state({});
+    await mount();
+    await click(button("More"));
+    expect(text("Open in your default browser")?.hasAttribute("disabled")).toBe(true);
   });
 
   it("keeps the chat actions inert until B3 wires them", async () => {
     await mount();
-    await click(button("Screenshot to chat"));
-    await click(button("Pick an element for chat"));
+    await click(button("More"));
+    await click(text("Screenshot to chat"));
+    await click(button("More"));
+    await click(text("Pick an element for chat"));
     expect(ipc.filter(c => c.command.startsWith("plugin:opener") || c.command.startsWith("browser_")).map(c => c.command))
       .toEqual(["browser_state", "browser_set_visible", "browser_open", "browser_set_rect"]);
   });
