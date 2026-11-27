@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Browser tab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#0E0F12}
+:root{--v2-ease:cubic-bezier(.2,.7,.3,1)}
+.bw a{color:#8AA8FF;text-decoration:none}
+.bw a:hover{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+.bw button{font-family:inherit;cursor:pointer}
+.bw button:focus-visible,.bw a:focus-visible,.bw input:focus-visible{outline:1px solid #8AA8FF;outline-offset:1px;border-radius:4px}
+.bw .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+.bw .ib{transition:background-color 120ms var(--v2-ease),color 120ms var(--v2-ease)}
+.bw .ib:hover{background:rgba(231,233,236,.06);color:#E7E9EC}
+.bw .tab{transition:background-color 120ms var(--v2-ease)}
+.bw .tab:hover{background:rgba(231,233,236,.06)}
+@keyframes bw-pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes bw-breathe{0%,100%{border-color:#22252B}50%{border-color:#2E3A5A}}
+.bw .pulse{animation:bw-pulse 1.2s ease-in-out infinite}
+.bw .breathe{animation:bw-breathe 2.4s ease-in-out infinite}
+@media (prefers-reduced-motion: reduce){.bw .pulse,.bw .breathe{animation:none}.bw *{transition:none !important}}
+</style>
+</helmet>
+<div class="bw" style="width:1760px;background:#0E0F12;color:#E7E9EC;font-family:Inter,system-ui,sans-serif;font-size:13px;padding:40px 48px 56px;box-sizing:border-box;display:flex;flex-direction:column;gap:40px;">
+
+  <div style="max-width:1080px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#9AA0A8;">PROPOSAL · CARD #14489 · THE BROWSER · NOTHING HERE IS BUILT YET</div>
+    <h1 style="margin:8px 0 0;font-size:26px;font-weight:650;letter-spacing:-.01em;">A browser tab beside Terminal and Changes, shared by you and your agents</h1>
+    <p style="margin:8px 0 0;color:#9AA0A8;font-size:13px;line-height:1.55;">The Mac's own WebKit, inside the Trantor window: no second Chrome. The middle column is drawn at real size, 760px wide. One line under the address bar always says who is driving. Links from chat and build previews open here.</p>
+  </div>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">A · THE BROWSER TAB, ORCHESTRATOR DRIVING (REAL SIZE)</div>
+    <div style="display:flex;gap:48px;align-items:flex-start;flex-wrap:wrap;">
+
+      <div style="width:760px;background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;gap:2px;height:34px;padding:0 8px;border-bottom:1px solid #1D2025;">
+          <button class="tab" style="height:26px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;font-size:12px;">Terminal</button>
+          <button class="tab" style="height:26px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;font-size:12px;">Changes</button>
+          <button class="tab" aria-current="page" style="height:26px;padding:0 10px;border:0;border-radius:6px;background:#1A1C21;color:#E7E9EC;font-size:12px;font-weight:500;display:flex;align-items:center;gap:6px;">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="6.2"></circle><path d="M1.8 8h12.4M8 1.8c2 2 2 10.4 0 12.4M8 1.8c-2 2-2 10.4 0 12.4"></path></svg>
+            Browser
+          </button>
+          <div style="flex:1;"></div>
+          <span style="font-size:11px;color:#9AA0A8;">2 pages</span>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:4px;padding:6px 8px;border-bottom:1px solid #1D2025;">
+          <button class="ib" aria-label="Back" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 3 5 8l5 5"></path></svg></button>
+          <button class="ib" aria-label="Forward" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#4A4F57;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 3 5 5-5 5"></path></svg></button>
+          <button class="ib" aria-label="Reload" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.5M13 2.5V5h-2.5"></path></svg></button>
+          <label style="flex:1;display:flex;align-items:center;gap:8px;height:28px;padding:0 10px;background:#0F1013;border:1px solid #22252B;border-radius:6px;">
+            <span style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Address</span>
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="#7CC49A" stroke-width="1.4" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"></rect><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"></path></svg>
+            <input class="mono" value="localhost:5173/tree/popovic" aria-label="Address" style="flex:1;min-width:0;background:transparent;border:0;color:#C4C8CE;font-size:12px;outline:none;">
+          </label>
+          <button class="ib" aria-label="Screenshot to chat" title="Send a screenshot to chat" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2.5 5.5V4a1.5 1.5 0 0 1 1.5-1.5h1.5M10.5 2.5H12A1.5 1.5 0 0 1 13.5 4v1.5M13.5 10.5V12a1.5 1.5 0 0 1-1.5 1.5h-1.5M5.5 13.5H4A1.5 1.5 0 0 1 2.5 12v-1.5"></path><circle cx="8" cy="8" r="2"></circle></svg></button>
+          <button class="ib" aria-label="Pick an element for chat" title="Pick an element and add it to chat" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M3 3l4 10 1.5-4 4-1.5z"></path></svg></button>
+          <button class="ib" aria-label="Open in your default browser" title="Open in your default browser" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3"></path></svg></button>
+          <span style="width:1px;height:16px;background:#22252B;margin:0 2px;"></span>
+          <button class="ib" aria-label="Maximize the browser" title="Maximize (fills the Workspace, Esc to restore)" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9"></path></svg></button>
+          <button class="ib" aria-label="Pop out into its own window" title="Pop out into its own window" style="width:28px;height:28px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="2.5" y="5.5" width="8" height="8" rx="1.5"></rect><path d="M6.5 2.5h7v7"></path></svg></button>
+        </div>
+
+        <div class="breathe" style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;background:#141826;border-bottom:1px solid #2E3A5A;">
+          <span class="pulse" style="width:6px;height:6px;border-radius:50%;background:#8AA8FF;"></span>
+          <span style="font-size:12px;color:#C4C8CE;"><span style="color:#E7E9EC;font-weight:500;">orchestrator</span> is using the browser · clicking "Show descendants"</span>
+          <div style="flex:1;"></div>
+          <button class="ib" style="height:22px;padding:0 8px;border:1px solid #2A2E36;border-radius:5px;background:transparent;color:#E7E9EC;font-size:11.5px;">Take over</button>
+        </div>
+
+        <div style="height:470px;background:#F6F5F2;color:#1E2126;padding:22px 26px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;position:relative;">
+          <div style="display:flex;align-items:baseline;gap:10px;">
+            <div style="font-size:18px;font-weight:650;">Popović line</div>
+            <div style="font-size:12px;color:#5B616B;">charts 38 to 58 · 412 people</div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <span style="font-size:11.5px;padding:4px 10px;border-radius:999px;background:#E6E3DC;">Ancestors</span>
+            <span style="font-size:11.5px;padding:4px 10px;border-radius:999px;background:#1E2126;color:#F6F5F2;outline:2px solid #3E6BFF;outline-offset:2px;">Show descendants</span>
+            <span style="font-size:11.5px;padding:4px 10px;border-radius:999px;background:#E6E3DC;">Search</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:6px;">
+            <div style="background:#FFFFFF;border:1px solid #DDD8CE;border-radius:8px;padding:10px 12px;"><div style="font-size:12.5px;font-weight:600;">[NAME]</div><div style="font-size:11px;color:#5B616B;">born [YEAR] · [VILLAGE]</div></div>
+            <div style="background:#FFFFFF;border:1px solid #DDD8CE;border-radius:8px;padding:10px 12px;"><div style="font-size:12.5px;font-weight:600;">[NAME]</div><div style="font-size:11px;color:#5B616B;">born [YEAR] · [VILLAGE]</div></div>
+            <div style="background:#FFFFFF;border:1px solid #DDD8CE;border-radius:8px;padding:10px 12px;"><div style="font-size:12.5px;font-weight:600;">[NAME]</div><div style="font-size:11px;color:#5B616B;">born [YEAR] · [VILLAGE]</div></div>
+            <div style="background:#FFFFFF;border:1px solid #DDD8CE;border-radius:8px;padding:10px 12px;"><div style="font-size:12.5px;font-weight:600;">[NAME]</div><div style="font-size:11px;color:#5B616B;">born [YEAR] · [VILLAGE]</div></div>
+            <div style="background:#FFFFFF;border:1px solid #DDD8CE;border-radius:8px;padding:10px 12px;"><div style="font-size:12.5px;font-weight:600;">[NAME]</div><div style="font-size:11px;color:#5B616B;">born [YEAR] · [VILLAGE]</div></div>
+            <div style="background:#FFFFFF;border:1px solid #DDD8CE;border-radius:8px;padding:10px 12px;"><div style="font-size:12.5px;font-weight:600;">[NAME]</div><div style="font-size:11px;color:#5B616B;">born [YEAR] · [VILLAGE]</div></div>
+          </div>
+          <div style="font-size:11px;color:#5B616B;">The page is the project's own dev server, shown exactly as a browser would.</div>
+          <div style="position:absolute;left:236px;top:90px;width:132px;height:30px;border:2px solid #8AA8FF;border-radius:999px;box-sizing:border-box;"></div>
+          <div style="position:absolute;left:300px;top:112px;"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2l5 12 1.8-4.8L13.6 7.4z" fill="#8AA8FF" stroke="#0E0F12" stroke-width="1"></path></svg></div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;border-top:1px solid #1D2025;">
+          <button class="ib" style="display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border:0;background:transparent;color:#9AA0A8;font-size:11.5px;text-align:left;">
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m4 10 4-4 4 4"></path></svg>
+            Steps · 6 this turn
+          </button>
+          <div class="mono" style="display:flex;flex-direction:column;gap:3px;padding:2px 10px 10px 28px;font-size:11px;color:#9AA0A8;">
+            <div><span style="color:#C4C8CE;">open</span> localhost:5173/tree/popovic <span style="color:#4A4F57;">· 0.9s</span></div>
+            <div><span style="color:#C4C8CE;">read</span> page outline, 48 elements</div>
+            <div><span style="color:#C4C8CE;">screenshot</span> viewport, sent to chat</div>
+            <div><span style="color:#8AA8FF;">click</span> "Show descendants" <span class="pulse" style="color:#8AA8FF;">· now</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:420px;max-width:760px;display:flex;flex-direction:column;gap:18px;padding-top:4px;">
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">Third tab, same column</div>
+          <div style="color:#9AA0A8;line-height:1.55;">Browser sits after Terminal and Changes in the seat tab row. It belongs to the project, not to one seat, so every seat and the orchestrator share it. Page count shows on the right when more than one is open.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">Address bar</div>
+          <div style="color:#9AA0A8;line-height:1.55;">Back, forward, reload, the address, then three actions: send a screenshot to chat, pick an element and add it to chat, open in your default browser.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">The driving line</div>
+          <div style="color:#9AA0A8;line-height:1.55;">Appears only while an agent is driving: who, and what it is doing right now. Take over pauses the agent until you give it back. The edge breathes in the working blue, the same language the seat strip uses.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">The pointer you can follow</div>
+          <div style="color:#9AA0A8;line-height:1.55;">The element the agent acts on gets a blue ring and its pointer, so you can watch a click land.</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="font-size:12px;font-weight:600;color:#E7E9EC;">Steps</div>
+          <div style="color:#9AA0A8;line-height:1.55;">Folded under the page: what the agent did with the browser this turn, newest last. The same steps show in the chat's folded tool work.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">B · WHO IS DRIVING: THE FOUR STATES OF THE LINE UNDER THE ADDRESS BAR</div>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px;max-width:1600px;">
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">1 · You are browsing</div>
+        <div style="background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:8px;height:40px;padding:0 10px;border-bottom:1px solid #1D2025;">
+            <div class="mono" style="flex:1;height:28px;display:flex;align-items:center;padding:0 10px;background:#0F1013;border:1px solid #22252B;border-radius:6px;font-size:12px;color:#C4C8CE;">developer.mozilla.org/en-US/docs/Web/API/fetch</div>
+          </div>
+          <div style="height:44px;display:flex;align-items:center;padding:0 12px;color:#9AA0A8;font-size:12px;">No line at all. The page gets the space.</div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">2 · An agent is driving</div>
+        <div style="background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:8px;height:40px;padding:0 10px;border-bottom:1px solid #1D2025;">
+            <div class="mono" style="flex:1;height:28px;display:flex;align-items:center;padding:0 10px;background:#0F1013;border:1px solid #22252B;border-radius:6px;font-size:12px;color:#C4C8CE;">github.com/tauri-apps/tauri/issues</div>
+          </div>
+          <div class="breathe" style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#141826;border-bottom:1px solid #2E3A5A;">
+            <span class="pulse" style="width:6px;height:6px;border-radius:50%;background:#8AA8FF;"></span>
+            <span style="font-size:12px;color:#C4C8CE;"><span style="color:#E7E9EC;font-weight:500;">codex-8</span> is using the browser · reading issue 12204</span>
+            <div style="flex:1;"></div>
+            <button class="ib" style="height:22px;padding:0 8px;border:1px solid #2A2E36;border-radius:5px;background:transparent;color:#E7E9EC;font-size:11.5px;">Take over</button>
+          </div>
+          <div style="height:14px;"></div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">3 · You took over</div>
+        <div style="background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:8px;height:40px;padding:0 10px;border-bottom:1px solid #1D2025;">
+            <div class="mono" style="flex:1;height:28px;display:flex;align-items:center;padding:0 10px;background:#0F1013;border:1px solid #22252B;border-radius:6px;font-size:12px;color:#C4C8CE;">github.com/tauri-apps/tauri/issues/12204</div>
+          </div>
+          <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#16181C;border-bottom:1px solid #2A2E36;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#C4C8CE;"></span>
+            <span style="font-size:12px;color:#C4C8CE;">You have the browser · <span style="color:#E7E9EC;font-weight:500;">codex-8</span> is paused, waiting</span>
+            <div style="flex:1;"></div>
+            <button class="ib" style="height:22px;padding:0 8px;border:1px solid #2A2E36;border-radius:5px;background:transparent;color:#E7E9EC;font-size:11.5px;">Give back</button>
+          </div>
+          <div style="height:14px;"></div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">4 · An agent wants a site it has not used</div>
+        <div style="background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+          <div style="display:flex;align-items:center;gap:8px;height:40px;padding:0 10px;border-bottom:1px solid #1D2025;">
+            <div class="mono" style="flex:1;height:28px;display:flex;align-items:center;padding:0 10px;background:#0F1013;border:1px solid #22252B;border-radius:6px;font-size:12px;color:#9AA0A8;">localhost:5173/tree/popovic</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;min-height:38px;padding:6px 10px;background:#1F1A12;border-bottom:1px solid #4A3A1C;flex-wrap:wrap;">
+            <span style="width:6px;height:6px;border-radius:50%;background:#F2B544;"></span>
+            <span style="font-size:12px;color:#C4C8CE;"><span style="color:#E7E9EC;font-weight:500;">orchestrator</span> wants to open <span class="mono" style="color:#E7E9EC;">accounts.google.com</span></span>
+            <div style="flex:1;"></div>
+            <button class="ib" style="height:24px;padding:0 9px;border:1px solid #2A2E36;border-radius:5px;background:transparent;color:#E7E9EC;font-size:11.5px;">Allow once</button>
+            <button class="ib" style="height:24px;padding:0 9px;border:1px solid #2A2E36;border-radius:5px;background:transparent;color:#E7E9EC;font-size:11.5px;">Allow this site</button>
+            <button class="ib" style="height:24px;padding:0 9px;border:0;border-radius:5px;background:transparent;color:#9AA0A8;font-size:11.5px;">Not now</button>
+          </div>
+          <div style="height:14px;"></div>
+        </div>
+      </div>
+    </div>
+    <div style="max-width:1080px;color:#9AA0A8;line-height:1.55;">Waiting on you uses the amber the rest of Trantor uses for "needs you", and the same question lands in Inbox, so you can answer from your phone. Localhost and the project's own preview never ask.</div>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">C · NOTHING OPEN YET, AND WHERE PAGES COME FROM</div>
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">
+
+      <div style="width:760px;background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:8px;height:40px;padding:0 10px;border-bottom:1px solid #1D2025;">
+          <label style="flex:1;display:flex;align-items:center;height:28px;padding:0 10px;background:#0F1013;border:1px solid #2E3A5A;border-radius:6px;">
+            <input class="mono" placeholder="Type an address or search" aria-label="Address" style="flex:1;background:transparent;border:0;color:#C4C8CE;font-size:12px;outline:none;">
+          </label>
+        </div>
+        <div style="padding:28px 28px 32px;display:flex;flex-direction:column;gap:16px;">
+          <div style="font-size:14px;font-weight:600;">Nothing open</div>
+          <div style="color:#9AA0A8;line-height:1.55;max-width:560px;">Links you click in chat open here, and so does the dev server when a seat starts one. Type an address above to browse yourself.</div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#9AA0A8;">PREVIEWS IN THIS PROJECT</div>
+            <button class="ib" style="display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border:1px dashed #2A2E36;border-radius:7px;background:transparent;color:#C4C8CE;font-size:12px;text-align:left;">
+              <span style="width:6px;height:6px;border-radius:50%;background:#7CC49A;"></span>
+              <span class="mono">localhost:5173</span>
+              <span style="color:#9AA0A8;">vite, started by glm-5 four minutes ago</span>
+            </button>
+            <button class="ib" style="display:flex;align-items:center;gap:10px;height:34px;padding:0 10px;border:1px dashed #2A2E36;border-radius:7px;background:transparent;color:#C4C8CE;font-size:12px;text-align:left;">
+              <span style="width:6px;height:6px;border-radius:50%;background:#4A4F57;"></span>
+              <span class="mono">localhost:4173</span>
+              <span style="color:#9AA0A8;">build preview, stopped</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-width:420px;max-width:760px;display:flex;flex-direction:column;gap:14px;">
+        <div style="font-size:12px;font-weight:600;color:#E7E9EC;">A link in chat</div>
+        <div style="background:#16181C;border-radius:8px;padding:12px 14px;line-height:1.6;color:#C4C8CE;">The tree page is up at <a href="#">localhost:5173/tree/popovic</a>, check the Popović line renders.</div>
+        <div style="color:#9AA0A8;line-height:1.55;">Click opens it in the Browser tab and switches the column to it. Cmd-click opens your default browser instead.</div>
+        <div style="font-size:12px;font-weight:600;color:#E7E9EC;margin-top:6px;">A dev server in a terminal</div>
+        <div class="mono" style="background:#0F1013;border:1px solid #22252B;border-radius:8px;padding:10px 12px;font-size:11.5px;color:#C4C8CE;line-height:1.6;">
+          <div>  VITE v6 ready in 412 ms</div>
+          <div>  ➜  Local:   <span style="color:#8AA8FF;text-decoration:underline;">http://localhost:5173/</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <button class="ib" style="height:26px;padding:0 10px;border:1px solid #2A2E36;border-radius:6px;background:transparent;color:#E7E9EC;font-size:12px;">Open in Browser tab</button>
+          <span style="color:#9AA0A8;font-size:12px;">offered once per server, next to the seat's tab</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">D · MORE THAN ONE PAGE</div>
+    <div style="width:760px;background:#121317;border:1px solid #22252B;border-radius:10px;overflow:hidden;">
+      <div style="display:flex;align-items:center;gap:4px;height:32px;padding:0 6px;border-bottom:1px solid #1D2025;">
+        <button class="tab" style="max-width:200px;height:24px;padding:0 10px;border:0;border-radius:6px;background:#1A1C21;color:#E7E9EC;font-size:11.5px;display:flex;align-items:center;gap:6px;overflow:hidden;white-space:nowrap;"><span class="mono">localhost:5173</span><span style="color:#8AA8FF;">· orchestrator</span></button>
+        <button class="tab" style="max-width:200px;height:24px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;font-size:11.5px;overflow:hidden;white-space:nowrap;"><span class="mono">github.com/tauri-apps</span></button>
+        <button class="tab" style="max-width:200px;height:24px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;font-size:11.5px;overflow:hidden;white-space:nowrap;"><span class="mono">accounts.google.com</span><span style="color:#9AA0A8;"> · sign-in</span></button>
+        <button class="ib" aria-label="New page" style="width:24px;height:24px;border:0;border-radius:6px;background:transparent;color:#9AA0A8;display:flex;align-items:center;justify-content:center;"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 3v10M3 8h10"></path></svg></button>
+      </div>
+      <div style="height:60px;display:flex;align-items:center;padding:0 14px;color:#9AA0A8;font-size:12px;line-height:1.5;">A thin page strip appears only with two or more pages. A page an agent drives names it. A sign-in popup opens as its own page and closes when the sign-in finishes.</div>
+    </div>
+  </section>
+
+  <section style="display:flex;flex-direction:column;gap:12px;">
+    <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:#8AA8FF;">E · BIGGER: MAXIMIZE IN PLACE, OR POP IT OUT INTO ITS OWN WINDOW</div>
+    <div style="display:flex;gap:40px;flex-wrap:wrap;align-items:flex-start;">
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">Maximized: the browser takes the whole Workspace</div>
+        <div style="width:760px;height:380px;background:#0B0C0E;border:1px solid #22252B;border-radius:10px;padding:10px;box-sizing:border-box;display:flex;gap:8px;">
+          <div style="width:34px;background:#121317;border:1px solid #1D2025;border-radius:8px;"></div>
+          <div style="flex:1;background:#121317;border:1px solid #2E3A5A;border-radius:8px;display:flex;flex-direction:column;overflow:hidden;">
+            <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid #1D2025;">
+              <div class="mono" style="flex:1;height:20px;display:flex;align-items:center;padding:0 8px;background:#0F1013;border:1px solid #22252B;border-radius:5px;font-size:11px;color:#C4C8CE;">localhost:5173/tree/popovic</div>
+              <button class="ib" style="height:20px;padding:0 8px;border:1px solid #2A2E36;border-radius:5px;background:transparent;color:#E7E9EC;font-size:11px;">Restore · Esc</button>
+            </div>
+            <div style="flex:1;background:#F6F5F2;"></div>
+          </div>
+          <div style="width:34px;background:#121317;border:1px solid #1D2025;border-radius:8px;"></div>
+        </div>
+        <div style="max-width:760px;color:#9AA0A8;line-height:1.55;">Source control and chat fold to their rails, the seat strip hides, the page gets the window. The driving line still shows. Esc or Restore puts the column back exactly as it was.</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;color:#C4C8CE;font-weight:500;">Popped out: its own window, beside Trantor or on another screen</div>
+        <div style="width:560px;background:#121317;border:1px solid #2A2E36;border-radius:10px;overflow:hidden;box-shadow:0 18px 40px rgba(0,0,0,.45);">
+          <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#16181C;border-bottom:1px solid #1D2025;">
+            <span style="width:10px;height:10px;border-radius:50%;background:#3A3D44;"></span>
+            <span style="width:10px;height:10px;border-radius:50%;background:#3A3D44;"></span>
+            <span style="width:10px;height:10px;border-radius:50%;background:#3A3D44;"></span>
+            <span style="flex:1;text-align:center;font-size:11.5px;color:#C4C8CE;">Browser · bogojevic-family-geniology-tree</span>
+          </div>
+          <div style="height:34px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid #1D2025;">
+            <div class="mono" style="flex:1;height:22px;display:flex;align-items:center;padding:0 8px;background:#0F1013;border:1px solid #22252B;border-radius:5px;font-size:11px;color:#C4C8CE;">localhost:5173/tree/popovic</div>
+            <button class="ib" style="height:22px;padding:0 8px;border:1px solid #2A2E36;border-radius:5px;background:transparent;color:#E7E9EC;font-size:11px;">Put back in Workspace</button>
+          </div>
+          <div style="height:240px;background:#F6F5F2;"></div>
+        </div>
+        <div style="max-width:560px;color:#9AA0A8;line-height:1.55;">The same page, sign-ins and agent control move with it. The Browser tab in the column then reads "Open in its own window" with a Show button. Closing the window puts it back in the tab. Trantor remembers the window's size and place per project.</div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1760,"height":3000}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
