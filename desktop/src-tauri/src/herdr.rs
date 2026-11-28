@@ -153,6 +153,44 @@ pub fn agent_status(target: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The terminal behind a pane whose agent is gone (#14531). herdr's `agent attach` refuses a
+/// pane with no live agent and prints `agent target … not found` into the view, which left the
+/// operator staring at an error over a pane that still holds a working shell (and the exited
+/// session's resume line). Some(terminal_id) only when herdr answered `agent_not_found` for this
+/// pane AND `pane.get` names its terminal; unreachable herdr or any other reply is None, so the
+/// caller keeps the agent attach it always ran.
+pub(crate) fn orphaned_pane_terminal(pane: &str) -> Option<String> {
+    let agent = serde_json::json!({
+        "id": "trantor:agent.get",
+        "method": "agent.get",
+        "params": { "target": pane },
+    });
+    let raw = request_within(&agent, Duration::from_millis(1500)).ok()?;
+    if !is_agent_not_found(&raw) {
+        return None;
+    }
+    let get = serde_json::json!({
+        "id": "trantor:pane.get",
+        "method": "pane.get",
+        "params": { "pane_id": pane },
+    });
+    let raw = request_within(&get, Duration::from_millis(1500)).ok()?;
+    terminal_id_from_pane_get(&raw)
+}
+
+fn is_agent_not_found(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw.trim())
+        .ok()
+        .and_then(|v| v.get("error")?.get("code")?.as_str().map(|c| c == "agent_not_found"))
+        .unwrap_or(false)
+}
+
+fn terminal_id_from_pane_get(raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let id = v.get("result")?.get("pane")?.get("terminal_id")?.as_str()?.trim();
+    if id.is_empty() { None } else { Some(id.to_string()) }
+}
+
 /// Which agent herdr detected in `target` ("claude", "codex", ...) and its lifecycle state, from
 /// one `agent.get` (#14022: the mode menu only speaks Claude Code's Shift+Tab cycle).
 pub(crate) fn agent_kind_and_status(target: &str) -> (Option<String>, Option<String>) {
@@ -319,6 +357,24 @@ fn map_prompt_response(raw: &str) -> Result<PromptOutcome, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // #14531: captured from herdr 0.9.5 on 2026-11-27 for a pane whose shell outlived its claude.
+    const PANE_NO_AGENT: &str = r#"{"id":"t","error":{"code":"agent_not_found","message":"agent target w4:p1 not found"}}"#;
+    const PANE_GET: &str = r#"{"id":"t","result":{"type":"pane_info","pane":{"pane_id":"w4:p1","terminal_id":"term_660f7d7c279fe1","workspace_id":"w4","tab_id":"w4:t1","focused":false}}}"#;
+
+    #[test]
+    fn orphaned_pane_is_recognised_only_on_agent_not_found() {
+        assert!(is_agent_not_found(PANE_NO_AGENT));
+        assert!(!is_agent_not_found(r#"{"id":"t","result":{"type":"agent_info","agent":{"agent":"claude"}}}"#));
+        assert!(!is_agent_not_found(r#"{"id":"t","error":{"code":"pane_not_found","message":"x"}}"#));
+        assert!(!is_agent_not_found("not json"));
+    }
+
+    #[test]
+    fn pane_get_names_the_terminal_to_attach() {
+        assert_eq!(terminal_id_from_pane_get(PANE_GET).as_deref(), Some("term_660f7d7c279fe1"));
+        assert_eq!(terminal_id_from_pane_get(r#"{"result":{"pane":{"terminal_id":"  "}}}"#), None);
+        assert_eq!(terminal_id_from_pane_get(r#"{"error":{"code":"invalid_request"}}"#), None);
+    }
 
     // Captured live (docs/RESEARCH-herdr-prompt.md): CLI and socket share the same response
     // bodies; the socket one carries our request id.

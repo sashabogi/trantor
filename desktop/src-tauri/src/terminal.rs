@@ -419,6 +419,15 @@ fn attach_args(target: &str) -> [&str; 3] {
     ["agent", "attach", target]
 }
 
+/// The local attach argv: the agent attach, or the pane's own terminal when herdr says the pane
+/// has no agent (#14531). Neither form ever asks for --takeover (#9811).
+fn local_attach_args(target: &str, orphan_terminal: Option<&str>) -> Vec<String> {
+    match orphan_terminal {
+        Some(terminal) => vec!["terminal".into(), "attach".into(), terminal.into()],
+        None => attach_args(target).iter().map(|a| a.to_string()).collect(),
+    }
+}
+
 #[tauri::command]
 pub async fn term_attach(
     target: String,
@@ -439,8 +448,11 @@ pub async fn term_attach(
         command.args(crate::remote_terminal::ssh_attach_args(&ssh_target, &target)?);
         command
     } else {
+        // #14531: a pane whose agent exited still holds a shell; show that shell instead of
+        // herdr's "agent target … not found" so the operator can resume from it.
+        let orphan = crate::herdr::orphaned_pane_terminal(&target);
         let mut command = CommandBuilder::new("herdr");
-        command.args(attach_args(&target));
+        command.args(local_attach_args(&target, orphan.as_deref()));
         command
     };
     terminals
@@ -787,6 +799,17 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         }
         false
+    }
+
+    #[test]
+    fn a_pane_without_an_agent_attaches_its_shell() {
+        // #14531: the app showed "agent target w2R:p2N not found" over a pane holding a live shell.
+        assert_eq!(local_attach_args("w2R:p2N", Some("term_660f7d7ecd3711c")),
+            ["terminal", "attach", "term_660f7d7ecd3711c"]);
+        assert_eq!(local_attach_args("w2R:p2N", None), ["agent", "attach", "w2R:p2N"]);
+        for args in [local_attach_args("w9:p1G", Some("term_x")), local_attach_args("w9:p1G", None)] {
+            assert!(!args.iter().any(|a| a.contains("takeover")));
+        }
     }
 
     #[test]
