@@ -1,7 +1,7 @@
 // One header for the session identity, live controls and workspace actions.
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Clock, GitBranch, MoreHorizontal, Plus, X } from "lucide-react";
+import { Clock, GitBranch, MoreHorizontal, Plus } from "lucide-react";
 import { brandFor } from "../../../shared/Avatar";
 import { StatusLine, type HandoffControl } from "../../chat/StatusLine";
 import { brandOfModel } from "../../ui/identity";
@@ -113,9 +113,6 @@ function HeaderButtons({ sheet, onSheet, changed, sessionId, project, onGit, onC
           <MenuItem onSelect={() => { setMenu(false); onClose(); }}>Close chat</MenuItem>
         </Popover>
       </span>
-      <IconButton label="Close chat" title="Close chat to the side rail" size={26} onClick={onClose}>
-        <X size={14} aria-hidden />
-      </IconButton>
     </div>
   );
 }

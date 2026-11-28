@@ -4,7 +4,7 @@ import { useActivePane } from "../../ui/useActivePane";
 // commits fed by useScopeGit, collapsible to a rail, resizable (#13987 drill). #14047: a Branches
 // and seats row click selects that seat in the strip, and the main checkout row selects the orchestrator.
 import type { RefObject } from "react";
-import { ChevronsLeft, Files } from "lucide-react";
+import { Files } from "lucide-react";
 import type { SeatInfo } from "../Code/model";
 import { useScopeGit } from "../Code/useScopeGit";
 import { IconButton } from "../../ui/IconButton";
@@ -35,17 +35,14 @@ export type FilesColumnProps = {
   onOpenConflict?: (path: string) => void;
 };
 
-/** The open column: the shared sidebar with this scope's git state, collapse button included. */
+/** The open column: the shared sidebar with this scope's git state (#14512: the top bar's left toggle collapses it). */
 function ScmColumn(p: FilesColumnProps) {
   const { state, refresh } = useScopeGit(p.project, p.scope);
   return (
     <ScmSidebar project={p.project} scope={p.scope} scopeName={p.scopeName} state={state} seats={p.seats} onPickScope={p.onPickScope}
       onMutated={refresh} onOpenFile={p.onOpenFile} onOpenChange={p.onOpenChange} onOpenCommit={p.onOpenCommit} onShownScope={p.onShownScope}
       onReviewMessage={p.onReviewMessage} canAskOrchestrator={p.canAskOrchestrator}
-      selectedPath={p.selectedPath} onOpenConflict={p.onOpenConflict}
-      actions={<IconButton label="Collapse files" title="Collapse the source control sidebar to a rail" size={26} onClick={() => p.col.setOpen(false)}>
-        <ChevronsLeft size={14} aria-hidden />
-      </IconButton>} />
+      selectedPath={p.selectedPath} onOpenConflict={p.onOpenConflict} />
   );
 }
 

@@ -18,6 +18,7 @@ import { ChatColumn } from "./ChatColumn";
 import { useChatColumn, useFilesColumn } from "./chatColumnState";
 import { FilesColumn } from "./FilesColumn";
 import { setOpenIntent } from "../../shell/openIntent";
+import { usePanelSlot } from "../../shell/panelSlots";
 import { usePanes } from "./panes";
 import { useSeats } from "../Code/useSeats";
 import { SeatGrid } from "./SeatGrid";
@@ -91,6 +92,9 @@ export function WorkspaceScreen({ client, project, onNavigate, wake }: ScreenPro
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const chatCol = useChatColumn();
   const filesCol = useFilesColumn();
+  // #14512: the top-bar cluster drives these columns; the old chevron and X controls are gone.
+  usePanelSlot("left", { open: filesCol.open, toggle: () => filesCol.setOpen(!filesCol.open) });
+  usePanelSlot("right", { open: chatCol.open, toggle: () => chatCol.setOpen(!chatCol.open) });
   const me = useIdentity();
   const mayDo = useMayDo(project);
   const crew = useCrew(project, data.refresh);

@@ -7,6 +7,7 @@ import { Kbd } from "../ui/Kbd";
 import { ProjectTile } from "../ui/ProjectTile";
 import { Avatar } from "../ui/Avatar";
 import { Popover, MenuItem } from "./Popover";
+import { PanelToggles } from "./PanelToggles";
 import { useTypeAhead } from "../ui/useTypeAhead";
 import type { Navigate } from "../routes";
 import { MODE_CONFIG, type Mode } from "./shellMode";
@@ -115,6 +116,8 @@ export function TopBar(p: TopBarProps) {
       </button>
       {p.notice}
       <div className="ml-auto flex items-center gap-1.5">
+        {/* #14512: one cluster [left][bottom][right] drives the screen's panels, before the bell. */}
+        <PanelToggles />
         <IconButton label={p.needsYou ? `Notifications, ${p.needsYou} need you` : "Notifications"} title="Notifications: decisions waiting on you"
           variant="outline" size={32} badge={p.needsYou} onClick={() => p.onNavigate("inbox")}>
           <Bell size={15} aria-hidden />

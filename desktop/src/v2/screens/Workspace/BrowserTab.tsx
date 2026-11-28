@@ -5,9 +5,10 @@
 import { useEffect, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Code2, Lock, Maximize2, Minimize2, PictureInPicture2, RotateCw, Smartphone, X,
+  ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Code2, Lock, PictureInPicture2, RotateCw, Smartphone, X,
 } from "lucide-react";
 import { IconButton } from "../../ui/IconButton";
+import { PanelToggle } from "../../ui/PanelToggle";
 import { useEscape } from "../../ui/useEscape";
 import { addressToUrl, drivingLine, rectOf, type BrowserPreview } from "./browserModel";
 import { BrowserDeviceBar } from "./BrowserDeviceBar";
@@ -132,9 +133,10 @@ export function BrowserTab({ project, maximized = false, onMaximize, previews = 
         <IconButton label="Inspect the page" title="Inspect the page (Web Inspector)" size={28} onClick={inspect}><Code2 size={14} aria-hidden /></IconButton>
         <IconButton label="Devices" title="Device emulation" size={28} aria-pressed={devicesOn} onClick={() => setDevicesOn(o => !o)}><Smartphone size={14} aria-hidden /></IconButton>
         <span aria-hidden className="h-4 w-px shrink-0 bg-[var(--v2-edge-2)]" />
+        {/* #14512: the Focus icon from the panel-toggle language; the fill means maximized. */}
         {maximized
-          ? <IconButton label="Restore" title="Restore · Esc" size={28} onClick={() => onMaximize(false)}><Minimize2 size={14} aria-hidden /></IconButton>
-          : <IconButton label="Maximize the browser" title="Maximize (fills the Workspace, Esc to restore)" size={28} onClick={() => onMaximize(true)}><Maximize2 size={14} aria-hidden /></IconButton>}
+          ? <PanelToggle side="focus" open tooltip="Restore" onToggle={() => onMaximize(false)} />
+          : <PanelToggle side="focus" open={false} tooltip="Maximize the browser" onToggle={() => onMaximize(true)} />}
         <IconButton label="Pop out into its own window" title="Pop out into its own window" size={28} onClick={commands.popOut}><PictureInPicture2 size={14} aria-hidden /></IconButton>
         <span className="relative inline-flex">
           <BrowserMoreMenu open={moreOpen} onOpen={() => setMoreOpen(true)} onClose={() => setMoreOpen(false)} state={state}

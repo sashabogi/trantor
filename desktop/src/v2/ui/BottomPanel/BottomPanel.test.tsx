@@ -4,6 +4,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MODE_KEY } from "../../shell/shellMode";
+import { getPanelSlot, panelAvailable, togglePanel } from "../../shell/panelSlots";
 import { BottomPanel } from "./index";
 import { ACTIVE_TAB_KEY, HEIGHT_KEY, MAXIMISED_KEY, OPEN_KEY } from "./state";
 
@@ -63,10 +64,11 @@ const pointer = (type: string, clientY: number, target: EventTarget) => act(asyn
 });
 
 describe("rendering", () => {
-  it("renders neither the panel nor a toggle without bodies", async () => {
+  it("renders neither the panel nor a toggle without bodies, and registers no panel slot", async () => {
     await mountPanel({});
     expect(panel()).toBeNull();
     expect(byLabel("Open bottom panel")).toBeNull();
+    expect(panelAvailable("bottom")).toBe(false);
     await ctrlBacktick();
     expect(panel()).toBeNull();
     expect(localStorage.getItem(OPEN_KEY)).toBeNull();
@@ -87,7 +89,9 @@ describe("rendering", () => {
     localStorage.removeItem(MODE_KEY);
     await mountPanel();
     expect(panel()).toBeNull();
-    await click(byLabel("Open bottom panel"));
+    // #14512: no open button rides the closed panel; the chord and the top bar bring it back.
+    expect(byLabel("Open bottom panel")).toBeNull();
+    await ctrlBacktick();
     expect(panel()).not.toBeNull();
     await act(async () => { root.unmount(); });
     localStorage.setItem(MODE_KEY, "developer");
@@ -95,6 +99,21 @@ describe("rendering", () => {
     root = createRoot(host);
     await mountPanel();
     expect(panel()).toBeNull();
+  });
+});
+
+describe("the shell's bottom panel slot (#14512)", () => {
+  it("registers while mounted and the top bar's togglePanel drives it", async () => {
+    await mountPanel();
+    expect(getPanelSlot("bottom")?.open).toBe(true);
+    await act(async () => { togglePanel("bottom"); });
+    expect(panel()).toBeNull();
+    expect(getPanelSlot("bottom")?.open).toBe(false);
+    await act(async () => { togglePanel("bottom"); });
+    expect(panel()).not.toBeNull();
+    expect(localStorage.getItem(OPEN_KEY)).toBe("true");
+    await act(async () => { root.unmount(); });
+    expect(panelAvailable("bottom")).toBe(false);
   });
 });
 
@@ -124,7 +143,9 @@ describe("controls", () => {
     }
     await click(byLabel("Close bottom panel"));
     expect(panel()).toBeNull();
-    expect(byLabel("Open bottom panel")?.title).not.toBe("");
+    // #14512: the closed panel is gone entirely; the slot reports it so the cluster can say so.
+    expect(byLabel("Open bottom panel")).toBeNull();
+    expect(getPanelSlot("bottom")?.open).toBe(false);
   });
 
   it("maximises inside its parent and restores the previous height", async () => {
@@ -153,10 +174,11 @@ describe("controls", () => {
     expect(pane?.className).not.toContain("border-t");
     expect(handle()?.className).toContain("-top-[6px]");
     expect(handle()?.className).toContain("h-[6px]");
+    // #14512: closed renders no slim strip of its own — the top bar's bottom toggle is the affordance.
     await click(byLabel("Close bottom panel"));
-    const closed = host.querySelector('button[aria-label="Open bottom panel"]')?.parentElement;
-    expect(closed?.className).toContain("rounded-lg");
-    expect(closed?.className).toContain("border border-[var(--v2-edge)]");
+    expect(panel()).toBeNull();
+    expect(host.querySelector('[aria-label="Open bottom panel"]')).toBeNull();
+    expect(host.children.length).toBe(0);
   });
 });
 
@@ -188,7 +210,8 @@ describe("resizing and persistence", () => {
     await click(byLabel("Close bottom panel"));
     await remountPanel();
     expect(panel()).toBeNull();
-    await click(byLabel("Open bottom panel"));
+    // #14512: the chord opens it again; the open button is gone with the closed strip.
+    await ctrlBacktick();
     expect(handle()?.getAttribute("aria-valuenow")).toBe("340");
     expect(tab("Output")?.getAttribute("aria-selected")).toBe("true");
   });

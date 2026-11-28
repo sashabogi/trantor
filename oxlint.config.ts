@@ -24,6 +24,7 @@ export default defineConfig({
     { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
   ],
   rules: {
+    "anti-slop/no-ad-hoc-panel-toggles": "error",
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-known-value-widening": "error",
